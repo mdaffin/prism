@@ -65,6 +65,16 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
                 Msg::PrRefreshed(number, gh.pr(number).await)
             });
         }
+        let opens = app.opens_to_run();
+        if !opens.is_empty() {
+            // One task, so the tabs open in order.
+            let (gh, tx) = (gh.clone(), tx.clone());
+            tokio::spawn(async move {
+                for number in opens {
+                    let _ = tx.send(Msg::Opened(number, gh.open(number).await));
+                }
+            });
+        }
         for number in app.approvals_to_run() {
             spawn(&gh, &tx, async move |gh| {
                 Msg::Approved(number, gh.approve(number).await)

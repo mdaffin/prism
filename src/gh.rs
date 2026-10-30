@@ -16,8 +16,7 @@ use crate::cli::MergeMethod;
 const LIST_FIELDS: &str = "number,title,state,statusCheckRollup,mergeable,reviewDecision";
 
 /// Fields requested from `gh pr view --json` for the highlighted PR.
-const DETAIL_FIELDS: &str =
-    "headRefName,files,labels,body,comments,additions,deletions,updatedAt,url";
+const DETAIL_FIELDS: &str = "headRefName,body,comments,additions,deletions";
 
 #[derive(Clone)]
 pub struct Gh {
@@ -59,6 +58,13 @@ impl Gh {
         let args = ["pr", "view", &number, "--json", LIST_FIELDS];
         let stdout = self.run(&args).await?;
         Ok(serde_json::from_slice(&stdout)?)
+    }
+
+    /// Opens the PR in the browser. It only reads, so it also runs under `--dry-run`.
+    pub async fn open(&self, number: u64) -> Result<()> {
+        let number = number.to_string();
+        self.run(&["pr", "view", &number, "--web"]).await?;
+        Ok(())
     }
 
     pub async fn approve(&self, number: u64) -> Result<()> {
@@ -283,20 +289,16 @@ pub enum ContextState {
 }
 
 /// The rest of a PR, fetched only when it is highlighted.
-// Most fields are first read by later steps (panes, Ctrl-O).
+// Some fields are first read by later steps (the Pull request box, M4 step 5).
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrDetails {
     pub head_ref_name: String,
-    pub files: Vec<File>,
-    pub labels: Vec<Label>,
     pub body: Option<String>,
     pub comments: Vec<Comment>,
     pub additions: u64,
     pub deletions: u64,
-    pub updated_at: String,
-    pub url: String,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -305,20 +307,6 @@ pub enum PrState {
     Open,
     Closed,
     Merged,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-pub struct File {
-    pub path: String,
-    pub additions: u64,
-    pub deletions: u64,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-pub struct Label {
-    pub name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -398,17 +386,13 @@ mod tests {
 
     const DETAIL_FIXTURE: &str = r#"{
       "headRefName": "renovate/example-lib-2.x",
-      "files": [{"path": "Cargo.toml", "additions": 1, "deletions": 1}],
-      "labels": [{"id": "L1", "name": "deps", "description": "", "color": "ededed"}],
       "body": null,
       "comments": [
         {"author": null, "createdAt": "2026-01-02T03:04:05Z", "body": "hello"},
         {"author": {"login": "someone"}, "createdAt": "2026-01-02T03:04:06Z", "body": null}
       ],
       "additions": 1,
-      "deletions": 1,
-      "updatedAt": "2026-01-02T03:04:06Z",
-      "url": "https://github.com/example/repo/pull/12"
+      "deletions": 1
     }"#;
 
     #[test]
@@ -457,7 +441,6 @@ mod tests {
         assert!(details.body.is_none());
         assert!(details.comments[0].author.is_none());
         assert!(details.comments[1].body.is_none());
-        assert_eq!(details.labels[0].name, "deps");
     }
 
     #[test]

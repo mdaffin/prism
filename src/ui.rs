@@ -4,7 +4,7 @@ use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Row, Table, TableState, Wrap};
 
-use crate::app::{App, Batch, Confirm, Details, Fetch, Mode, Pane, Summary};
+use crate::app::{App, Batch, Confirm, ConfirmOpen, Details, Fetch, Mode, Pane, Summary};
 use crate::gh::PrState;
 use crate::model;
 
@@ -56,6 +56,10 @@ pub fn view(app: &mut App, frame: &mut Frame) {
             confirm_dialog(confirm, app.dry_run, frame, body_area);
             "←/→ Tab: Choose | Enter: Confirm | Esc: Cancel"
         }
+        Mode::ConfirmOpen(confirm) => {
+            open_dialog(confirm, frame, body_area);
+            "←/→ Tab: Choose | Enter: Confirm | Esc: Cancel"
+        }
         Mode::Running(batch) => {
             running_popup(batch, app.dry_run, spinner(app), frame, body_area);
             "Ctrl-C: Quit"
@@ -66,7 +70,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         }
         _ if app.editing => "Enter: Search | Esc: Cancel",
         _ => {
-            "/: Search | Tab: Pane | ↑/↓ j/k PgUp/PgDn: Move | Space: Select | Enter: Review | q: Quit"
+            "/: Search | Tab: Pane | ↑/↓ j/k PgUp/PgDn: Move | Space: Select | Enter: Review | Ctrl-O: Open | q: Quit"
         }
     };
     let mut parts = Vec::new();
@@ -108,7 +112,11 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
             frame.render_widget(Line::from(message), table_area)
         }
         // Popups are drawn over the table.
-        Mode::List | Mode::Confirm(_) | Mode::Running(_) | Mode::Results(_) => {
+        Mode::List
+        | Mode::Confirm(_)
+        | Mode::ConfirmOpen(_)
+        | Mode::Running(_)
+        | Mode::Results(_) => {
             let rows = app.rows.iter().map(|row| {
                 let mark = if app.selected.contains(&row.pr.number) {
                     "[x]"
@@ -193,6 +201,27 @@ fn confirm_dialog(confirm: &Confirm, dry_run: bool, frame: &mut Frame, area: Rec
     let title = format!("Review {}", count(confirm.prs.len(), "PR"));
     // One PR per line: long titles are cut off rather than wrapped.
     popup(frame, area, title, dry_run, lines, false, footer);
+}
+
+fn open_dialog(confirm: &ConfirmOpen, frame: &mut Frame, area: Rect) {
+    let numbers: Vec<String> = confirm.numbers.iter().map(|n| format!("#{n}")).collect();
+    let lines = vec![Line::from(numbers.join(", "))];
+    let mut buttons = Line::default();
+    for (label, highlighted) in [("Open", confirm.open), ("Cancel", !confirm.open)] {
+        let label = format!("[ {label} ]");
+        buttons.push_span(if highlighted {
+            label.reversed()
+        } else {
+            label.into()
+        });
+        buttons.push_span("  ");
+    }
+    let footer = vec![Line::default(), buttons.centered()];
+    let title = format!(
+        "Open {} in the browser?",
+        count(confirm.numbers.len(), "PR")
+    );
+    popup(frame, area, title, false, lines, true, footer);
 }
 
 fn running_popup(batch: &Batch, dry_run: bool, spinner: &str, frame: &mut Frame, area: Rect) {

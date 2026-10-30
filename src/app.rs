@@ -26,6 +26,9 @@ const MAX_REFRESH_ERRORS: usize = 3;
 /// The most row refreshes to run at once.
 const MAX_REFRESHES: usize = 4;
 
+/// The most PRs Ctrl-O opens without asking first.
+const MAX_OPEN_WITHOUT_ASKING: usize = 5;
+
 pub struct App {
     pub title: String,
     pub dry_run: bool,
@@ -63,6 +66,10 @@ pub struct App {
     pub error: Option<String>,
     /// One line for each row refresh that failed, shown after `error`.
     refresh_errors: Vec<String>,
+    /// One line for each PR that failed to open in the browser, shown after `refresh_errors`.
+    open_errors: Vec<String>,
+    /// PRs to open in the browser, in order.
+    opens_to_run: Vec<u64>,
     /// Details by PR number. An entry is added when its fetch starts, so a PR is fetched once.
     pub details: HashMap<u64, Fetch<Details>>,
     /// Diffs by PR number. An entry is added when its fetch starts, so a PR is fetched once.
@@ -115,6 +122,8 @@ pub enum Mode {
     List,
     /// Asking what to do with the selected PRs.
     Confirm(Confirm),
+    /// Asking before opening many PRs in the browser.
+    ConfirmOpen(ConfirmOpen),
     /// Approving PRs.
     Running(Batch),
     /// Showing how a batch went.
@@ -239,6 +248,14 @@ impl Confirm {
     }
 }
 
+/// The dialog that asks before opening more than [`MAX_OPEN_WITHOUT_ASKING`] PRs.
+pub struct ConfirmOpen {
+    /// The PRs to open, in table order.
+    pub numbers: Vec<u64>,
+    /// Whether Open, rather than Cancel, is highlighted.
+    pub open: bool,
+}
+
 pub struct Row {
     pub pr: Pr,
     pub checks: Checks,
@@ -297,6 +314,8 @@ pub enum Msg {
     Merged(u64, Result<()>),
     /// The result of fetching this PR again to refresh its row.
     PrRefreshed(u64, Result<Pr>),
+    /// The result of opening this PR in the browser.
+    Opened(u64, Result<()>),
     /// Time to advance the spinner.
     Tick,
 }
@@ -324,6 +343,8 @@ impl App {
             page: 1,
             error: None,
             refresh_errors: Vec::new(),
+            open_errors: Vec::new(),
+            opens_to_run: Vec::new(),
             selected: HashSet::new(),
             details: HashMap::new(),
             diffs: HashMap::new(),
@@ -353,6 +374,12 @@ impl App {
             .collect();
         self.refreshing.extend(&numbers);
         numbers
+    }
+
+    /// PRs to open in the browser, one after another so the tabs come in table order. The caller
+    /// must start them.
+    pub fn opens_to_run(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.opens_to_run)
     }
 
     /// Approvals that can start now, up to [`MAX_APPROVALS`] at once. Marks them as working,
@@ -444,12 +471,18 @@ impl App {
         if more > 0 {
             lines.push(format!("… and {more} more refreshes failed"));
         }
+        lines.extend(self.open_errors.iter().take(MAX_REFRESH_ERRORS).cloned());
+        let more = self.open_errors.len().saturating_sub(MAX_REFRESH_ERRORS);
+        if more > 0 {
+            lines.push(format!("… and {more} more PRs failed to open"));
+        }
         (!lines.is_empty()).then(|| lines.join("\n"))
     }
 
     fn clear_errors(&mut self) {
         self.error = None;
         self.refresh_errors.clear();
+        self.open_errors.clear();
     }
 
     pub fn highlighted(&self) -> Option<&Row> {
@@ -462,6 +495,11 @@ impl App {
             Msg::Tick => self.spinner = self.spinner.wrapping_add(1),
             Msg::Approved(number, result) => self.approved(number, result),
             Msg::Merged(number, result) => self.merged(number, result),
+            Msg::Opened(number, Err(e)) => {
+                let message = format!("Opening #{number} failed: {e}");
+                self.open_errors.push(one_line(&message));
+            }
+            Msg::Opened(_, Ok(())) => {}
             Msg::PrRefreshed(number, result) => {
                 self.refreshing.remove(&number);
                 match result {
@@ -644,6 +682,17 @@ impl App {
             if let Some(choice) = on_confirm_key(confirm, key) {
                 self.choose(choice);
             }
+        } else if let Mode::ConfirmOpen(confirm) = &mut self.mode {
+            match key.code {
+                KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => confirm.open = true,
+                KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => confirm.open = false,
+                KeyCode::Enter if confirm.open => {
+                    self.opens_to_run = std::mem::take(&mut confirm.numbers);
+                    self.mode = Mode::List;
+                }
+                KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::List,
+                _ => {}
+            }
         } else if matches!(self.mode, Mode::Running(_)) {
             // Cancelling a batch comes in M4 step 3.
         } else if matches!(self.mode, Mode::Results(_)) {
@@ -677,6 +726,10 @@ impl App {
     }
 
     fn on_list_key(&mut self, key: KeyEvent) {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
+            self.open_in_browser();
+            return;
+        }
         match key.code {
             KeyCode::Char('/') => self.editing = true,
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
@@ -689,6 +742,32 @@ impl App {
             KeyCode::Char(' ') => self.toggle_selected(),
             KeyCode::Enter => self.open_confirm(),
             _ => {}
+        }
+    }
+
+    /// Opens the selected PRs in the browser, or the highlighted one if none are selected, in
+    /// table order. Asks first when there are more than [`MAX_OPEN_WITHOUT_ASKING`].
+    fn open_in_browser(&mut self) {
+        let numbers: Vec<u64> = if self.selected.is_empty() {
+            self.highlighted()
+                .map(|row| row.pr.number)
+                .into_iter()
+                .collect()
+        } else {
+            self.rows
+                .iter()
+                .map(|row| row.pr.number)
+                .filter(|number| self.selected.contains(number))
+                .collect()
+        };
+        self.open_errors.clear();
+        if numbers.len() > MAX_OPEN_WITHOUT_ASKING {
+            self.mode = Mode::ConfirmOpen(ConfirmOpen {
+                numbers,
+                open: true,
+            });
+        } else {
+            self.opens_to_run = numbers;
         }
     }
 
@@ -963,6 +1042,75 @@ mod tests {
         app.update(Msg::PrsLoaded(new, Ok(prs([5]))));
         app.update(Msg::PrsLoaded(old, Ok(prs([6]))));
         assert_eq!(numbers(&app), [5]);
+    }
+
+    fn ctrl_o(app: &mut App) {
+        app.update(Msg::Key(KeyEvent::new(
+            KeyCode::Char('o'),
+            KeyModifiers::CONTROL,
+        )));
+    }
+
+    #[test]
+    fn ctrl_o_opens_the_highlighted_pr_when_none_are_selected() {
+        let mut app = app_with_rows(3);
+        press(&mut app, "j");
+        ctrl_o(&mut app);
+        assert_eq!(app.opens_to_run(), [2]);
+        assert!(app.opens_to_run().is_empty());
+    }
+
+    #[test]
+    fn ctrl_o_opens_the_selected_prs_in_table_order() {
+        let mut app = app_with_rows(4);
+        // Selected out of order: 1, then 3, then 2.
+        press(&mut app, " jj k ");
+        ctrl_o(&mut app);
+        assert_eq!(app.opens_to_run(), [1, 2, 3]);
+    }
+
+    #[test]
+    fn ctrl_o_asks_before_opening_more_than_five() {
+        let mut app = app_with_rows(6);
+        for _ in 0..6 {
+            press(&mut app, " j");
+        }
+        ctrl_o(&mut app);
+        assert!(app.opens_to_run().is_empty());
+        assert!(matches!(app.mode, Mode::ConfirmOpen(_)));
+        // Cancel leaves everything alone.
+        press(&mut app, "l");
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::List));
+        assert!(app.opens_to_run().is_empty());
+
+        ctrl_o(&mut app);
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::List));
+        assert_eq!(app.opens_to_run(), [1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn five_selected_prs_open_without_asking() {
+        let mut app = app_with_rows(5);
+        for _ in 0..5 {
+            press(&mut app, " j");
+        }
+        ctrl_o(&mut app);
+        assert!(matches!(app.mode, Mode::List));
+        assert_eq!(app.opens_to_run().len(), 5);
+    }
+
+    #[test]
+    fn a_pr_that_fails_to_open_is_shown_with_the_error() {
+        let mut app = app_with_rows(2);
+        app.update(Msg::Opened(2, Err(color_eyre::eyre::eyre!("no browser"))));
+        assert_eq!(
+            app.error_text().as_deref(),
+            Some("Opening #2 failed: no browser")
+        );
+        app.update(Msg::Opened(1, Ok(())));
+        assert_eq!(app.error_text().unwrap().lines().count(), 1);
     }
 
     #[test]
