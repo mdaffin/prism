@@ -16,7 +16,7 @@ const MAX_ERROR_ROWS: u16 = 5;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 pub fn view(app: &mut App, frame: &mut Frame) {
-    let error = app.error_text();
+    let error = app.errors.text();
     let error_rows = error
         .as_deref()
         .map_or(0, |error| wrapped_rows(error, frame.area().width));
@@ -92,7 +92,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         _ => &keys::bar(),
     };
     let mut parts = Vec::new();
-    if app.searching {
+    if app.list.searching {
         parts.push(format!("{} Searching", spinner(app)));
     }
     if app.refreshing() {
@@ -106,7 +106,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         }
         parts.push(selected);
     }
-    if let Some(failure) = &app.refresh_failure {
+    if let Some(failure) = &app.status.failure {
         parts.push(format!("Refresh failed: {failure}"));
     }
     parts.push(hints.to_string());
@@ -133,7 +133,7 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
             frame.render_widget(Line::from("No PRs match the filter."), table_area)
         }
         Mode::List if app.rows.is_empty() => {
-            let message = if app.error_text().is_some() {
+            let message = if app.errors.text().is_some() {
                 "No PRs loaded."
             } else {
                 "No matching PRs found."
@@ -185,7 +185,7 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
                 .header(Row::new(["", "#", "Checks", "Review", "Title"]).bold())
                 .row_highlight_style(Style::new().reversed());
             // The rows are about to be replaced.
-            if app.searching {
+            if app.list.searching {
                 table = table.dim();
             }
             frame.render_stateful_widget(table, table_area, &mut app.table);
@@ -422,7 +422,7 @@ fn search(app: &App, frame: &mut Frame, area: Rect) {
     let width = area.width.saturating_sub(2);
     let scroll = app.query.visual_scroll(usize::from(width));
     let mut title = Line::from("Search");
-    if app.searching {
+    if app.list.searching {
         title.push_span(format!(" · {} searching", spinner(app)).yellow().bold());
     }
     let mut block = Block::bordered().title(title);
@@ -486,13 +486,14 @@ fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
     }
     // One row of the table is its header.
     let scroll = app
-        .checks_scroll
+        .scroll
+        .checks
         .min(max_scroll(rows.len(), inner.height.saturating_sub(1)));
     let table = Table::new(rows, [Constraint::Length(10), Constraint::Fill(1)])
         .header(Row::new(["Status", "Check"]).bold());
     let mut state = TableState::default().with_offset(usize::from(scroll));
     frame.render_stateful_widget(table, inner, &mut state);
-    app.checks_scroll = scroll;
+    app.scroll.checks = scroll;
 }
 
 /// A row of the checks pane, with its status coloured.
@@ -528,7 +529,7 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     }
     let [list_area, preview_area] =
         Layout::horizontal([Constraint::Percentage(35), Constraint::Fill(1)]).areas(inner);
-    let selected = app.comment.min(comments.len() - 1);
+    let selected = app.scroll.comment.min(comments.len() - 1);
 
     let now = jiff::Timestamp::now();
     let rows = comments.iter().map(|comment| {
@@ -547,7 +548,7 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     let preview_inner = preview_block.inner(preview_area);
     let body = model::clean_body(comments[selected].body.as_deref());
     let preview = Paragraph::new(body).wrap(Wrap { trim: false });
-    let scroll = app.comment_scroll.min(max_scroll(
+    let scroll = app.scroll.comment_scroll.min(max_scroll(
         preview.line_count(preview_inner.width),
         preview_inner.height,
     ));
@@ -558,8 +559,8 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     if app.focus == Pane::Comments {
         app.page = preview_inner.height.saturating_sub(1).max(1);
     }
-    app.comment = selected;
-    app.comment_scroll = scroll;
+    app.scroll.comment = selected;
+    app.scroll.comment_scroll = scroll;
 }
 
 fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -578,7 +579,8 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
         None | Some(Fetch::Loading) => Text::from("Loading…"),
         Some(Fetch::Loaded(diff)) => {
             scroll = app
-                .diff_scroll
+                .scroll
+                .diff
                 .min(max_scroll(diff.lines.len(), inner.height));
             // Only the rows that fit are copied, as a diff can be very long.
             Text::from(
@@ -593,7 +595,7 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
         Some(Fetch::Failed(error)) => Text::from(format!("Failed to load diff: {error}")).red(),
     };
     frame.render_widget(Paragraph::new(text).block(block), area);
-    app.diff_scroll = scroll;
+    app.scroll.diff = scroll;
 }
 
 fn description(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -614,10 +616,11 @@ fn description(app: &mut App, frame: &mut Frame, area: Rect) {
     };
     let pane = Paragraph::new(text).wrap(Wrap { trim: false });
     let scroll = app
-        .description_scroll
+        .scroll
+        .description
         .min(max_scroll(pane.line_count(inner.width), inner.height));
     frame.render_widget(pane.scroll((scroll, 0)).block(block), area);
-    app.description_scroll = scroll;
+    app.scroll.description = scroll;
 }
 
 #[cfg(test)]

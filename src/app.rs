@@ -48,29 +48,13 @@ pub struct App {
     /// The query to restore when an edit is cancelled.
     submitted_query: String,
     pub editing: bool,
-    /// A query submitted but not yet fetched.
-    query_to_fetch: Option<String>,
-    /// Whether `query_to_fetch` is a Ctrl-R refresh rather than a new search.
-    refresh_requested: bool,
-    /// Whether the latest list fetch is a refresh. A refresh keeps the selection.
-    fetch_is_refresh: bool,
-    /// The query of the latest list fetch, and of the list shown. The timed refresh uses the
-    /// latter, as a search that failed left the older list in place.
-    fetching_query: String,
-    list_query: String,
-    /// Set when it's time for a timed status refresh, until [`App::status_to_fetch`] starts it.
-    status_requested: bool,
-    /// Whether a timed status refresh is running.
-    status_in_flight: bool,
+    /// Fetching the list.
+    pub list: ListFetch,
+    /// The timed status refresh.
+    pub status: StatusRefresh,
     /// Bumped when a batch starts and when it finishes, so a status refresh that began before
     /// can't put old state back over a row the batch changed.
     batch_epoch: u64,
-    /// Why the last timed refresh failed, shown in the status bar until one succeeds.
-    pub refresh_failure: Option<String>,
-    /// The id of the latest list fetch. Results from older fetches are dropped.
-    fetch_id: u64,
-    /// Whether the latest list fetch is still running.
-    pub searching: bool,
     pub rows: Vec<Row>,
     /// The indices into `rows` that the filter shows, in order. It is worked out when the filter
     /// changes or a list loads, not when a row is refreshed, so a row whose status changes
@@ -84,25 +68,14 @@ pub struct App {
     pub table: TableState,
     /// The pane that Up/Down and PgUp/PgDn act on.
     pub focus: Pane,
-    /// Rows scrolled off the top of the description and diff panes. They go back to the top
-    /// when the highlight moves. The view clamps them to the content it draws.
-    pub checks_scroll: u16,
-    pub description_scroll: u16,
-    pub diff_scroll: u16,
-    /// The selected comment of the highlighted PR. The view clamps it to the comments there are.
-    pub comment: usize,
-    /// Rows scrolled off the top of the selected comment's preview.
-    pub comment_scroll: u16,
+    /// How far the panes are scrolled, and the comment picked.
+    pub scroll: Scroll,
     /// The rows a PgUp/PgDn moves in the focused pane, set by the view as it draws.
     pub page: u16,
     /// The numbers of the PRs marked with Space.
     pub selected: HashSet<u64>,
-    /// Why the last search failed, shown above the status bar.
-    pub error: Option<String>,
-    /// One line for each row refresh that failed, shown after `error`.
-    refresh_errors: Vec<String>,
-    /// One line for each PR that failed to open in the browser, shown after `refresh_errors`.
-    open_errors: Vec<String>,
+    /// What to show above the status bar.
+    pub errors: Errors,
     /// PRs to open in the browser, in order.
     opens_to_run: Vec<u64>,
     /// Details by PR number. An entry is added when its fetch starts, so a PR is fetched once.
@@ -117,6 +90,84 @@ pub struct App {
     /// Advances on each tick while something is animating.
     pub spinner: usize,
     pub should_quit: bool,
+}
+
+/// The state of fetching the list of PRs.
+#[derive(Default)]
+pub struct ListFetch {
+    /// A query submitted but not yet fetched.
+    query_to_fetch: Option<String>,
+    /// Whether `query_to_fetch` is a Ctrl-R refresh rather than a new search.
+    refresh_requested: bool,
+    /// Whether the latest fetch is a refresh. A refresh keeps the selection.
+    is_refresh: bool,
+    /// The query of the latest fetch.
+    fetching_query: String,
+    /// The query of the list shown. The timed refresh uses it, as a search that failed left the
+    /// older list in place.
+    shown_query: String,
+    /// The id of the latest fetch. Results from older fetches are dropped.
+    id: u64,
+    /// Whether the latest fetch is still running.
+    pub searching: bool,
+}
+
+/// The timed status refresh.
+#[derive(Default)]
+pub struct StatusRefresh {
+    /// Set when it's time for a refresh, until [`App::status_to_fetch`] starts it.
+    requested: bool,
+    /// Whether a refresh is running.
+    in_flight: bool,
+    /// Why the last refresh failed, shown in the status bar until one succeeds.
+    pub failure: Option<String>,
+}
+
+/// Rows scrolled off the top of the checks, description and diff panes. They go back to the top
+/// when the highlight moves. The view clamps them to the content it draws.
+#[derive(Default)]
+pub struct Scroll {
+    pub checks: u16,
+    pub description: u16,
+    pub diff: u16,
+    /// The selected comment of the highlighted PR. The view clamps it to the comments there are.
+    pub comment: usize,
+    /// Rows scrolled off the top of the selected comment's preview.
+    pub comment_scroll: u16,
+}
+
+/// The errors shown above the status bar.
+#[derive(Default)]
+pub struct Errors {
+    /// Why the last search failed.
+    search: Option<String>,
+    /// One line for each row refresh that failed, shown after `search`.
+    refreshes: Vec<String>,
+    /// One line for each PR that failed to open in the browser, shown after `refreshes`.
+    opens: Vec<String>,
+}
+
+impl Errors {
+    /// Why the search failed, then the row refreshes and opens that failed. Only the first few
+    /// of those are listed, as the space for them is small.
+    pub fn text(&self) -> Option<String> {
+        let mut lines: Vec<String> = self.search.iter().cloned().collect();
+        lines.extend(self.refreshes.iter().take(MAX_REFRESH_ERRORS).cloned());
+        let more = self.refreshes.len().saturating_sub(MAX_REFRESH_ERRORS);
+        if more > 0 {
+            lines.push(format!("… and {more} more refreshes failed"));
+        }
+        lines.extend(self.opens.iter().take(MAX_REFRESH_ERRORS).cloned());
+        let more = self.opens.len().saturating_sub(MAX_REFRESH_ERRORS);
+        if more > 0 {
+            lines.push(format!("… and {more} more PRs failed to open"));
+        }
+        (!lines.is_empty()).then(|| lines.join("\n"))
+    }
+
+    fn clear(&mut self) {
+        *self = Self::default();
+    }
 }
 
 /// The panes that can have focus. Tab cycles through them in this order.
@@ -295,32 +346,21 @@ impl App {
             query: Input::new(query.clone()),
             submitted_query: query.clone(),
             editing: false,
-            query_to_fetch: Some(query),
-            refresh_requested: false,
-            fetch_is_refresh: false,
-            fetching_query: String::new(),
-            list_query: String::new(),
-            status_requested: false,
-            status_in_flight: false,
+            list: ListFetch {
+                query_to_fetch: Some(query),
+                ..ListFetch::default()
+            },
+            status: StatusRefresh::default(),
             batch_epoch: 0,
-            refresh_failure: None,
-            fetch_id: 0,
-            searching: false,
             rows: Vec::new(),
             visible: Vec::new(),
             filter: Input::default(),
             filtering: false,
             table: TableState::default(),
             focus: Pane::Table,
-            checks_scroll: 0,
-            description_scroll: 0,
-            diff_scroll: 0,
-            comment: 0,
-            comment_scroll: 0,
+            scroll: Scroll::default(),
             page: 1,
-            error: None,
-            refresh_errors: Vec::new(),
-            open_errors: Vec::new(),
+            errors: Errors::default(),
             opens_to_run: Vec::new(),
             selected: HashSet::new(),
             details: HashMap::new(),
@@ -349,7 +389,7 @@ impl App {
 
     /// Whether the spinner needs ticks.
     pub fn animating(&self) -> bool {
-        self.searching || self.refreshing() || matches!(self.mode, Mode::Running(_))
+        self.list.searching || self.refreshing() || matches!(self.mode, Mode::Running(_))
     }
 
     /// Whether any rows are being refreshed or are waiting to be.
@@ -421,18 +461,18 @@ impl App {
 
     /// A submitted query and the id of its fetch, which the caller must start.
     pub fn list_to_fetch(&mut self) -> Option<(u64, String)> {
-        let query = self.query_to_fetch.take()?;
-        self.fetch_is_refresh = std::mem::take(&mut self.refresh_requested);
-        self.fetching_query = query.clone();
-        self.fetch_id += 1;
-        self.searching = true;
-        Some((self.fetch_id, query))
+        let query = self.list.query_to_fetch.take()?;
+        self.list.is_refresh = std::mem::take(&mut self.list.refresh_requested);
+        self.list.fetching_query = query.clone();
+        self.list.id += 1;
+        self.list.searching = true;
+        Some((self.list.id, query))
     }
 
     /// A timed status refresh to start, if one is due. The caller must start it, and send back
     /// [`Msg::StatusRefreshed`] with its id.
     pub fn status_to_fetch(&mut self) -> Option<StatusFetch> {
-        if !std::mem::take(&mut self.status_requested) {
+        if !std::mem::take(&mut self.status.requested) {
             return None;
         }
         // Closed and merged PRs are never refreshed again.
@@ -445,10 +485,10 @@ impl App {
         if candidates.is_empty() {
             return None;
         }
-        self.status_in_flight = true;
+        self.status.in_flight = true;
         Some(StatusFetch {
             id: self.refresh_id(),
-            query: self.list_query.clone(),
+            query: self.list.shown_query.clone(),
             candidates,
         })
     }
@@ -456,7 +496,7 @@ impl App {
     /// What a status refresh started now would be tied to: the list and the batch state it saw.
     fn refresh_id(&self) -> RefreshId {
         RefreshId {
-            list_id: self.fetch_id,
+            list_id: self.list.id,
             batch_epoch: self.batch_epoch,
         }
     }
@@ -465,9 +505,9 @@ impl App {
     /// another refresh or a search is in flight, or before there is a list.
     fn can_refresh(&self) -> bool {
         !self.rows.is_empty()
-            && !self.searching
-            && self.query_to_fetch.is_none()
-            && !self.status_in_flight
+            && !self.list.searching
+            && self.list.query_to_fetch.is_none()
+            && !self.status.in_flight
             && !self.refreshing()
             && !matches!(self.mode, Mode::Running(_))
     }
@@ -492,7 +532,7 @@ impl App {
             row.checks = model::classify_checks(status.mergeable, &status.status_check_rollup);
             row.pr.update(status);
         }
-        self.refresh_failure = update.failure.map(|failure| one_line(&failure));
+        self.status.failure = update.failure.map(|failure| one_line(&failure));
     }
 
     /// PRs whose details haven't been requested yet, as many as there are free fetch slots.
@@ -521,29 +561,6 @@ impl App {
             .chain(0..start)
             .map(|i| self.rows[i].pr.number)
             .collect()
-    }
-
-    /// What to show above the status bar: why the search failed, then the row refreshes that
-    /// failed. Only the first few of those are listed, as the space for them is small.
-    pub fn error_text(&self) -> Option<String> {
-        let mut lines: Vec<String> = self.error.iter().cloned().collect();
-        lines.extend(self.refresh_errors.iter().take(MAX_REFRESH_ERRORS).cloned());
-        let more = self.refresh_errors.len().saturating_sub(MAX_REFRESH_ERRORS);
-        if more > 0 {
-            lines.push(format!("… and {more} more refreshes failed"));
-        }
-        lines.extend(self.open_errors.iter().take(MAX_REFRESH_ERRORS).cloned());
-        let more = self.open_errors.len().saturating_sub(MAX_REFRESH_ERRORS);
-        if more > 0 {
-            lines.push(format!("… and {more} more PRs failed to open"));
-        }
-        (!lines.is_empty()).then(|| lines.join("\n"))
-    }
-
-    fn clear_errors(&mut self) {
-        self.error = None;
-        self.refresh_errors.clear();
-        self.open_errors.clear();
     }
 
     /// The index in `rows` of the highlighted row.
@@ -591,7 +608,7 @@ impl App {
         self.table
             .select(position.or((!self.visible.is_empty()).then_some(0)));
         if self.highlighted().map(|row| row.pr.number) != before {
-            self.reset_scroll();
+            self.scroll = Scroll::default();
         }
     }
 
@@ -605,9 +622,9 @@ impl App {
         match msg {
             Msg::Key(key) => self.on_key(key),
             Msg::Tick => self.spinner = self.spinner.wrapping_add(1),
-            Msg::RefreshDue => self.status_requested = self.can_refresh(),
+            Msg::RefreshDue => self.status.requested = self.can_refresh(),
             Msg::StatusRefreshed(id, update) => {
-                self.status_in_flight = false;
+                self.status.in_flight = false;
                 // Results for a list or batch state that has since changed are dropped.
                 if id == self.refresh_id() {
                     self.apply_statuses(update);
@@ -617,7 +634,7 @@ impl App {
             Msg::Merged(number, result) => self.merged(number, result),
             Msg::Opened(number, Err(e)) => {
                 let message = format!("Opening #{number} failed: {e}");
-                self.open_errors.push(one_line(&message));
+                self.errors.opens.push(one_line(&message));
             }
             Msg::Opened(_, Ok(())) => {}
             Msg::PrRefreshed(number, result) => self.row_refreshed(number, result),
@@ -641,11 +658,11 @@ impl App {
                 };
                 self.diffs.insert(number, diff);
             }
-            Msg::PrsLoaded(id, _) if id != self.fetch_id => {}
+            Msg::PrsLoaded(id, _) if id != self.list.id => {}
             Msg::PrsLoaded(_, Err(e)) => {
                 // The previous results stay.
-                self.error = Some(format!("Search failed: {e}"));
-                self.searching = false;
+                self.errors.search = Some(format!("Search failed: {e}"));
+                self.list.searching = false;
                 self.loaded();
             }
             Msg::PrsLoaded(_, Ok(prs)) => self.list_loaded(prs),
@@ -670,20 +687,20 @@ impl App {
         let before = self.highlighted().map(|row| row.pr.number);
         // A refresh keeps the highlight on the same PR if it is still listed.
         let highlight = before
-            .filter(|_| self.fetch_is_refresh)
+            .filter(|_| self.list.is_refresh)
             .and_then(|number| rows.iter().position(|row| row.pr.number == number))
             .or((!rows.is_empty()).then_some(0));
         self.table.select(highlight);
-        if !self.fetch_is_refresh || highlight.map(|i| rows[i].pr.number) != before {
-            self.reset_scroll();
+        if !self.list.is_refresh || highlight.map(|i| rows[i].pr.number) != before {
+            self.scroll = Scroll::default();
         }
         self.visible = (0..rows.len()).collect();
         self.rows = rows;
-        self.list_query = self.fetching_query.clone();
+        self.list.shown_query = self.list.fetching_query.clone();
         // The filter is cleared either way.
         self.filter = Input::default();
         self.filtering = false;
-        if self.fetch_is_refresh {
+        if self.list.is_refresh {
             // The selection is kept by PR number, so a PR that moved is still selected.
             // One that is no longer listed is dropped.
             let listed: HashSet<u64> = self.rows.iter().map(|row| row.pr.number).collect();
@@ -698,8 +715,8 @@ impl App {
             forget_failed(&mut self.details);
             forget_failed(&mut self.diffs);
         }
-        self.clear_errors();
-        self.searching = false;
+        self.errors.clear();
+        self.list.searching = false;
         self.loaded();
     }
 
@@ -716,7 +733,7 @@ impl App {
             // The row keeps its old state, so say why it didn't change.
             Err(e) => {
                 let message = format!("Refreshing #{number} failed: {e}");
-                self.refresh_errors.push(one_line(&message));
+                self.errors.refreshes.push(one_line(&message));
             }
         }
     }
@@ -833,9 +850,9 @@ impl App {
             KeyCode::Enter => {
                 self.editing = false;
                 self.submitted_query = self.query.value().to_string();
-                self.query_to_fetch = Some(self.submitted_query.clone());
-                self.refresh_requested = false;
-                self.clear_errors();
+                self.list.query_to_fetch = Some(self.submitted_query.clone());
+                self.list.refresh_requested = false;
+                self.errors.clear();
             }
             KeyCode::Esc => {
                 self.editing = false;
@@ -906,7 +923,7 @@ impl App {
                 .filter(|number| self.selected.contains(number))
                 .collect()
         };
-        self.open_errors.clear();
+        self.errors.opens.clear();
         if numbers.len() > MAX_OPEN_WITHOUT_ASKING {
             self.mode = Mode::ConfirmOpen(ConfirmOpen {
                 numbers,
@@ -960,7 +977,7 @@ impl App {
             Choice::Cancel => return,
         };
         // Errors from earlier no longer apply.
-        self.clear_errors();
+        self.errors.clear();
         let items = confirm
             .prs
             .into_iter()
@@ -977,12 +994,12 @@ impl App {
     /// Runs the submitted query again and repopulates everything, keeping the selection. Does
     /// nothing while a search is running.
     fn refresh_list(&mut self) {
-        if self.searching || self.query_to_fetch.is_some() {
+        if self.list.searching || self.list.query_to_fetch.is_some() {
             return;
         }
-        self.query_to_fetch = Some(self.submitted_query.clone());
-        self.refresh_requested = true;
-        self.clear_errors();
+        self.list.query_to_fetch = Some(self.submitted_query.clone());
+        self.list.refresh_requested = true;
+        self.errors.clear();
     }
 
     /// Selects every visible open PR whose checks pass, keeping what is already selected.
@@ -1009,18 +1026,18 @@ impl App {
         match self.focus {
             Pane::Table => self.move_highlight(by),
             Pane::Checks => {
-                self.checks_scroll = self.checks_scroll.saturating_add_signed(clamp_i16(by));
+                self.scroll.checks = self.scroll.checks.saturating_add_signed(clamp_i16(by));
             }
             Pane::Comments => {
-                self.comment = self.comment.saturating_add_signed(by);
-                self.comment_scroll = 0;
+                self.scroll.comment = self.scroll.comment.saturating_add_signed(by);
+                self.scroll.comment_scroll = 0;
             }
             Pane::Description => {
-                self.description_scroll =
-                    self.description_scroll.saturating_add_signed(clamp_i16(by));
+                self.scroll.description =
+                    self.scroll.description.saturating_add_signed(clamp_i16(by));
             }
             Pane::Diff => {
-                self.diff_scroll = self.diff_scroll.saturating_add_signed(clamp_i16(by));
+                self.scroll.diff = self.scroll.diff.saturating_add_signed(clamp_i16(by));
             }
         }
     }
@@ -1030,7 +1047,10 @@ impl App {
     fn page_focused(&mut self, direction: isize) {
         let by = direction * self.page as isize;
         if self.focus == Pane::Comments {
-            self.comment_scroll = self.comment_scroll.saturating_add_signed(clamp_i16(by));
+            self.scroll.comment_scroll = self
+                .scroll
+                .comment_scroll
+                .saturating_add_signed(clamp_i16(by));
         } else {
             self.move_focused(by);
         }
@@ -1042,17 +1062,9 @@ impl App {
             let new = current.saturating_add_signed(by).min(last);
             if new != current {
                 self.table.select(Some(new));
-                self.reset_scroll();
+                self.scroll = Scroll::default();
             }
         }
-    }
-
-    fn reset_scroll(&mut self) {
-        self.checks_scroll = 0;
-        self.description_scroll = 0;
-        self.diff_scroll = 0;
-        self.comment = 0;
-        self.comment_scroll = 0;
     }
 }
 
@@ -1186,10 +1198,10 @@ mod tests {
         assert!(!app.editing);
         let (id, query) = app.list_to_fetch().unwrap();
         assert_eq!(query, "is:pr is:closed");
-        assert!(app.searching);
+        assert!(app.list.searching);
 
         app.update(Msg::PrsLoaded(id, Ok(prs([7, 8]))));
-        assert!(!app.searching);
+        assert!(!app.list.searching);
         assert_eq!(numbers(&app), [7, 8]);
         assert_eq!(app.table.selected(), Some(0));
     }
@@ -1478,11 +1490,11 @@ mod tests {
         let mut app = app_with_rows(2);
         app.update(Msg::Opened(2, Err(color_eyre::eyre::eyre!("no browser"))));
         assert_eq!(
-            app.error_text().as_deref(),
+            app.errors.text().as_deref(),
             Some("Opening #2 failed: no browser")
         );
         app.update(Msg::Opened(1, Ok(())));
-        assert_eq!(app.error_text().unwrap().lines().count(), 1);
+        assert_eq!(app.errors.text().unwrap().lines().count(), 1);
     }
 
     #[test]
@@ -1804,7 +1816,7 @@ mod tests {
         assert_eq!(app.table.selected(), Some(1));
         // Failed refreshes are reported, and the rows keep their old state.
         assert_eq!(
-            app.error_text().as_deref(),
+            app.errors.text().as_deref(),
             Some("Refreshing #2 failed: failed\nRefreshing #3 failed: timed out")
         );
         assert_eq!(app.rows[1].pr.state, PrState::Open);
@@ -1823,8 +1835,8 @@ mod tests {
             ));
         }
         // A failed search leaves the refresh failures, which are about the rows still shown.
-        app.error = Some("Search failed: bad query".to_string());
-        let text = app.error_text().unwrap();
+        app.errors.search = Some("Search failed: bad query".to_string());
+        let text = app.errors.text().unwrap();
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 5);
         assert_eq!(lines[0], "Search failed: bad query");
@@ -1834,11 +1846,11 @@ mod tests {
 
         // New results make them all stale.
         let (id, _) = {
-            app.query_to_fetch = Some(String::new());
+            app.list.query_to_fetch = Some(String::new());
             app.list_to_fetch().unwrap()
         };
         app.update(Msg::PrsLoaded(id, Ok(prs(1..=2))));
-        assert_eq!(app.error_text(), None);
+        assert_eq!(app.errors.text(), None);
     }
 
     #[test]
@@ -1862,8 +1874,11 @@ mod tests {
             id,
             Err(color_eyre::eyre::eyre!("bad query")),
         ));
-        assert_eq!(app.error.as_deref(), Some("Search failed: bad query"));
-        assert!(!app.searching);
+        assert_eq!(
+            app.errors.search.as_deref(),
+            Some("Search failed: bad query")
+        );
+        assert!(!app.list.searching);
         assert_eq!(numbers(&app), [1, 2, 3]);
         assert_eq!(app.selected, HashSet::from([1]));
     }
@@ -1971,43 +1986,43 @@ mod tests {
         key(&mut app, KeyCode::Tab);
         assert!(app.focus == Pane::Checks);
         press(&mut app, "j");
-        assert_eq!(app.checks_scroll, 1);
+        assert_eq!(app.scroll.checks, 1);
 
         // In the comments pane the arrows pick the comment, and a page scrolls its preview.
         key(&mut app, KeyCode::Tab);
         assert!(app.focus == Pane::Comments);
         press(&mut app, "jj");
-        assert_eq!(app.comment, 2);
+        assert_eq!(app.scroll.comment, 2);
         key(&mut app, KeyCode::PageDown);
-        assert_eq!((app.comment, app.comment_scroll), (2, 5));
+        assert_eq!((app.scroll.comment, app.scroll.comment_scroll), (2, 5));
         key(&mut app, KeyCode::PageUp);
         key(&mut app, KeyCode::PageUp);
-        assert_eq!(app.comment_scroll, 0);
+        assert_eq!(app.scroll.comment_scroll, 0);
         press(&mut app, "jk");
-        assert_eq!(app.comment, 2);
+        assert_eq!(app.scroll.comment, 2);
         key(&mut app, KeyCode::PageDown);
         press(&mut app, "k");
-        assert_eq!((app.comment, app.comment_scroll), (1, 0));
+        assert_eq!((app.scroll.comment, app.scroll.comment_scroll), (1, 0));
 
         key(&mut app, KeyCode::Tab);
         assert!(app.focus == Pane::Description);
         press(&mut app, "jj");
         key(&mut app, KeyCode::PageDown);
-        assert_eq!(app.description_scroll, 7);
+        assert_eq!(app.scroll.description, 7);
         key(&mut app, KeyCode::PageUp);
         key(&mut app, KeyCode::Up);
-        assert_eq!(app.description_scroll, 1);
+        assert_eq!(app.scroll.description, 1);
         // The highlight stayed where it was, and the other panes didn't scroll.
         assert_eq!(app.table.selected(), Some(2));
-        assert_eq!((app.checks_scroll, app.diff_scroll), (1, 0));
+        assert_eq!((app.scroll.checks, app.scroll.diff), (1, 0));
         key(&mut app, KeyCode::PageUp);
-        assert_eq!(app.description_scroll, 0);
+        assert_eq!(app.scroll.description, 0);
 
         key(&mut app, KeyCode::Tab);
         assert!(app.focus == Pane::Diff);
         press(&mut app, "k");
         key(&mut app, KeyCode::Down);
-        assert_eq!(app.diff_scroll, 1);
+        assert_eq!(app.scroll.diff, 1);
 
         key(&mut app, KeyCode::Tab);
         assert!(app.focus == Pane::Table);
@@ -2030,10 +2045,10 @@ mod tests {
         focus(&mut app, Pane::Table);
         key(&mut app, KeyCode::Down);
         assert_eq!(
-            (app.checks_scroll, app.description_scroll, app.diff_scroll),
+            (app.scroll.checks, app.scroll.description, app.scroll.diff),
             (0, 0, 0)
         );
-        assert_eq!((app.comment, app.comment_scroll), (0, 0));
+        assert_eq!((app.scroll.comment, app.scroll.comment_scroll), (0, 0));
 
         // A highlight that can't move, at the last row, leaves the scroll alone.
         key(&mut app, KeyCode::Down);
@@ -2041,7 +2056,7 @@ mod tests {
         press(&mut app, "j");
         focus(&mut app, Pane::Table);
         key(&mut app, KeyCode::Down);
-        assert_eq!(app.description_scroll, 1);
+        assert_eq!(app.scroll.description, 1);
     }
 
     #[test]
@@ -2206,7 +2221,7 @@ mod tests {
         app.update(Msg::PrsLoaded(id, Err(color_eyre::eyre::eyre!("boom"))));
         assert_eq!(numbers(&app), [1, 2, 3]);
         assert_eq!(app.selected, HashSet::from([1]));
-        assert!(app.error_text().unwrap().contains("boom"));
+        assert!(app.errors.text().unwrap().contains("boom"));
     }
 
     fn status(number: u64, state: &str, passing: bool, review: &str, updated: &str) -> PrStatus {
@@ -2267,7 +2282,7 @@ mod tests {
         press(&mut app, "/");
         key(&mut app, KeyCode::Enter);
         app.list_to_fetch().unwrap();
-        assert!(app.searching);
+        assert!(app.list.searching);
         assert!(start_status_refresh(&mut app).is_none());
 
         let mut app = app_with_rows(2);
@@ -2399,13 +2414,13 @@ mod tests {
             failure: Some("boom\nsecond line".to_string()),
         };
         app.update(Msg::StatusRefreshed(fetch.id, failed));
-        assert_eq!(app.refresh_failure.as_deref(), Some("boom second line"));
+        assert_eq!(app.status.failure.as_deref(), Some("boom second line"));
         assert_eq!(app.rows[1].checks.state, CheckState::Passing);
         // It isn't an error above the status bar.
-        assert_eq!(app.error_text(), None);
+        assert_eq!(app.errors.text(), None);
 
         let fetch = start_status_refresh(&mut app).unwrap();
         app.update(Msg::StatusRefreshed(fetch.id, update(vec![])));
-        assert_eq!(app.refresh_failure, None);
+        assert_eq!(app.status.failure, None);
     }
 }
