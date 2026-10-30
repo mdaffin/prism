@@ -59,9 +59,9 @@ pub struct App {
     /// Why the last search or row refreshes failed, shown above the status bar.
     pub error: Option<String>,
     /// Details by PR number. An entry is added when its fetch starts, so a PR is fetched once.
-    pub details: HashMap<u64, Details>,
+    pub details: HashMap<u64, Fetch<Details>>,
     /// Diffs by PR number. An entry is added when its fetch starts, so a PR is fetched once.
-    pub diffs: HashMap<u64, Diff>,
+    pub diffs: HashMap<u64, Fetch<Diff>>,
     /// Rows to fetch again after a batch, so they show their new state without replacing the
     /// list.
     to_refresh: Vec<u64>,
@@ -239,24 +239,45 @@ pub struct Row {
     pub checks: Checks,
 }
 
-pub enum Details {
+/// Something fetched in the background for a PR, such as its details or its diff.
+pub enum Fetch<T> {
     Loading,
-    Loaded {
-        details: PrDetails,
-        /// The body with HTML comments and extra blank lines removed.
-        body: String,
-    },
+    Loaded(T),
     /// Kept rather than removed, so a failing PR isn't fetched again on every update.
     Failed(String),
 }
 
-/// A PR's diff, fetched when the PR is highlighted.
-pub enum Diff {
-    Loading,
-    /// The diff with gh's colours.
-    Loaded(Text<'static>),
-    /// Kept rather than removed, so a failing PR isn't fetched again on every update.
-    Failed(String),
+/// A PR's details, fetched in the background.
+pub struct Details {
+    pub details: PrDetails,
+    /// The body with HTML comments and extra blank lines removed.
+    pub body: String,
+}
+
+/// A PR's diff with gh's colours.
+pub type Diff = Text<'static>;
+
+/// Marks the PRs in `order` that have no entry in `fetches` as loading, and returns them, as
+/// many as there are free slots out of `max`. The caller must start their fetches.
+fn start_fetches<T>(fetches: &mut HashMap<u64, Fetch<T>>, order: Vec<u64>, max: usize) -> Vec<u64> {
+    let in_flight = fetches
+        .values()
+        .filter(|fetch| matches!(fetch, Fetch::Loading))
+        .count();
+    let numbers: Vec<u64> = order
+        .into_iter()
+        .filter(|number| !fetches.contains_key(number))
+        .take(max.saturating_sub(in_flight))
+        .collect();
+    for &number in &numbers {
+        fetches.insert(number, Fetch::Loading);
+    }
+    numbers
+}
+
+/// Drops the failed fetches, so they are tried again.
+fn forget_failed<T>(fetches: &mut HashMap<u64, Fetch<T>>) {
+    fetches.retain(|_, fetch| !matches!(fetch, Fetch::Failed(_)));
 }
 
 pub enum Msg {
@@ -384,41 +405,15 @@ impl App {
     /// PRs whose details haven't been requested yet, as many as there are free fetch slots.
     /// Marks them as loading, so the caller must start the fetches.
     pub fn details_to_fetch(&mut self) -> Vec<u64> {
-        let in_flight = self
-            .details
-            .values()
-            .filter(|details| matches!(details, Details::Loading))
-            .count();
-        let numbers: Vec<u64> = self
-            .numbers_from_highlight()
-            .into_iter()
-            .filter(|number| !self.details.contains_key(number))
-            .take(MAX_DETAIL_FETCHES.saturating_sub(in_flight))
-            .collect();
-        for &number in &numbers {
-            self.details.insert(number, Details::Loading);
-        }
-        numbers
+        let order = self.numbers_from_highlight();
+        start_fetches(&mut self.details, order, MAX_DETAIL_FETCHES)
     }
 
     /// PRs whose diffs haven't been requested yet, as many as there are free fetch slots. Marks
     /// them as loading, so the caller must start the fetches.
     pub fn diffs_to_fetch(&mut self) -> Vec<u64> {
-        let in_flight = self
-            .diffs
-            .values()
-            .filter(|diff| matches!(diff, Diff::Loading))
-            .count();
-        let numbers: Vec<u64> = self
-            .numbers_from_highlight()
-            .into_iter()
-            .filter(|number| !self.diffs.contains_key(number))
-            .take(MAX_DIFF_FETCHES.saturating_sub(in_flight))
-            .collect();
-        for &number in &numbers {
-            self.diffs.insert(number, Diff::Loading);
-        }
-        numbers
+        let order = self.numbers_from_highlight();
+        start_fetches(&mut self.diffs, order, MAX_DIFF_FETCHES)
     }
 
     /// The PR numbers in the order background fetches should take them: the highlighted PR, then
@@ -466,22 +461,22 @@ impl App {
                 }
             }
             Msg::DetailsLoaded(number, Err(e)) => {
-                self.details.insert(number, Details::Failed(e.to_string()));
+                self.details.insert(number, Fetch::Failed(e.to_string()));
             }
             Msg::DetailsLoaded(number, Ok(details)) => {
                 let body = model::clean_body(details.body.as_deref());
                 self.details
-                    .insert(number, Details::Loaded { details, body });
+                    .insert(number, Fetch::Loaded(Details { details, body }));
             }
             Msg::DiffLoaded(number, Err(e)) => {
-                self.diffs.insert(number, Diff::Failed(e.to_string()));
+                self.diffs.insert(number, Fetch::Failed(e.to_string()));
             }
             Msg::DiffLoaded(number, Ok(diff)) => {
                 // A tab would be drawn as a single cell. Parsing here rather than when drawing
                 // means each diff is parsed once.
                 let diff = match diff.replace('\t', "    ").into_text() {
-                    Ok(text) => Diff::Loaded(text),
-                    Err(e) => Diff::Failed(format!("couldn't read the colours: {e}")),
+                    Ok(text) => Fetch::Loaded(text),
+                    Err(e) => Fetch::Failed(format!("couldn't read the colours: {e}")),
                 };
                 self.diffs.insert(number, diff);
             }
@@ -507,10 +502,8 @@ impl App {
                 self.rows = rows;
                 self.selected.clear();
                 // Give failed details another chance with the new results.
-                self.details
-                    .retain(|_, details| !matches!(details, Details::Failed(_)));
-                self.diffs
-                    .retain(|_, diff| !matches!(diff, Diff::Failed(_)));
+                forget_failed(&mut self.details);
+                forget_failed(&mut self.diffs);
                 self.error = None;
                 self.searching = false;
                 self.loaded();
@@ -1343,7 +1336,7 @@ mod tests {
         // Freed slots go to the highlighted row and those below it, then wrap to the top.
         app.table.select(Some(5));
         app.update(Msg::DiffLoaded(1, Ok("diff\t".to_string())));
-        assert!(matches!(&app.diffs[&1], Diff::Loaded(d) if d.to_string() == "diff    "));
+        assert!(matches!(&app.diffs[&1], Fetch::Loaded(d) if d.to_string() == "diff    "));
         assert_eq!(app.diffs_to_fetch(), [6]);
         for number in [2, 3] {
             app.update(Msg::DiffLoaded(number, Ok(String::new())));
@@ -1369,7 +1362,7 @@ mod tests {
             1,
             Ok("\x1b[32m+added\x1b[m\n ctx".to_string()),
         ));
-        let Diff::Loaded(text) = &app.diffs[&1] else {
+        let Fetch::Loaded(text) = &app.diffs[&1] else {
             panic!("diff should be loaded");
         };
         assert_eq!(text.to_string(), "+added\n ctx");

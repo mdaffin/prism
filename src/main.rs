@@ -12,7 +12,7 @@ use color_eyre::eyre::Result;
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
 use ratatui::DefaultTerminal;
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::time::MissedTickBehavior;
 
 use app::{App, Msg};
@@ -45,46 +45,35 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
     while !app.should_quit {
         // Start any work the last update asked for.
         if let Some((id, query)) = app.list_to_fetch() {
-            let (gh, tx) = (gh.clone(), tx.clone());
-            tokio::spawn(async move {
-                let prs = gh.list_prs(&query, args.limit).await;
-                let _ = tx.send(Msg::PrsLoaded(id, prs));
+            let limit = args.limit;
+            spawn(&gh, &tx, async move |gh| {
+                Msg::PrsLoaded(id, gh.list_prs(&query, limit).await)
             });
         }
         for number in app.details_to_fetch() {
-            let (gh, tx) = (gh.clone(), tx.clone());
-            tokio::spawn(async move {
-                let details = gh.pr_details(number).await;
-                let _ = tx.send(Msg::DetailsLoaded(number, details));
+            spawn(&gh, &tx, async move |gh| {
+                Msg::DetailsLoaded(number, gh.pr_details(number).await)
             });
         }
         for number in app.diffs_to_fetch() {
-            let (gh, tx) = (gh.clone(), tx.clone());
-            tokio::spawn(async move {
-                let diff = gh.pr_diff(number).await;
-                let _ = tx.send(Msg::DiffLoaded(number, diff));
+            spawn(&gh, &tx, async move |gh| {
+                Msg::DiffLoaded(number, gh.pr_diff(number).await)
             });
         }
         for number in app.refreshes_to_run() {
-            let (gh, tx) = (gh.clone(), tx.clone());
-            tokio::spawn(async move {
-                let pr = gh.pr(number).await;
-                let _ = tx.send(Msg::PrRefreshed(number, pr));
+            spawn(&gh, &tx, async move |gh| {
+                Msg::PrRefreshed(number, gh.pr(number).await)
             });
         }
         for number in app.approvals_to_run() {
-            let (gh, tx) = (gh.clone(), tx.clone());
-            tokio::spawn(async move {
-                let result = gh.approve(number).await;
-                let _ = tx.send(Msg::Approved(number, result));
+            spawn(&gh, &tx, async move |gh| {
+                Msg::Approved(number, gh.approve(number).await)
             });
         }
         if let Some((number, auto)) = app.merge_to_run() {
-            let (gh, tx) = (gh.clone(), tx.clone());
             let method = args.merge_method;
-            tokio::spawn(async move {
-                let result = gh.merge(number, auto, method).await;
-                let _ = tx.send(Msg::Merged(number, result));
+            spawn(&gh, &tx, async move |gh| {
+                Msg::Merged(number, gh.merge(number, auto, method).await)
             });
         }
 
@@ -102,4 +91,15 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
         app.update(msg);
     }
     Ok(())
+}
+
+/// Runs `work` in the background with its own handle to `gh`, and sends the message it returns.
+fn spawn<F>(gh: &gh::Gh, tx: &UnboundedSender<Msg>, work: impl FnOnce(gh::Gh) -> F + Send + 'static)
+where
+    F: Future<Output = Msg> + Send + 'static,
+{
+    let (gh, tx) = (gh.clone(), tx.clone());
+    tokio::spawn(async move {
+        let _ = tx.send(work(gh).await);
+    });
 }

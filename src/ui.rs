@@ -4,7 +4,7 @@ use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Row, Table, TableState, Wrap};
 
-use crate::app::{App, Batch, Confirm, Details, Diff, Mode, Pane, Summary};
+use crate::app::{App, Batch, Confirm, Details, Fetch, Mode, Pane, Summary};
 use crate::gh::PrState;
 use crate::model;
 
@@ -394,16 +394,16 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     frame.render_widget(block, area);
     let comments = match app.highlighted().map(|row| app.details.get(&row.pr.number)) {
         None => return,
-        Some(None | Some(Details::Loading)) => {
+        Some(None | Some(Fetch::Loading)) => {
             frame.render_widget(Line::from("Loading…"), inner);
             return;
         }
-        Some(Some(Details::Failed(error))) => {
+        Some(Some(Fetch::Failed(error))) => {
             let text = Text::from(format!("Failed to load details: {error}")).red();
             frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), inner);
             return;
         }
-        Some(Some(Details::Loaded { details, .. })) => &details.comments,
+        Some(Some(Fetch::Loaded(Details { details, .. }))) => &details.comments,
     };
     if comments.is_empty() {
         frame.render_widget(Line::from("No comments."), inner);
@@ -458,8 +458,8 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
     let text = match diff {
         None if app.highlighted().is_none() => Text::default(),
         // A PR waiting for a free fetch slot has no entry yet.
-        None | Some(Diff::Loading) => Text::from("Loading…"),
-        Some(Diff::Loaded(diff)) => {
+        None | Some(Fetch::Loading) => Text::from("Loading…"),
+        Some(Fetch::Loaded(diff)) => {
             scroll = app
                 .diff_scroll
                 .min(max_scroll(diff.lines.len(), inner.height));
@@ -473,7 +473,7 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
                     .collect::<Vec<_>>(),
             )
         }
-        Some(Diff::Failed(error)) => Text::from(format!("Failed to load diff: {error}")).red(),
+        Some(Fetch::Failed(error)) => Text::from(format!("Failed to load diff: {error}")).red(),
     };
     frame.render_widget(Paragraph::new(text).block(block), area);
     app.diff_scroll = scroll;
@@ -488,9 +488,9 @@ fn description(app: &mut App, frame: &mut Frame, area: Rect) {
     let text = match app.highlighted() {
         None => Text::default(),
         Some(row) => match app.details.get(&row.pr.number) {
-            None | Some(Details::Loading) => Text::from("Loading…"),
-            Some(Details::Loaded { body, .. }) => Text::from(body.as_str()),
-            Some(Details::Failed(error)) => {
+            None | Some(Fetch::Loading) => Text::from("Loading…"),
+            Some(Fetch::Loaded(Details { body, .. })) => Text::from(body.as_str()),
+            Some(Fetch::Failed(error)) => {
                 Text::from(format!("Failed to load details: {error}")).red()
             }
         },
