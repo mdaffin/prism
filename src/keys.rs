@@ -34,6 +34,11 @@ pub const KEYS: &[KeyHelp] = &[
         "Open the selected or highlighted PRs in the browser",
         None,
     ),
+    key(
+        "Ctrl-A",
+        "Select every visible PR with passing checks",
+        None,
+    ),
     key("Esc", "Clear the filter, then the selection", None),
     key("q", "Quit, or close the current dialog", Some("Quit")),
     key("Ctrl-C", "Quit from anywhere", None),

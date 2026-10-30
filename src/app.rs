@@ -837,8 +837,12 @@ impl App {
     }
 
     fn on_list_key(&mut self, key: KeyEvent) {
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
-            self.open_in_browser();
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('o') => self.open_in_browser(),
+                KeyCode::Char('a') => self.select_passing(),
+                _ => {}
+            }
             return;
         }
         match key.code {
@@ -942,6 +946,17 @@ impl App {
             })
             .collect();
         self.mode = Mode::Running(Batch { items, merge });
+    }
+
+    /// Selects every visible open PR whose checks pass, keeping what is already selected.
+    /// Nothing is approved.
+    fn select_passing(&mut self) {
+        let passing: Vec<u64> = self
+            .visible_rows()
+            .filter(|row| row.pr.state == PrState::Open && row.checks.state == CheckState::Passing)
+            .map(|row| row.pr.number)
+            .collect();
+        self.selected.extend(passing);
     }
 
     fn toggle_selected(&mut self) {
@@ -1346,6 +1361,52 @@ mod tests {
         let mut app = app_with_titles();
         press(&mut app, "fgamma");
         assert_eq!(app.details_to_fetch(), [3, 1, 2]);
+    }
+
+    fn ctrl_a(app: &mut App) {
+        app.update(Msg::Key(KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::CONTROL,
+        )));
+    }
+
+    #[test]
+    fn ctrl_a_selects_open_prs_with_passing_checks_only() {
+        let mut closed = pr_with_checks(4, "passing");
+        closed.state = PrState::Merged;
+        let mut app = App::new(String::new(), "is:pr".to_string(), false);
+        let (id, _) = app.list_to_fetch().unwrap();
+        let prs = vec![
+            pr_with_checks(1, "passing"),
+            pr_with_checks(2, "pending"),
+            pr_with_checks(3, "none"),
+            closed,
+            pr_with_checks(5, "passing"),
+        ];
+        app.update(Msg::PrsLoaded(id, Ok(prs)));
+        ctrl_a(&mut app);
+        assert_eq!(app.selected, HashSet::from([1, 5]));
+        // Nothing starts: it only selects.
+        assert!(matches!(app.mode, Mode::List));
+    }
+
+    #[test]
+    fn ctrl_a_adds_to_the_selection_and_only_from_visible_rows() {
+        let mut app = App::new(String::new(), "is:pr".to_string(), false);
+        let (id, _) = app.list_to_fetch().unwrap();
+        let mut first = pr_with_checks(1, "passing");
+        first.title = "keep".to_string();
+        let mut second = pr_with_checks(2, "passing");
+        second.title = "other".to_string();
+        let mut pending = pr_with_checks(3, "pending");
+        pending.title = "keep".to_string();
+        app.update(Msg::PrsLoaded(id, Ok(vec![first, second, pending])));
+        // Row 3 is pending, so Ctrl-A won't pick it, but it is already selected.
+        press(&mut app, "jj ");
+        press(&mut app, "fkeep");
+        key(&mut app, KeyCode::Enter);
+        ctrl_a(&mut app);
+        assert_eq!(app.selected, HashSet::from([1, 3]));
     }
 
     fn ctrl_o(app: &mut App) {
