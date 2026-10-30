@@ -766,45 +766,7 @@ impl App {
         let Mode::Running(batch) = &self.mode else {
             return;
         };
-        let mut failures = Vec::new();
-        for item in &batch.items {
-            let steps = [
-                ("approve", Some(&item.approval)),
-                ("merge", item.merging.as_ref()),
-            ];
-            for (step, status) in steps {
-                if let Some(ItemStatus::Failed(e)) = status {
-                    failures.push((item.pr.number, step, e.clone()));
-                }
-            }
-        }
-        let approved = batch
-            .items
-            .iter()
-            .filter(|item| item.approval.is_ok())
-            .count();
-        let merges: Vec<&ItemStatus> = batch
-            .items
-            .iter()
-            .filter_map(|item| item.merging.as_ref())
-            .collect();
-        let merged = batch.merge.then(|| {
-            let ok = merges.iter().filter(|status| status.is_ok()).count();
-            (ok, merges.len())
-        });
-        let auto_merge = batch
-            .items
-            .iter()
-            .filter(|item| item.merging == Some(ItemStatus::AutoMerge))
-            .map(|item| item.pr.number)
-            .collect();
-        let summary = Summary {
-            approved,
-            total: batch.items.len(),
-            merged,
-            failures,
-            auto_merge,
-        };
+        let summary = batch.summary();
         // Only the batch's rows are refreshed. Running the search again could reorder the list
         // or drop PRs the user still means to work through.
         self.to_refresh

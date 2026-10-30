@@ -64,6 +64,49 @@ impl Batch {
             .count();
         (finished, statuses.len())
     }
+
+    /// How the batch went, once it has finished.
+    pub fn summary(&self) -> Summary {
+        let mut failures = Vec::new();
+        for item in &self.items {
+            let steps = [
+                ("approve", Some(&item.approval)),
+                ("merge", item.merging.as_ref()),
+            ];
+            for (step, status) in steps {
+                if let Some(ItemStatus::Failed(e)) = status {
+                    failures.push((item.pr.number, step, e.clone()));
+                }
+            }
+        }
+        let approved = self
+            .items
+            .iter()
+            .filter(|item| item.approval.is_ok())
+            .count();
+        let merges: Vec<&ItemStatus> = self
+            .items
+            .iter()
+            .filter_map(|item| item.merging.as_ref())
+            .collect();
+        let merged = self.merge.then(|| {
+            let ok = merges.iter().filter(|status| status.is_ok()).count();
+            (ok, merges.len())
+        });
+        let auto_merge = self
+            .items
+            .iter()
+            .filter(|item| item.merging == Some(ItemStatus::AutoMerge))
+            .map(|item| item.pr.number)
+            .collect();
+        Summary {
+            approved,
+            total: self.items.len(),
+            merged,
+            failures,
+            auto_merge,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -153,4 +196,58 @@ pub fn on_confirm_key(confirm: &mut Confirm, key: KeyEvent) -> Option<Choice> {
         _ => {}
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(number: u64, approval: ItemStatus, merging: Option<ItemStatus>) -> BatchItem {
+        BatchItem {
+            pr: ConfirmPr {
+                number,
+                checks: CheckState::Passing,
+                title: String::new(),
+            },
+            approval,
+            merging,
+        }
+    }
+
+    #[test]
+    fn the_summary_counts_each_step_and_names_the_failures() {
+        let batch = Batch {
+            items: vec![
+                item(1, ItemStatus::Done, Some(ItemStatus::Done)),
+                item(2, ItemStatus::Done, Some(ItemStatus::AutoMerge)),
+                item(
+                    3,
+                    ItemStatus::Done,
+                    Some(ItemStatus::Failed("conflict".into())),
+                ),
+                item(4, ItemStatus::Failed("no".into()), None),
+            ],
+            merge: true,
+        };
+        let summary = batch.summary();
+        assert_eq!((summary.approved, summary.total), (3, 4));
+        assert_eq!(summary.merged, Some((2, 3)));
+        assert_eq!(summary.auto_merge, [2]);
+        assert_eq!(
+            summary.failures,
+            [
+                (3, "merge", "conflict".to_string()),
+                (4, "approve", "no".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn a_batch_that_didnt_merge_has_no_merge_count() {
+        let batch = Batch {
+            items: vec![item(1, ItemStatus::Done, None)],
+            merge: false,
+        };
+        assert_eq!(batch.summary().merged, None);
+    }
 }
