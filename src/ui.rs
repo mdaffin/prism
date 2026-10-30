@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap};
 
 use crate::app::{App, ConfirmOpen, Details, Fetch, Mode, Pane};
-use crate::batch::{Batch, Confirm, Summary};
+use crate::batch::{Batch, Confirm, ItemStatus, Summary};
 use crate::gh::PrState;
 use crate::keys;
 use crate::model::{self, CheckState};
@@ -81,7 +81,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         }
         Mode::Running(batch) => {
             running_popup(batch, app.dry_run, spinner(app), frame, body_area);
-            "Ctrl-C: Quit"
+            "q: Cancel | Ctrl-C: Quit"
         }
         Mode::Results(summary) => {
             results_popup(summary, app.dry_run, frame, body_area);
@@ -294,8 +294,25 @@ fn running_popup(batch: &Batch, dry_run: bool, spinner: &str, frame: &mut Frame,
         "Approving"
     };
     let title = format!("{step} {}", count(total, "PR"));
-    let lines = vec![Line::from(progress)];
-    popup(frame, area, title, dry_run, lines, false, Vec::new());
+    let mut lines = vec![Line::from(progress), Line::default()];
+    // Failures can be long, so the lines wrap.
+    lines.extend(batch.items.iter().map(|item| {
+        let status = item.current_status();
+        let label = Span::styled(status.label(), item_style(status));
+        Line::from(vec![Span::raw(format!("#{:<7}", item.pr.number)), label])
+    }));
+    let footer = vec![Line::default(), Line::from("q: Cancel").dim().centered()];
+    popup(frame, area, title, dry_run, lines, true, footer);
+}
+
+fn item_style(status: &ItemStatus) -> Style {
+    match status {
+        ItemStatus::Pending | ItemStatus::Cancelled => Style::new().dim(),
+        ItemStatus::Working => Style::new().cyan(),
+        ItemStatus::Done => Style::new().green(),
+        ItemStatus::AutoMerge | ItemStatus::Interrupted => Style::new().yellow(),
+        ItemStatus::Failed(_) => Style::new().red(),
+    }
 }
 
 fn results_popup(summary: &Summary, dry_run: bool, frame: &mut Frame, area: Rect) {
@@ -311,6 +328,31 @@ fn results_popup(summary: &Summary, dry_run: bool, frame: &mut Frame, area: Rect
         for (number, step, error) in &summary.failures {
             lines.push(Line::from(format!("#{number}  ✗ {step} failed: {error}")).red());
         }
+    }
+    if summary.cancelled > 0 {
+        lines.push(Line::default());
+        lines.push(
+            Line::from(format!(
+                "Cancelled: {} not finished",
+                count(summary.cancelled, "PR")
+            ))
+            .dim(),
+        );
+    }
+    if !summary.interrupted.is_empty() {
+        let numbers: Vec<String> = summary
+            .interrupted
+            .iter()
+            .map(|n| format!("#{n}"))
+            .collect();
+        lines.push(Line::default());
+        lines.push(
+            Line::from(format!(
+                "Interrupted while running - check GitHub: {}",
+                numbers.join(", ")
+            ))
+            .yellow(),
+        );
     }
     if !summary.auto_merge.is_empty() {
         let numbers: Vec<String> = summary.auto_merge.iter().map(|n| format!("#{n}")).collect();
@@ -910,6 +952,33 @@ mod tests {
         press(&mut app, "Bump");
         let screen = lines(&draw(&mut app, 160, 30));
         assert!(screen.iter().any(|line| line.contains("No PRs match")));
+    }
+
+    #[test]
+    fn shows_each_pr_of_a_running_batch_and_what_cancelling_did() {
+        let mut app = app_with((1..=6).map(|n| pr(n, "Bump alpha", "OPEN", "")).collect());
+        press(&mut app, " j j j j j ");
+        app.update(Msg::Key(KeyCode::Enter.into()));
+        app.update(Msg::Key(KeyCode::Enter.into()));
+        // Four approvals run at once; two wait.
+        assert_eq!(app.approvals_to_run().len(), 4);
+        app.update(Msg::Approved(1, Ok(())));
+        let screen = lines(&draw(&mut app, 160, 30));
+        // The popup draws over the table, so a status shares its line with a table row.
+        let with = |text: &str| screen.iter().filter(|line| line.contains(text)).count();
+        assert_eq!(with("✓ done"), 1);
+        assert_eq!(with("… working"), 3);
+        assert_eq!(with("· pending"), 2);
+        assert!(screen.iter().any(|line| line.contains("q: Cancel")));
+
+        press(&mut app, "q");
+        let screen = lines(&draw(&mut app, 160, 30));
+        assert!(screen.iter().any(|line| line.contains("Cancelled: 2 PRs")));
+        assert!(
+            screen
+                .iter()
+                .any(|line| line.contains("check GitHub: #2, #3, #4"))
+        );
     }
 
     #[test]

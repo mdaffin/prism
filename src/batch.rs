@@ -21,6 +21,17 @@ pub struct BatchItem {
     pub merging: Option<ItemStatus>,
 }
 
+impl BatchItem {
+    /// The status of the step the PR is on, or of the approval that stopped it before merging.
+    pub fn current_status(&self) -> &ItemStatus {
+        self.merging.as_ref().unwrap_or(&self.approval)
+    }
+
+    fn steps(&self) -> [Option<&ItemStatus>; 2] {
+        [Some(&self.approval), self.merging.as_ref()]
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum ItemStatus {
     Pending,
@@ -30,6 +41,11 @@ pub enum ItemStatus {
     AutoMerge,
     /// The error, on one line.
     Failed(String),
+    /// The batch was cancelled before this step started.
+    Cancelled,
+    /// The batch was cancelled while this step was running. It can't be stopped, so GitHub may
+    /// or may not have done it.
+    Interrupted,
 }
 
 impl ItemStatus {
@@ -40,12 +56,46 @@ impl ItemStatus {
     pub fn is_ok(&self) -> bool {
         matches!(self, Self::Done | Self::AutoMerge)
     }
+
+    /// The status as shown in the progress table.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Pending => "· pending".to_string(),
+            Self::Working => "… working".to_string(),
+            Self::Done => "✓ done".to_string(),
+            Self::AutoMerge => "⏲ auto-merge queued".to_string(),
+            Self::Failed(error) => format!("✗ failed: {error}"),
+            Self::Cancelled => "· cancelled".to_string(),
+            Self::Interrupted => "? interrupted - check GitHub".to_string(),
+        }
+    }
 }
 
 impl Batch {
     /// Whether the batch has moved on to merging.
     pub fn is_merging(&self) -> bool {
         self.items.iter().any(|item| item.merging.is_some())
+    }
+
+    /// Stops the steps that haven't started, and marks those running as interrupted, as they
+    /// can't be stopped. A cancelled Approve & merge doesn't merge the PRs approved so far.
+    pub fn cancel(&mut self) {
+        let was_merging = self.is_merging();
+        for item in &mut self.items {
+            for status in [Some(&mut item.approval), item.merging.as_mut()]
+                .into_iter()
+                .flatten()
+            {
+                match status {
+                    ItemStatus::Pending => *status = ItemStatus::Cancelled,
+                    ItemStatus::Working => *status = ItemStatus::Interrupted,
+                    _ => {}
+                }
+            }
+            if self.merge && !was_merging && item.approval.is_ok() {
+                item.merging = Some(ItemStatus::Cancelled);
+            }
+        }
     }
 
     /// How many items of the current step are finished, out of how many.
@@ -89,10 +139,25 @@ impl Batch {
             .iter()
             .filter_map(|item| item.merging.as_ref())
             .collect();
+        // Merges that were cancelled before they started weren't tried.
         let merged = self.merge.then(|| {
-            let ok = merges.iter().filter(|status| status.is_ok()).count();
-            (ok, merges.len())
+            let tried = merges
+                .iter()
+                .filter(|status| ***status != ItemStatus::Cancelled);
+            let ok = tried.clone().filter(|status| status.is_ok()).count();
+            (ok, tried.count())
         });
+        let cancelled = self
+            .items
+            .iter()
+            .filter(|item| item.steps().contains(&Some(&ItemStatus::Cancelled)))
+            .count();
+        let interrupted = self
+            .items
+            .iter()
+            .filter(|item| item.steps().contains(&Some(&ItemStatus::Interrupted)))
+            .map(|item| item.pr.number)
+            .collect();
         let auto_merge = self
             .items
             .iter()
@@ -105,6 +170,8 @@ impl Batch {
             merged,
             failures,
             auto_merge,
+            cancelled,
+            interrupted,
         }
     }
 }
@@ -120,6 +187,11 @@ pub struct Summary {
     pub failures: Vec<(u64, &'static str, String)>,
     /// PRs that will merge once their checks pass.
     pub auto_merge: Vec<u64>,
+    /// How many PRs had a step cancelled before it started.
+    pub cancelled: usize,
+    /// PRs with a step that was running when the batch was cancelled, so nobody knows whether
+    /// it happened.
+    pub interrupted: Vec<u64>,
 }
 
 /// The confirm dialog. It keeps its own copy of the PRs, so a list that loads while it is open

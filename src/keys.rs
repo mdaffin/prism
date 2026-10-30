@@ -41,7 +41,11 @@ pub const KEYS: &[KeyHelp] = &[
     ),
     key("Ctrl-R", "Run the query again, keeping the selection", None),
     key("Esc", "Clear the filter, then the selection", None),
-    key("q", "Quit, or close the current dialog", Some("Quit")),
+    key(
+        "q",
+        "Quit, close the current dialog, or cancel a running batch",
+        Some("Quit"),
+    ),
     key("Ctrl-C", "Quit from anywhere", None),
 ];
 

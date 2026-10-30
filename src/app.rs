@@ -854,8 +854,12 @@ impl App {
                     self.mode = Mode::List;
                 }
             }
-            // Cancelling a batch comes in M4 step 3.
-            Mode::Running(_) => {}
+            Mode::Running(batch) => {
+                if key.code == KeyCode::Char('q') {
+                    batch.cancel();
+                    self.finish_batch();
+                }
+            }
             Mode::Results(_) => {
                 if matches!(key.code, KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q')) {
                     self.mode = Mode::List;
@@ -1667,11 +1671,79 @@ mod tests {
     fn keys_are_ignored_while_approving() {
         let mut app = app_with_rows(2);
         start_approving(&mut app, 1);
-        for code in [KeyCode::Esc, KeyCode::Char('q'), KeyCode::Enter] {
+        for code in [KeyCode::Esc, KeyCode::Char('j'), KeyCode::Enter] {
             key(&mut app, code);
         }
         assert!(matches!(app.mode, Mode::Running(_)));
         assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn q_cancels_the_approvals_that_have_not_started() {
+        let mut app = app_with_rows(6);
+        start_approving(&mut app, 6);
+        assert_eq!(app.approvals_to_run(), [1, 2, 3, 4]);
+        approve(&mut app, 1, Ok(()));
+
+        key(&mut app, KeyCode::Char('q'));
+        let Mode::Results(summary) = &app.mode else {
+            panic!("the results aren't shown");
+        };
+        assert!(!app.should_quit);
+        assert_eq!((summary.approved, summary.total), (1, 6));
+        // 2 to 4 were running; 5 and 6 never started.
+        assert_eq!(summary.interrupted, [2, 3, 4]);
+        assert_eq!(summary.cancelled, 2);
+        assert!(summary.failures.is_empty());
+        // Nothing more starts, and the batch's rows are refreshed.
+        assert!(app.approvals_to_run().is_empty());
+        assert_eq!(app.to_refresh, [1, 2, 3, 4, 5, 6]);
+        assert!(app.selected.is_empty());
+        // A result that arrives after the cancel changes nothing.
+        approve(&mut app, 2, Ok(()));
+        assert!(matches!(app.mode, Mode::Results(_)));
+    }
+
+    #[test]
+    fn q_while_approving_to_merge_cancels_the_merges_too() {
+        let mut app = start_approving_and_merging();
+        app.approvals_to_run();
+        approve(&mut app, 1, Ok(()));
+        approve(&mut app, 2, Ok(()));
+
+        key(&mut app, KeyCode::Char('q'));
+        assert_eq!(app.merge_to_run(), None);
+        let Mode::Results(summary) = &app.mode else {
+            panic!("the results aren't shown");
+        };
+        assert_eq!(summary.approved, 2);
+        assert_eq!(summary.interrupted, [3, 4]);
+        // PRs 1 and 2 were approved but their merges didn't start.
+        assert_eq!(summary.cancelled, 2);
+        assert_eq!(summary.merged, Some((0, 0)));
+    }
+
+    #[test]
+    fn q_while_merging_cancels_the_merges_not_yet_started() {
+        let mut app = start_approving_and_merging();
+        app.approvals_to_run();
+        for number in 1..=4 {
+            approve(&mut app, number, Ok(()));
+        }
+        assert_eq!(app.merge_to_run(), Some((1, false)));
+        merge(&mut app, 1, Ok(()));
+        assert_eq!(app.merge_to_run(), Some((2, true)));
+
+        key(&mut app, KeyCode::Char('q'));
+        assert_eq!(app.merge_to_run(), None);
+        let Mode::Results(summary) = &app.mode else {
+            panic!("the results aren't shown");
+        };
+        assert_eq!(summary.approved, 4);
+        assert_eq!(summary.merged, Some((1, 2)));
+        assert_eq!(summary.interrupted, [2]);
+        assert_eq!(summary.cancelled, 2);
+        assert_eq!(app.refreshes_to_run(), [1, 2, 3, 4]);
     }
 
     #[test]
