@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
 use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Text};
-use ratatui::widgets::{Block, Clear, Paragraph, Row, Table, Wrap};
+use ratatui::widgets::{Block, Clear, Paragraph, Row, Table, TableState, Wrap};
 
 use crate::app::{App, Batch, Confirm, Details, Diff, Mode, Pane, Summary};
 use crate::gh::PrState;
@@ -27,8 +27,10 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     .areas(frame.area());
     let [left_area, detail_area] =
         Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).areas(body_area);
+    let [top_area, checks_area] =
+        Layout::vertical([Constraint::Fill(2), Constraint::Fill(1)]).areas(left_area);
     let [search_area, table_area] =
-        Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(left_area);
+        Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(top_area);
 
     frame.render_widget(Line::from(app.title.as_str()).bold().reversed(), title_area);
     search(app, frame, search_area);
@@ -98,6 +100,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     }
     let [description_area, diff_area] =
         Layout::vertical([Constraint::Fill(1), Constraint::Fill(2)]).areas(detail_area);
+    checks(app, frame, checks_area);
     description(app, frame, description_area);
     diff(app, frame, diff_area);
 
@@ -345,6 +348,37 @@ fn pane_block(title: &str, focused: bool) -> Block<'_> {
 fn max_scroll(content_rows: usize, area_rows: u16) -> u16 {
     let max = content_rows.saturating_sub(usize::from(area_rows));
     u16::try_from(max).unwrap_or(u16::MAX)
+}
+
+fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
+    let block = pane_block("Checks", app.focus == Pane::Checks);
+    let inner = block.inner(area);
+    if app.focus == Pane::Checks {
+        app.page = inner.height.saturating_sub(2).max(1);
+    }
+    frame.render_widget(block, area);
+    let Some(row) = app.highlighted() else {
+        return;
+    };
+    if row.checks.results.is_empty() {
+        frame.render_widget(Line::from("No checks."), inner);
+        return;
+    }
+    let rows: Vec<Row> = row
+        .checks
+        .worst_first()
+        .into_iter()
+        .map(|result| Row::new([result.state.label(), result.key.as_str()]))
+        .collect();
+    // One row of the table is its header.
+    let scroll = app
+        .checks_scroll
+        .min(max_scroll(rows.len(), inner.height.saturating_sub(1)));
+    let table = Table::new(rows, [Constraint::Length(10), Constraint::Fill(1)])
+        .header(Row::new(["Status", "Check"]).bold());
+    let mut state = TableState::default().with_offset(usize::from(scroll));
+    frame.render_stateful_widget(table, inner, &mut state);
+    app.checks_scroll = scroll;
 }
 
 fn diff(app: &mut App, frame: &mut Frame, area: Rect) {

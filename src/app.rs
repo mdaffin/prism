@@ -45,6 +45,7 @@ pub struct App {
     pub focus: Pane,
     /// Rows scrolled off the top of the description and diff panes. They go back to the top
     /// when the highlight moves. The view clamps them to the content it draws.
+    pub checks_scroll: u16,
     pub description_scroll: u16,
     pub diff_scroll: u16,
     /// The rows a PgUp/PgDn moves in the focused pane, set by the view as it draws.
@@ -71,6 +72,7 @@ pub struct App {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Pane {
     Table,
+    Checks,
     Description,
     Diff,
 }
@@ -78,7 +80,8 @@ pub enum Pane {
 impl Pane {
     fn next(self) -> Self {
         match self {
-            Pane::Table => Pane::Description,
+            Pane::Table => Pane::Checks,
+            Pane::Checks => Pane::Description,
             Pane::Description => Pane::Diff,
             Pane::Diff => Pane::Table,
         }
@@ -87,7 +90,8 @@ impl Pane {
     fn previous(self) -> Self {
         match self {
             Pane::Table => Pane::Diff,
-            Pane::Description => Pane::Table,
+            Pane::Checks => Pane::Table,
+            Pane::Description => Pane::Checks,
             Pane::Diff => Pane::Description,
         }
     }
@@ -281,6 +285,7 @@ impl App {
             rows: Vec::new(),
             table: TableState::default(),
             focus: Pane::Table,
+            checks_scroll: 0,
             description_scroll: 0,
             diff_scroll: 0,
             page: 1,
@@ -726,6 +731,9 @@ impl App {
     fn move_focused(&mut self, by: isize) {
         match self.focus {
             Pane::Table => self.move_highlight(by),
+            Pane::Checks => {
+                self.checks_scroll = self.checks_scroll.saturating_add_signed(clamp_i16(by));
+            }
             Pane::Description => {
                 self.description_scroll =
                     self.description_scroll.saturating_add_signed(clamp_i16(by));
@@ -748,6 +756,7 @@ impl App {
     }
 
     fn reset_scroll(&mut self) {
+        self.checks_scroll = 0;
         self.description_scroll = 0;
         self.diff_scroll = 0;
     }
@@ -1336,6 +1345,17 @@ mod tests {
         );
     }
 
+    /// Presses Tab until `pane` has focus.
+    fn focus(app: &mut App, pane: Pane) {
+        for _ in 0..4 {
+            if app.focus == pane {
+                return;
+            }
+            key(app, KeyCode::Tab);
+        }
+        panic!("Tab never reached the pane");
+    }
+
     #[test]
     fn tab_cycles_focus_and_arrows_act_on_the_focused_pane() {
         let mut app = app_with_rows(3);
@@ -1349,6 +1369,11 @@ mod tests {
         assert_eq!(app.table.selected(), Some(2));
 
         key(&mut app, KeyCode::Tab);
+        assert!(app.focus == Pane::Checks);
+        press(&mut app, "j");
+        assert_eq!(app.checks_scroll, 1);
+
+        key(&mut app, KeyCode::Tab);
         assert!(app.focus == Pane::Description);
         press(&mut app, "jj");
         key(&mut app, KeyCode::PageDown);
@@ -1356,9 +1381,9 @@ mod tests {
         key(&mut app, KeyCode::PageUp);
         key(&mut app, KeyCode::Up);
         assert_eq!(app.description_scroll, 1);
-        // The highlight stayed where it was, and the diff didn't scroll.
+        // The highlight stayed where it was, and the other panes didn't scroll.
         assert_eq!(app.table.selected(), Some(2));
-        assert_eq!(app.diff_scroll, 0);
+        assert_eq!((app.checks_scroll, app.diff_scroll), (1, 0));
         key(&mut app, KeyCode::PageUp);
         assert_eq!(app.description_scroll, 0);
 
@@ -1377,20 +1402,26 @@ mod tests {
     #[test]
     fn scroll_goes_back_to_the_top_when_the_highlight_moves() {
         let mut app = app_with_rows(3);
-        key(&mut app, KeyCode::Tab);
-        press(&mut app, "jjj");
-        key(&mut app, KeyCode::Tab);
-        press(&mut app, "jj");
-        key(&mut app, KeyCode::Tab);
+        for (pane, keys) in [
+            (Pane::Checks, "j"),
+            (Pane::Description, "jj"),
+            (Pane::Diff, "jjj"),
+        ] {
+            focus(&mut app, pane);
+            press(&mut app, keys);
+        }
+        focus(&mut app, Pane::Table);
         key(&mut app, KeyCode::Down);
-        assert_eq!((app.description_scroll, app.diff_scroll), (0, 0));
+        assert_eq!(
+            (app.checks_scroll, app.description_scroll, app.diff_scroll),
+            (0, 0, 0)
+        );
 
         // A highlight that can't move, at the last row, leaves the scroll alone.
         key(&mut app, KeyCode::Down);
-        key(&mut app, KeyCode::Tab);
+        focus(&mut app, Pane::Description);
         press(&mut app, "j");
-        key(&mut app, KeyCode::Tab);
-        key(&mut app, KeyCode::Tab);
+        focus(&mut app, Pane::Table);
         key(&mut app, KeyCode::Down);
         assert_eq!(app.description_scroll, 1);
     }

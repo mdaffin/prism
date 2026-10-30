@@ -51,9 +51,19 @@ pub struct CheckResult {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Checks {
     pub state: CheckState,
-    /// The latest run per key, sorted by key. Read by the checks pane (M2).
-    #[allow(dead_code)]
+    /// The latest run per key, sorted by key.
     pub results: Vec<CheckResult>,
+}
+
+impl Checks {
+    /// The results with the worst first, then by key. This is the order of the checks pane; the
+    /// PR list sorts the other way round.
+    pub fn worst_first(&self) -> Vec<&CheckResult> {
+        let mut results: Vec<&CheckResult> = self.results.iter().collect();
+        // The sort is stable, so equal ranks stay in key order.
+        results.sort_by_key(|result| std::cmp::Reverse(result.state.rank()));
+        results
+    }
 }
 
 pub fn check_state(check: &Check) -> CheckState {
@@ -246,6 +256,27 @@ mod tests {
             ]
         );
         assert_eq!(checks.state, CheckState::Passing);
+    }
+
+    #[test]
+    fn checks_pane_lists_the_worst_first() {
+        let checks = classify_checks(
+            "MERGEABLE",
+            &[
+                run("a", "COMPLETED", "SUCCESS", None),
+                run("b", "IN_PROGRESS", "", None),
+                run("c", "COMPLETED", "FAILURE", None),
+                run("d", "COMPLETED", "SUCCESS", None),
+                ctx("e", "ERROR", None),
+                run("f", "QUEUED", "", None),
+            ],
+        );
+        let keys: Vec<&str> = checks
+            .worst_first()
+            .into_iter()
+            .map(|result| result.key.as_str())
+            .collect();
+        assert_eq!(keys, ["CI/c", "e", "CI/b", "CI/f", "CI/a", "CI/d"]);
     }
 
     #[test]
