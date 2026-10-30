@@ -401,8 +401,11 @@ mod tests {
 
     #[test]
     fn fetches_the_initial_query_once() {
-        let mut app = App::new(String::new(), "is:pr is:open".to_string(), false);
-        assert_eq!(app.list_to_fetch(), Some((1, "is:pr is:open".to_string())));
+        let mut app = App::new(String::new(), "is:pr state:open".to_string(), false);
+        assert_eq!(
+            app.list_to_fetch(),
+            Some((1, "is:pr state:open".to_string()))
+        );
         assert_eq!(app.list_to_fetch(), None);
     }
 
