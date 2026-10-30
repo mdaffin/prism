@@ -168,8 +168,6 @@ pub fn review_label(review_decision: ReviewDecision) -> &'static str {
 
 static HTML_COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<!--.*?-->").unwrap());
 static BLANK_LINES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{3,}").unwrap());
-static TICKET: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(?<ticket>[A-Z][A-Z0-9]+-\d+)[:\s]*(?<rest>.*)$").unwrap());
 
 /// Removes HTML comments and runs of blank lines from a PR or comment body.
 pub fn clean_body(body: Option<&str>) -> String {
@@ -177,19 +175,6 @@ pub fn clean_body(body: Option<&str>) -> String {
     let body = HTML_COMMENT.replace_all(&body, "");
     let body = BLANK_LINES.replace_all(&body, "\n\n");
     body.trim().to_string()
-}
-
-/// Splits a leading ticket such as `ABC-123:` off a title. Returns an empty ticket and the full
-/// title when there is none. Read by the ticket column (M4).
-#[allow(dead_code)]
-pub fn split_ticket(title: &str) -> (&str, &str) {
-    match TICKET.captures(title) {
-        Some(caps) => (
-            caps.name("ticket").unwrap().as_str(),
-            caps.name("rest").unwrap().as_str(),
-        ),
-        None => ("", title),
-    }
 }
 
 #[cfg(test)]
@@ -406,14 +391,5 @@ mod tests {
         );
         assert_eq!(clean_body(Some("one\r\n\r\n\r\n\r\ntwo")), "one\n\ntwo");
         assert_eq!(clean_body(Some("keep\n\nthis")), "keep\n\nthis");
-    }
-
-    #[test]
-    fn splits_ticket() {
-        assert_eq!(split_ticket("ABC-123: Update x"), ("ABC-123", "Update x"));
-        assert_eq!(split_ticket("AB2-7 Update x"), ("AB2-7", "Update x"));
-        assert_eq!(split_ticket("Update ABC-123"), ("", "Update ABC-123"));
-        assert_eq!(split_ticket("A-1: too short"), ("", "A-1: too short"));
-        assert_eq!(split_ticket("abc-1: lower"), ("", "abc-1: lower"));
     }
 }
