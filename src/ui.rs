@@ -323,11 +323,12 @@ fn diff(app: &App, frame: &mut Frame, area: Rect) {
         Some(row) => match app.diffs.get(&row.pr.number) {
             // A PR waiting for a free fetch slot has no entry yet.
             None | Some(Diff::Loading) => Text::from("Loading…"),
-            // Only the rows that fit are built, as a diff can be very long.
+            // Only the rows that fit are copied, as a diff can be very long.
             Some(Diff::Loaded(diff)) => Text::from(
-                diff.lines()
+                diff.lines
+                    .iter()
                     .take(usize::from(area.height))
-                    .map(Line::from)
+                    .cloned()
                     .collect::<Vec<_>>(),
             ),
             Some(Diff::Failed(error)) => Text::from(format!("Failed to load diff: {error}")).red(),

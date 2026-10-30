@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use color_eyre::eyre::Result;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use ansi_to_tui::IntoText;
+use ratatui::text::Text;
 use ratatui::widgets::TableState;
 use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
@@ -208,7 +210,8 @@ pub enum Details {
 /// A PR's diff, fetched when the PR is highlighted.
 pub enum Diff {
     Loading,
-    Loaded(String),
+    /// The diff with gh's colours.
+    Loaded(Text<'static>),
     /// Kept rather than removed, so a failing PR isn't fetched again on every update.
     Failed(String),
 }
@@ -415,9 +418,13 @@ impl App {
                 self.diffs.insert(number, Diff::Failed(e.to_string()));
             }
             Msg::DiffLoaded(number, Ok(diff)) => {
-                // A tab would be drawn as a single cell.
-                self.diffs
-                    .insert(number, Diff::Loaded(diff.replace('\t', "    ")));
+                // A tab would be drawn as a single cell. Parsing here rather than when drawing
+                // means each diff is parsed once.
+                let diff = match diff.replace('\t', "    ").into_text() {
+                    Ok(text) => Diff::Loaded(text),
+                    Err(e) => Diff::Failed(format!("couldn't read the colours: {e}")),
+                };
+                self.diffs.insert(number, diff);
             }
             Msg::PrsLoaded(id, _) if id != self.fetch_id => {}
             Msg::PrsLoaded(_, Err(e)) => {
@@ -1232,7 +1239,7 @@ mod tests {
 
         // A freed slot lets the highlighted row go.
         app.update(Msg::DiffLoaded(1, Ok("diff\t".to_string())));
-        assert!(matches!(&app.diffs[&1], Diff::Loaded(d) if d == "diff    "));
+        assert!(matches!(&app.diffs[&1], Diff::Loaded(d) if d.to_string() == "diff    "));
         assert_eq!(app.diffs_to_fetch(), [5]);
 
         // Going back to a loaded or failed row doesn't fetch it again.
@@ -1241,6 +1248,20 @@ mod tests {
         assert!(app.diffs_to_fetch().is_empty());
         app.table.select(Some(1));
         assert!(app.diffs_to_fetch().is_empty());
+    }
+
+    #[test]
+    fn diff_colours_become_styles() {
+        let mut app = app_with_rows(1);
+        app.update(Msg::DiffLoaded(1, Ok("\x1b[32m+added\x1b[m\n ctx".to_string())));
+        let Diff::Loaded(text) = &app.diffs[&1] else {
+            panic!("diff should be loaded");
+        };
+        assert_eq!(text.to_string(), "+added\n ctx");
+        assert_eq!(
+            text.lines[0].spans[0].style.fg,
+            Some(ratatui::style::Color::Green)
+        );
     }
 
     #[test]

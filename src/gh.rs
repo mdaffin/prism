@@ -109,10 +109,11 @@ impl Gh {
         Ok(serde_json::from_slice(&stdout)?)
     }
 
-    /// The PR's diff as plain text.
+    /// The PR's diff, with the ANSI colour codes gh adds. Without `--color=always` gh leaves
+    /// them out, as its output isn't a terminal.
     pub async fn pr_diff(&self, number: u64) -> Result<String> {
         let number = number.to_string();
-        let stdout = self.run(&["pr", "diff", &number, "--color=never"]).await?;
+        let stdout = self.run(&["pr", "diff", &number, "--color=always"]).await?;
         Ok(String::from_utf8_lossy(&stdout).into_owned())
     }
 
