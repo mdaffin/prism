@@ -177,6 +177,57 @@ pub fn clean_body(body: Option<&str>) -> String {
     body.trim().to_string()
 }
 
+/// Names the title columns can't use, as other parts of a PR already have them.
+const RESERVED_COLUMNS: [&str; 13] = [
+    "number", "title", "branch", "url", "changes", "body", "comments", "diff", "state", "checks",
+    "runs", "review", "updated",
+];
+
+/// Compiles the `--column-regex` and checks its named groups can be columns.
+pub fn parse_column_regex(pattern: &str) -> Result<Regex, String> {
+    let regex = Regex::new(pattern).map_err(|error| error.to_string())?;
+    let names = column_names(&regex);
+    if names.is_empty() {
+        return Err("--column-regex needs at least one named group, e.g. '(?<package>\\S+) to (?<version>\\S+)'".to_string());
+    }
+    let clashes: Vec<&str> = names
+        .iter()
+        .map(String::as_str)
+        .filter(|name| RESERVED_COLUMNS.contains(name))
+        .collect();
+    if !clashes.is_empty() {
+        return Err(format!(
+            "--column-regex group names clash with built-in columns: {}",
+            clashes.join(", ")
+        ));
+    }
+    Ok(regex)
+}
+
+/// The names of the regex's groups, in order. They are the table's column headers.
+pub fn column_names(regex: &Regex) -> Vec<String> {
+    regex
+        .capture_names()
+        .flatten()
+        .map(str::to_string)
+        .collect()
+}
+
+/// What each named group matched in `title`, or empty text when the title doesn't match.
+pub fn column_cells(regex: &Regex, title: &str) -> Vec<String> {
+    let captures = regex.captures(title);
+    column_names(regex)
+        .iter()
+        .map(|name| {
+            captures
+                .as_ref()
+                .and_then(|captures| captures.name(name))
+                .map_or("", |found| found.as_str())
+                .to_string()
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,5 +442,39 @@ mod tests {
         );
         assert_eq!(clean_body(Some("one\r\n\r\n\r\n\r\ntwo")), "one\n\ntwo");
         assert_eq!(clean_body(Some("keep\n\nthis")), "keep\n\nthis");
+    }
+
+    const BUMP: &str = r"Bump (?<container>.+?)(?: from \S+)? to (?<version>\S+)$";
+
+    #[test]
+    fn the_columns_are_the_named_groups_in_order() {
+        let regex = parse_column_regex(BUMP).unwrap();
+        assert_eq!(column_names(&regex), ["container", "version"]);
+        assert_eq!(
+            column_cells(&regex, "Bump example-lib from 1.0.0 to 1.2.0"),
+            ["example-lib", "1.2.0"]
+        );
+        assert_eq!(
+            column_cells(&regex, "Bump example-lib to 1.2.0"),
+            ["example-lib", "1.2.0"]
+        );
+        // A title that doesn't match, or a group that doesn't take part, gives an empty cell.
+        assert_eq!(column_cells(&regex, "Fix a bug"), ["", ""]);
+        let optional = parse_column_regex(r"(?<a>x)(?<b>y)?").unwrap();
+        assert_eq!(column_cells(&optional, "x"), ["x", ""]);
+    }
+
+    #[test]
+    fn a_bad_column_regex_is_rejected() {
+        assert!(parse_column_regex("(unclosed").is_err());
+        let error = parse_column_regex(r"(\S+) to (\S+)").unwrap_err();
+        assert!(error.contains("at least one named group"));
+        let error = parse_column_regex(r"(?<title>\S+) to (?<version>\S+)").unwrap_err();
+        assert_eq!(
+            error,
+            "--column-regex group names clash with built-in columns: title"
+        );
+        let error = parse_column_regex(r"(?<checks>\S+) (?<review>\S+)").unwrap_err();
+        assert!(error.ends_with("checks, review"));
     }
 }

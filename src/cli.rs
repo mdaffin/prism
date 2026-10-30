@@ -1,4 +1,7 @@
 use clap::{Parser, ValueEnum};
+use regex::Regex;
+
+use crate::model;
 
 /// Review, approve and merge open PRs.
 #[derive(Debug, Parser)]
@@ -15,6 +18,11 @@ pub struct Args {
     /// Extra GitHub search terms, e.g. 'label:non-prod -label:major'.
     #[arg(long, default_value = "")]
     pub search: String,
+
+    /// Regex whose named groups become columns (default: $GH_PRUI_COLUMN_REGEX), e.g.
+    /// 'Bump (?<container>.+?)(?: from \S+)? to \S+$'.
+    #[arg(long, env = "GH_PRUI_COLUMN_REGEX", value_parser = model::parse_column_regex)]
+    pub column_regex: Option<Regex>,
 
     /// Most PRs to fetch at once. GitHub times out on large repos if this is too high.
     #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u32).range(1..))]

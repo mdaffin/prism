@@ -5,6 +5,7 @@ use color_eyre::eyre::Result;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::text::Text;
 use ratatui::widgets::TableState;
+use regex::Regex;
 use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 
@@ -41,6 +42,8 @@ pub struct App {
     limit: usize,
     /// Whether the latest list had more PRs than `limit`.
     truncated: bool,
+    /// The `--column-regex`, whose groups are shown in place of the title.
+    pub columns: Option<Regex>,
     pub dry_run: bool,
     pub mode: Mode,
     /// The search box. While it isn't being edited it holds the last submitted query.
@@ -244,15 +247,24 @@ impl Row {
     }
 
     /// Whether any visible column contains `text`, which must be lowercase.
-    fn matches(&self, text: &str) -> bool {
+    fn matches(&self, text: &str, columns: Option<&Regex>) -> bool {
         [
             format!("#{}", self.pr.number),
             self.checks_label().to_string(),
             model::review_label(self.pr.review_decision).to_string(),
-            self.pr.title.clone(),
         ]
-        .iter()
+        .into_iter()
+        .chain(self.title_cells(columns))
         .any(|column| column.to_lowercase().contains(text))
+    }
+
+    /// The cells that replace the title in the table: the title itself, or what each group of
+    /// the `--column-regex` matched in it.
+    pub fn title_cells(&self, columns: Option<&Regex>) -> Vec<String> {
+        match columns {
+            Some(regex) => model::column_cells(regex, &self.pr.title),
+            None => vec![self.pr.title.clone()],
+        }
     }
 }
 
@@ -343,6 +355,7 @@ impl App {
             title,
             limit: usize::MAX,
             truncated: false,
+            columns: None,
             dry_run,
             mode: Mode::Loading,
             query: Input::new(query.clone()),
@@ -377,6 +390,12 @@ impl App {
     /// Shows at most `limit` PRs, and says when there are more.
     pub fn with_limit(mut self, limit: u32) -> Self {
         self.limit = limit as usize;
+        self
+    }
+
+    /// Shows a column for each named group of `columns` in place of the title.
+    pub fn with_columns(mut self, columns: Option<Regex>) -> Self {
+        self.columns = columns;
         self
     }
 
@@ -599,7 +618,7 @@ impl App {
             .rows
             .iter()
             .enumerate()
-            .filter(|(_, row)| row.matches(&text))
+            .filter(|(_, row)| row.matches(&text, self.columns.as_ref()))
             .map(|(i, _)| i)
             .collect();
         let position = before.and_then(|number| {

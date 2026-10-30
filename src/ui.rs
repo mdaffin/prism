@@ -161,28 +161,46 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
                 } else {
                     checks
                 };
-                let cells = Row::new([
-                    Cell::new(mark),
-                    Cell::new(format!("#{}", row.pr.number)),
-                    checks,
-                    Cell::new(model::review_label(row.pr.review_decision)),
-                    Cell::new(row.pr.title.as_str()),
-                ]);
+                let cells = Row::new(
+                    [
+                        Cell::new(mark),
+                        Cell::new(format!("#{}", row.pr.number)),
+                        checks,
+                        Cell::new(model::review_label(row.pr.review_decision)),
+                    ]
+                    .into_iter()
+                    .chain(
+                        row.title_cells(app.columns.as_ref())
+                            .into_iter()
+                            .map(Cell::new),
+                    ),
+                );
                 if row.pr.state == PrState::Open {
                     cells
                 } else {
                     cells.dim()
                 }
             });
+            // The groups of the column regex share the space the title had.
+            let titles = match &app.columns {
+                Some(regex) => model::column_names(regex),
+                None => vec!["Title".to_string()],
+            };
             let widths = [
                 Constraint::Length(3),
                 Constraint::Length(7),
                 Constraint::Length(12),
                 Constraint::Length(11),
-                Constraint::Fill(1),
-            ];
+            ]
+            .into_iter()
+            .chain(titles.iter().map(|_| Constraint::Fill(1)))
+            .collect::<Vec<_>>();
+            let header = ["", "#", "Checks", "Review"]
+                .map(str::to_string)
+                .into_iter()
+                .chain(titles);
             let mut table = Table::new(rows, widths)
-                .header(Row::new(["", "#", "Checks", "Review", "Title"]).bold())
+                .header(Row::new(header).bold())
                 .row_highlight_style(Style::new().reversed());
             // The rows are about to be replaced.
             if app.list.searching {
@@ -846,6 +864,52 @@ mod tests {
         assert!(!screen.iter().any(|line| line.contains("Bump alpha")));
         // PR 1 is selected, and the filter hides it.
         assert!(screen.last().unwrap().contains("1 selected (1 hidden)"));
+    }
+
+    #[test]
+    fn shows_a_column_for_each_group_of_the_column_regex() {
+        let mut app = app_with(vec![
+            pr(1, "Bump alpha from 1.0 to 1.2", "OPEN", ""),
+            pr(2, "Fix beta", "OPEN", ""),
+        ]);
+        app.columns = Some(
+            model::parse_column_regex(r"Bump (?<container>.+?)(?: from \S+)? to (?<version>\S+)$")
+                .unwrap(),
+        );
+        let screen = lines(&draw(&mut app, 160, 30));
+
+        let header = screen.iter().find(|line| line.contains("Checks")).unwrap();
+        assert!(header.contains("container") && header.contains("version"));
+        assert!(!header.contains("Title"));
+        let bump = screen.iter().find(|line| line.contains("#1")).unwrap();
+        assert!(bump.contains("alpha") && bump.contains("1.2"));
+        assert!(!bump.contains("Bump"));
+        // A title that doesn't match gets empty cells; the title is still not shown.
+        let fix = screen.iter().find(|line| line.contains("#2")).unwrap();
+        assert!(!fix.contains("Fix beta"));
+    }
+
+    #[test]
+    fn the_filter_matches_the_columns_shown() {
+        let mut app = app_with(vec![
+            pr(1, "Bump alpha to 1.2", "OPEN", ""),
+            pr(2, "Bump beta to 3.4", "OPEN", ""),
+        ]);
+        app.columns =
+            Some(model::parse_column_regex(r"Bump (?<container>.+?) to (?<version>\S+)$").unwrap());
+
+        press(&mut app, "f3.4");
+        let screen = lines(&draw(&mut app, 160, 30));
+        assert!(screen.iter().any(|line| line.contains("#2")));
+        assert!(!screen.iter().any(|line| line.contains("#1")));
+
+        // "Bump" is in the titles but not in any column.
+        for _ in 0..3 {
+            app.update(Msg::Key(KeyCode::Backspace.into()));
+        }
+        press(&mut app, "Bump");
+        let screen = lines(&draw(&mut app, 160, 30));
+        assert!(screen.iter().any(|line| line.contains("No PRs match")));
     }
 
     #[test]
