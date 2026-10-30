@@ -13,7 +13,13 @@ use tokio::process::Command;
 use crate::cli::MergeMethod;
 
 /// Fields requested from `gh pr list --json`: only what the table needs, so it renders sooner.
-const LIST_FIELDS: &str = "number,title,state,statusCheckRollup,mergeable,reviewDecision";
+const LIST_FIELDS: &str = "number,title,state,statusCheckRollup,mergeable,reviewDecision,updatedAt";
+
+/// Fields requested by the timed refresh: what can change under a row that is already listed.
+const STATUS_FIELDS: &str = "number,state,statusCheckRollup,mergeable,reviewDecision,updatedAt";
+
+/// The most PRs a refresh looks up one by one because the list no longer returns them.
+const MAX_MISSING_LOOKUPS: usize = 10;
 
 /// Fields requested from `gh pr view --json` for the highlighted PR.
 const DETAIL_FIELDS: &str = "headRefName,body,comments,additions,deletions";
@@ -33,6 +39,60 @@ impl Gh {
     /// Lists up to one more PR than `limit`, so the caller can tell whether the list was cut
     /// short.
     pub async fn list_prs(&self, query: &str, limit: u32) -> Result<Vec<Pr>> {
+        let stdout = self.list_json(query, limit, LIST_FIELDS).await?;
+        Ok(serde_json::from_slice(&stdout)?)
+    }
+
+    /// The status of each PR the query lists, and of up to [`MAX_MISSING_LOOKUPS`] of the
+    /// `candidates` it doesn't, such as a PR merged by someone else since the list loaded. It
+    /// uses what it got even if some of it failed, and says why in `failure`.
+    pub async fn status_update(
+        &self,
+        query: &str,
+        limit: u32,
+        candidates: Vec<u64>,
+    ) -> StatusUpdate {
+        let mut update = StatusUpdate::default();
+        let listed = match self.list_json(query, limit, STATUS_FIELDS).await {
+            Ok(stdout) => serde_json::from_slice::<Vec<PrStatus>>(&stdout).map_err(Into::into),
+            Err(e) => Err(e),
+        };
+        match listed {
+            Ok(statuses) => update.statuses = statuses,
+            Err(e) => {
+                update.failure = Some(e.to_string());
+                return update;
+            }
+        }
+        let missing: Vec<u64> = candidates
+            .into_iter()
+            .filter(|number| {
+                !update
+                    .statuses
+                    .iter()
+                    .any(|status| status.number == *number)
+            })
+            .take(MAX_MISSING_LOOKUPS)
+            .collect();
+        let lookups = futures::future::join_all(missing.into_iter().map(|n| self.pr_status(n)));
+        for result in lookups.await {
+            match result {
+                Ok(status) => update.statuses.push(status),
+                Err(e) => update.failure = update.failure.take().or(Some(e.to_string())),
+            }
+        }
+        update
+    }
+
+    async fn pr_status(&self, number: u64) -> Result<PrStatus> {
+        let number = number.to_string();
+        let args = ["pr", "view", &number, "--json", STATUS_FIELDS];
+        let stdout = self.run(&args).await?;
+        Ok(serde_json::from_slice(&stdout)?)
+    }
+
+    /// `gh pr list` for the query, asking for one more PR than `limit`.
+    async fn list_json(&self, query: &str, limit: u32, fields: &str) -> Result<Vec<u8>> {
         let limit = limit.saturating_add(1).to_string();
         // Without `--state all`, gh adds `state:open` when the query has no state qualifier. A
         // qualifier in the query still wins, as on GitHub's web UI.
@@ -40,18 +100,9 @@ impl Gh {
         // `-label:major`, can't be read as a flag of its own.
         let search = format!("--search={query}");
         let args = [
-            "pr",
-            "list",
-            "--state",
-            "all",
-            &search,
-            "--limit",
-            &limit,
-            "--json",
-            LIST_FIELDS,
+            "pr", "list", "--state", "all", &search, "--limit", &limit, "--json", fields,
         ];
-        let stdout = self.run(&args).await?;
-        Ok(serde_json::from_slice(&stdout)?)
+        self.run(&args).await
     }
 
     /// One PR with the same fields as the list, to refresh its row.
@@ -237,6 +288,40 @@ pub struct Pr {
     pub status_check_rollup: Vec<Check>,
     pub mergeable: Mergeable,
     pub review_decision: ReviewDecision,
+    /// When the PR last changed, as GitHub reports it. A change means its details and diff may
+    /// have changed too.
+    pub updated_at: String,
+}
+
+impl Pr {
+    /// Takes the fields a refresh brings, leaving the title.
+    pub fn update(&mut self, status: PrStatus) {
+        self.state = status.state;
+        self.status_check_rollup = status.status_check_rollup;
+        self.mergeable = status.mergeable;
+        self.review_decision = status.review_decision;
+        self.updated_at = status.updated_at;
+    }
+}
+
+/// What a refresh brings for a PR: the fields of [`Pr`] that change.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrStatus {
+    pub number: u64,
+    pub state: PrState,
+    pub status_check_rollup: Vec<Check>,
+    pub mergeable: Mergeable,
+    pub review_decision: ReviewDecision,
+    pub updated_at: String,
+}
+
+/// The result of a timed refresh.
+#[derive(Debug, Default)]
+pub struct StatusUpdate {
+    pub statuses: Vec<PrStatus>,
+    /// Why part or all of the refresh failed, if it did.
+    pub failure: Option<String>,
 }
 
 /// Whether a PR merges cleanly. Only a conflict matters here.
@@ -374,7 +459,8 @@ mod tests {
           {"__typename": "StatusContext", "context": "ci/legacy", "state": "PENDING"}
         ],
         "mergeable": "MERGEABLE",
-        "reviewDecision": ""
+        "reviewDecision": "",
+        "updatedAt": "2026-01-02T03:04:06Z"
       },
       {
         "number": 13,
@@ -382,7 +468,8 @@ mod tests {
         "state": "MERGED",
         "statusCheckRollup": [],
         "mergeable": "UNKNOWN",
-        "reviewDecision": "APPROVED"
+        "reviewDecision": "APPROVED",
+        "updatedAt": "2026-01-02T03:04:07Z"
       }
     ]"#;
 
@@ -427,7 +514,8 @@ mod tests {
             {"__typename": "StatusContext", "context": "ci/legacy", "state": "SUCCESS"}
           ],
           "mergeable": "MERGEABLE",
-          "reviewDecision": ""
+          "reviewDecision": "",
+          "updatedAt": "2026-01-02T03:04:06Z"
         }]"#;
         let prs: Vec<Pr> = serde_json::from_str(json).unwrap();
         assert!(matches!(prs[0].status_check_rollup[0], Check::Unknown));
@@ -435,6 +523,28 @@ mod tests {
             prs[0].status_check_rollup[1],
             Check::StatusContext(_)
         ));
+    }
+
+    #[test]
+    fn parses_a_status_refresh_and_updates_a_pr() {
+        let json = r#"[{
+          "number": 12,
+          "state": "MERGED",
+          "statusCheckRollup": [],
+          "mergeable": "UNKNOWN",
+          "reviewDecision": "APPROVED",
+          "updatedAt": "2026-02-03T04:05:06Z"
+        }]"#;
+        let statuses: Vec<PrStatus> = serde_json::from_str(json).unwrap();
+        let mut prs: Vec<Pr> = serde_json::from_str(LIST_FIXTURE).unwrap();
+        let mut pr = prs.remove(0);
+        pr.update(statuses.into_iter().next().unwrap());
+        assert_eq!(pr.state, PrState::Merged);
+        assert_eq!(pr.review_decision, ReviewDecision::Approved);
+        assert_eq!(pr.updated_at, "2026-02-03T04:05:06Z");
+        assert!(pr.status_check_rollup.is_empty());
+        // The title isn't part of a refresh.
+        assert_eq!(pr.title, "ABC-1: Update example-lib to v2");
     }
 
     #[test]

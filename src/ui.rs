@@ -105,6 +105,9 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         }
         parts.push(selected);
     }
+    if let Some(failure) = &app.refresh_failure {
+        parts.push(format!("Refresh failed: {failure}"));
+    }
     parts.push(hints.to_string());
     let status = parts.join(" | ");
     frame.render_widget(
@@ -636,6 +639,7 @@ mod tests {
             "statusCheckRollup": [],
             "mergeable": "MERGEABLE",
             "reviewDecision": review,
+            "updatedAt": "2026-01-01T00:00:00Z",
         }))
         .unwrap()
     }
@@ -719,6 +723,7 @@ mod tests {
             "statusCheckRollup": checks,
             "mergeable": mergeable,
             "reviewDecision": "",
+            "updatedAt": "2026-01-01T00:00:00Z",
         }))
         .unwrap()
     }

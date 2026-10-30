@@ -8,7 +8,7 @@ use ratatui::widgets::TableState;
 use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 
-use crate::gh::{Pr, PrDetails, PrState};
+use crate::gh::{Pr, PrDetails, PrState, StatusUpdate};
 use crate::model::{self, CheckState, Checks};
 
 /// The most detail fetches to run at once.
@@ -50,6 +50,19 @@ pub struct App {
     refresh_requested: bool,
     /// Whether the latest list fetch is a refresh. A refresh keeps the selection.
     fetch_is_refresh: bool,
+    /// The query of the latest list fetch, and of the list shown. The timed refresh uses the
+    /// latter, as a search that failed left the older list in place.
+    fetching_query: String,
+    list_query: String,
+    /// Set when it's time for a timed status refresh, until [`App::status_to_fetch`] starts it.
+    status_requested: bool,
+    /// Whether a timed status refresh is running.
+    status_in_flight: bool,
+    /// Bumped when a batch starts and when it finishes, so a status refresh that began before
+    /// can't put old state back over a row the batch changed.
+    batch_epoch: u64,
+    /// Why the last timed refresh failed, shown in the status bar until one succeeds.
+    pub refresh_failure: Option<String>,
     /// The id of the latest list fetch. Results from older fetches are dropped.
     fetch_id: u64,
     /// Whether the latest list fetch is still running.
@@ -345,6 +358,24 @@ fn forget_failed<T>(fetches: &mut HashMap<u64, Fetch<T>>) {
     fetches.retain(|_, fetch| !matches!(fetch, Fetch::Failed(_)));
 }
 
+/// What a timed status refresh was started for. Its results are dropped if either has changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RefreshId {
+    /// The id of the list fetch it followed.
+    list_id: u64,
+    /// The batch state: see [`App::batch_epoch`].
+    batch_epoch: u64,
+}
+
+/// A timed status refresh for the caller to start.
+pub struct StatusFetch {
+    pub id: RefreshId,
+    /// The query of the list shown.
+    pub query: String,
+    /// The open PRs shown, to look up one by one any that the query no longer lists.
+    pub candidates: Vec<u64>,
+}
+
 pub enum Msg {
     Key(KeyEvent),
     /// The result of the list fetch with this id.
@@ -361,6 +392,10 @@ pub enum Msg {
     Opened(u64, Result<()>),
     /// Time to advance the spinner.
     Tick,
+    /// Time for a timed status refresh.
+    RefreshDue,
+    /// The result of the timed status refresh with this id.
+    StatusRefreshed(RefreshId, StatusUpdate),
 }
 
 impl App {
@@ -377,6 +412,12 @@ impl App {
             query_to_fetch: Some(query),
             refresh_requested: false,
             fetch_is_refresh: false,
+            fetching_query: String::new(),
+            list_query: String::new(),
+            status_requested: false,
+            status_in_flight: false,
+            batch_epoch: 0,
+            refresh_failure: None,
             fetch_id: 0,
             searching: false,
             rows: Vec::new(),
@@ -496,9 +537,76 @@ impl App {
     pub fn list_to_fetch(&mut self) -> Option<(u64, String)> {
         let query = self.query_to_fetch.take()?;
         self.fetch_is_refresh = std::mem::take(&mut self.refresh_requested);
+        self.fetching_query = query.clone();
         self.fetch_id += 1;
         self.searching = true;
         Some((self.fetch_id, query))
+    }
+
+    /// A timed status refresh to start, if one is due. The caller must start it, and send back
+    /// [`Msg::StatusRefreshed`] with its id.
+    pub fn status_to_fetch(&mut self) -> Option<StatusFetch> {
+        if !std::mem::take(&mut self.status_requested) {
+            return None;
+        }
+        // Closed and merged PRs are never refreshed again.
+        let candidates: Vec<u64> = self
+            .rows
+            .iter()
+            .filter(|row| row.pr.state == PrState::Open)
+            .map(|row| row.pr.number)
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+        self.status_in_flight = true;
+        Some(StatusFetch {
+            id: self.refresh_id(),
+            query: self.list_query.clone(),
+            candidates,
+        })
+    }
+
+    /// What a status refresh started now would be tied to: the list and the batch state it saw.
+    fn refresh_id(&self) -> RefreshId {
+        RefreshId {
+            list_id: self.fetch_id,
+            batch_epoch: self.batch_epoch,
+        }
+    }
+
+    /// Whether a timed refresh can start now. It runs in every mode, but not while a batch runs,
+    /// another refresh or a search is in flight, or before there is a list.
+    fn can_refresh(&self) -> bool {
+        !self.rows.is_empty()
+            && !self.searching
+            && self.query_to_fetch.is_none()
+            && !self.status_in_flight
+            && !self.refreshing()
+            && !matches!(self.mode, Mode::Running(_))
+    }
+
+    /// Updates the rows' status from a timed refresh, in place: no row is added, removed or
+    /// moved, and the filter isn't applied again, so a row that no longer matches it stays put.
+    /// A PR that changed since the list loaded has its details and diff fetched again.
+    fn apply_statuses(&mut self, update: StatusUpdate) {
+        for status in update.statuses {
+            let number = status.number;
+            let Some(row) = self.rows.iter_mut().find(|row| row.pr.number == number) else {
+                continue;
+            };
+            // A PR known to be closed or merged is never refreshed again.
+            if row.pr.state != PrState::Open {
+                continue;
+            }
+            if row.pr.updated_at != status.updated_at {
+                self.details.remove(&number);
+                self.diffs.remove(&number);
+            }
+            row.checks = model::classify_checks(status.mergeable, &status.status_check_rollup);
+            row.pr.update(status);
+        }
+        self.refresh_failure = update.failure.map(|failure| one_line(&failure));
     }
 
     /// PRs whose details haven't been requested yet, as many as there are free fetch slots.
@@ -611,6 +719,14 @@ impl App {
         match msg {
             Msg::Key(key) => self.on_key(key),
             Msg::Tick => self.spinner = self.spinner.wrapping_add(1),
+            Msg::RefreshDue => self.status_requested = self.can_refresh(),
+            Msg::StatusRefreshed(id, update) => {
+                self.status_in_flight = false;
+                // Results for a list or batch state that has since changed are dropped.
+                if id == self.refresh_id() {
+                    self.apply_statuses(update);
+                }
+            }
             Msg::Approved(number, result) => self.approved(number, result),
             Msg::Merged(number, result) => self.merged(number, result),
             Msg::Opened(number, Err(e)) => {
@@ -688,6 +804,7 @@ impl App {
                 }
                 self.visible = (0..rows.len()).collect();
                 self.rows = rows;
+                self.list_query = self.fetching_query.clone();
                 // The filter is cleared either way.
                 self.filter = Input::default();
                 self.filtering = false;
@@ -806,6 +923,7 @@ impl App {
         // or drop PRs the user still means to work through.
         self.to_refresh
             .extend(batch.items.iter().map(|item| item.pr.number));
+        self.batch_epoch += 1;
         self.mode = Mode::Results(summary);
         self.selected.clear();
     }
@@ -999,6 +1117,7 @@ impl App {
                 merging: None,
             })
             .collect();
+        self.batch_epoch += 1;
         self.mode = Mode::Running(Batch { items, merge });
     }
 
@@ -1140,7 +1259,7 @@ pub fn title(repo: Option<&str>, dry_run: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gh::ReviewDecision;
+    use crate::gh::{PrStatus, ReviewDecision};
 
     fn pr(number: u64, state: &str) -> Pr {
         serde_json::from_value(serde_json::json!({
@@ -1150,6 +1269,7 @@ mod tests {
             "statusCheckRollup": [],
             "mergeable": "MERGEABLE",
             "reviewDecision": "",
+            "updatedAt": "2026-01-01T00:00:00Z",
         }))
         .unwrap()
     }
@@ -1746,6 +1866,7 @@ mod tests {
             "statusCheckRollup": rollup,
             "mergeable": "MERGEABLE",
             "reviewDecision": "",
+            "updatedAt": "2026-01-01T00:00:00Z",
         }))
         .unwrap()
     }
@@ -2264,5 +2385,205 @@ mod tests {
         assert_eq!(numbers(&app), [1, 2, 3]);
         assert_eq!(app.selected, HashSet::from([1]));
         assert!(app.error_text().unwrap().contains("boom"));
+    }
+
+    fn status(number: u64, state: &str, passing: bool, review: &str, updated: &str) -> PrStatus {
+        let rollup = if passing {
+            serde_json::json!([{
+                "__typename": "CheckRun", "name": "build", "workflowName": "CI",
+                "status": "COMPLETED", "conclusion": "SUCCESS", "startedAt": null,
+            }])
+        } else {
+            serde_json::json!([])
+        };
+        serde_json::from_value(serde_json::json!({
+            "number": number,
+            "state": state,
+            "statusCheckRollup": rollup,
+            "mergeable": "MERGEABLE",
+            "reviewDecision": review,
+            "updatedAt": updated,
+        }))
+        .unwrap()
+    }
+
+    fn update(statuses: Vec<PrStatus>) -> StatusUpdate {
+        StatusUpdate {
+            statuses,
+            failure: None,
+        }
+    }
+
+    const UNCHANGED: &str = "2026-01-01T00:00:00Z";
+
+    /// Starts a timed refresh, as the timer and the loop would.
+    fn start_status_refresh(app: &mut App) -> Option<StatusFetch> {
+        app.update(Msg::RefreshDue);
+        app.status_to_fetch()
+    }
+
+    #[test]
+    fn a_timed_refresh_covers_the_open_rows_once_at_a_time() {
+        let mut app = App::new(String::new(), "is:pr".to_string(), false);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(
+            id,
+            Ok(vec![pr(1, "OPEN"), pr(2, "MERGED"), pr(3, "OPEN")]),
+        ));
+        let fetch = start_status_refresh(&mut app).unwrap();
+        assert_eq!(fetch.query, "is:pr");
+        assert_eq!(fetch.candidates, [1, 3]);
+        // One at a time.
+        assert!(start_status_refresh(&mut app).is_none());
+        app.update(Msg::StatusRefreshed(fetch.id, update(vec![])));
+        assert!(start_status_refresh(&mut app).is_some());
+    }
+
+    #[test]
+    fn a_timed_refresh_waits_for_a_search_a_batch_and_row_refreshes() {
+        let mut app = app_with_rows(2);
+        press(&mut app, "/");
+        key(&mut app, KeyCode::Enter);
+        app.list_to_fetch().unwrap();
+        assert!(app.searching);
+        assert!(start_status_refresh(&mut app).is_none());
+
+        let mut app = app_with_rows(2);
+        start_approving(&mut app, 1);
+        assert!(start_status_refresh(&mut app).is_none());
+
+        let mut app = app_with_rows(2);
+        app.to_refresh.push(1);
+        assert!(start_status_refresh(&mut app).is_none());
+
+        // Nothing to refresh before a list loads, or when no PR is open.
+        let mut app = App::new(String::new(), "is:pr".to_string(), false);
+        assert!(start_status_refresh(&mut app).is_none());
+        let mut app = App::new(String::new(), "is:pr".to_string(), false);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(id, Ok(vec![pr(1, "MERGED")])));
+        assert!(start_status_refresh(&mut app).is_none());
+        assert!(start_status_refresh(&mut app).is_none());
+    }
+
+    #[test]
+    fn a_timed_refresh_updates_rows_in_place() {
+        let mut app = app_with_titles();
+        press(&mut app, "jf");
+        press(&mut app, "no checks");
+        key(&mut app, KeyCode::Enter);
+        press(&mut app, " ");
+        let fetch = start_status_refresh(&mut app).unwrap();
+        let update = update(vec![
+            status(2, "OPEN", true, "APPROVED", UNCHANGED),
+            status(3, "OPEN", false, "", UNCHANGED),
+        ]);
+        app.update(Msg::StatusRefreshed(fetch.id, update));
+
+        // Same order, same selection, same highlight, and the filter isn't applied again: the
+        // row that now has passing checks stays even though "no checks" no longer matches it.
+        assert_eq!(numbers(&app), [1, 2, 3]);
+        assert_eq!(app.selected, HashSet::from([2]));
+        assert_eq!(visible_numbers(&app), [1, 2, 3]);
+        assert_eq!(app.highlighted().unwrap().pr.number, 2);
+        let row = &app.rows[1];
+        assert_eq!(row.checks.state, CheckState::Passing);
+        assert_eq!(row.pr.review_decision, ReviewDecision::Approved);
+        assert_eq!(row.pr.title, "Bump beta");
+    }
+
+    #[test]
+    fn a_pr_that_changed_has_its_details_and_diff_fetched_again() {
+        let mut app = app_with_rows(2);
+        app.details_to_fetch();
+        app.diffs_to_fetch();
+        let fetch = start_status_refresh(&mut app).unwrap();
+        let update = update(vec![
+            status(1, "OPEN", false, "", "2026-02-02T00:00:00Z"),
+            status(2, "OPEN", true, "", UNCHANGED),
+        ]);
+        app.update(Msg::StatusRefreshed(fetch.id, update));
+        assert!(!app.details.contains_key(&1) && !app.diffs.contains_key(&1));
+        assert!(app.details.contains_key(&2) && app.diffs.contains_key(&2));
+        assert_eq!(app.details_to_fetch(), [1]);
+    }
+
+    #[test]
+    fn a_row_known_to_be_closed_is_not_updated() {
+        let mut app = App::new(String::new(), "is:pr".to_string(), false);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(id, Ok(vec![pr(1, "OPEN"), pr(2, "MERGED")])));
+        let fetch = start_status_refresh(&mut app).unwrap();
+        let update = update(vec![status(
+            2,
+            "OPEN",
+            true,
+            "APPROVED",
+            "2026-02-02T00:00:00Z",
+        )]);
+        app.update(Msg::StatusRefreshed(fetch.id, update));
+        assert_eq!(app.rows[1].pr.state, PrState::Merged);
+        assert_eq!(app.rows[1].pr.review_decision, ReviewDecision::Other);
+    }
+
+    #[test]
+    fn an_open_row_found_merged_becomes_merged() {
+        let mut app = app_with_rows(2);
+        let fetch = start_status_refresh(&mut app).unwrap();
+        let update = update(vec![status(1, "MERGED", true, "APPROVED", UNCHANGED)]);
+        app.update(Msg::StatusRefreshed(fetch.id, update));
+        assert_eq!(app.rows[0].pr.state, PrState::Merged);
+        assert_eq!(app.rows[0].checks_label(), "· merged");
+        // It stays where it was, and is no longer a candidate.
+        assert_eq!(numbers(&app), [1, 2]);
+        let fetch = start_status_refresh(&mut app).unwrap();
+        assert_eq!(fetch.candidates, [2]);
+    }
+
+    #[test]
+    fn results_for_an_older_list_are_dropped() {
+        let mut app = app_with_rows(2);
+        let fetch = start_status_refresh(&mut app).unwrap();
+        // Ctrl-R replaces the list while the refresh runs.
+        ctrl_r(&mut app);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(id, Ok(prs(1..=2))));
+        let update = update(vec![status(1, "MERGED", true, "APPROVED", UNCHANGED)]);
+        app.update(Msg::StatusRefreshed(fetch.id, update));
+        assert_eq!(app.rows[0].pr.state, PrState::Open);
+        // The slot is free again.
+        assert!(start_status_refresh(&mut app).is_some());
+    }
+
+    #[test]
+    fn results_that_began_before_a_batch_are_dropped() {
+        let mut app = app_with_rows(2);
+        let fetch = start_status_refresh(&mut app).unwrap();
+        start_approving(&mut app, 1);
+        approve(&mut app, 1, Ok(()));
+        assert!(matches!(app.mode, Mode::Results(_)));
+        let update = update(vec![status(1, "OPEN", false, "", "2026-02-02T00:00:00Z")]);
+        app.update(Msg::StatusRefreshed(fetch.id, update));
+        // The old state didn't go over the row the batch changed.
+        assert_eq!(app.rows[0].pr.updated_at, UNCHANGED);
+    }
+
+    #[test]
+    fn a_failed_refresh_is_shown_until_one_succeeds_and_keeps_what_it_got() {
+        let mut app = app_with_rows(2);
+        let fetch = start_status_refresh(&mut app).unwrap();
+        let failed = StatusUpdate {
+            statuses: vec![status(2, "OPEN", true, "", UNCHANGED)],
+            failure: Some("boom\nsecond line".to_string()),
+        };
+        app.update(Msg::StatusRefreshed(fetch.id, failed));
+        assert_eq!(app.refresh_failure.as_deref(), Some("boom second line"));
+        assert_eq!(app.rows[1].checks.state, CheckState::Passing);
+        // It isn't an error above the status bar.
+        assert_eq!(app.error_text(), None);
+
+        let fetch = start_status_refresh(&mut app).unwrap();
+        app.update(Msg::StatusRefreshed(fetch.id, update(vec![])));
+        assert_eq!(app.refresh_failure, None);
     }
 }

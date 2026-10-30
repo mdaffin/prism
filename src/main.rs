@@ -14,9 +14,12 @@ use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
 use ratatui::DefaultTerminal;
 use tokio::sync::mpsc::{self, UnboundedSender};
-use tokio::time::MissedTickBehavior;
+use tokio::time::{Instant, MissedTickBehavior};
 
 use app::{App, Msg};
+
+/// How often the rows' status is refreshed in the background.
+const REFRESH_EVERY: Duration = Duration::from_secs(30);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -43,6 +46,10 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
     let mut ticker = tokio::time::interval(Duration::from_millis(100));
     // The ticker is only polled while animating; don't catch up on the ticks missed between.
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    // The first refresh is one period away: the list was only just fetched.
+    let mut refresh_ticker =
+        tokio::time::interval_at(Instant::now() + REFRESH_EVERY, REFRESH_EVERY);
+    refresh_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
     while !app.should_quit {
         // Start any work the last update asked for.
         if let Some((id, query)) = app.list_to_fetch() {
@@ -64,6 +71,15 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
         for number in app.refreshes_to_run() {
             spawn(&gh, &tx, async move |gh| {
                 Msg::PrRefreshed(number, gh.pr(number).await)
+            });
+        }
+        if let Some(fetch) = app.status_to_fetch() {
+            let limit = args.limit;
+            spawn(&gh, &tx, async move |gh| {
+                let update = gh
+                    .status_update(&fetch.query, limit, fetch.candidates)
+                    .await;
+                Msg::StatusRefreshed(fetch.id, update)
             });
         }
         let opens = app.opens_to_run();
@@ -97,6 +113,7 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
             },
             Some(msg) = rx.recv() => msg,
             _ = ticker.tick(), if app.animating() => Msg::Tick,
+            _ = refresh_ticker.tick() => Msg::RefreshDue,
             else => break,
         };
         app.update(msg);
