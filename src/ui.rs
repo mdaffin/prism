@@ -170,8 +170,14 @@ fn confirm_dialog(confirm: &Confirm, dry_run: bool, frame: &mut Frame, area: Rec
 }
 
 fn running_popup(batch: &Batch, dry_run: bool, spinner: &str, frame: &mut Frame, area: Rect) {
-    let progress = format!("{spinner} {}/{} done", batch.finished(), batch.items.len());
-    let title = format!("Approving {}", count(batch.items.len(), "PR"));
+    let (finished, total) = batch.progress();
+    let progress = format!("{spinner} {finished}/{total} done");
+    let step = if batch.is_merging() {
+        "Merging"
+    } else {
+        "Approving"
+    };
+    let title = format!("{step} {}", count(total, "PR"));
     let lines = vec![Line::from(progress)];
     popup(frame, area, title, dry_run, lines, false, Vec::new());
 }
@@ -181,11 +187,25 @@ fn results_popup(summary: &Summary, dry_run: bool, frame: &mut Frame, area: Rect
         "Approved: {}/{}",
         summary.approved, summary.total
     ))];
+    if let Some((merged, tried)) = summary.merged {
+        lines.push(Line::from(format!("Merged: {merged}/{tried}")));
+    }
     if !summary.failures.is_empty() {
         lines.push(Line::default());
-        for (number, error) in &summary.failures {
-            lines.push(Line::from(format!("#{number}  ✗ failed: {error}")).red());
+        for (number, step, error) in &summary.failures {
+            lines.push(Line::from(format!("#{number}  ✗ {step} failed: {error}")).red());
         }
+    }
+    if !summary.auto_merge.is_empty() {
+        let numbers: Vec<String> = summary.auto_merge.iter().map(|n| format!("#{n}")).collect();
+        lines.push(Line::default());
+        lines.push(
+            Line::from(format!(
+                "Auto-merge queued (checks still pending): {}",
+                numbers.join(", ")
+            ))
+            .yellow(),
+        );
     }
     let footer = vec![Line::default(), Line::from("[ OK ]".reversed()).centered()];
     // Errors can be long, so they wrap.

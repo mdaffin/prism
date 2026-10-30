@@ -64,13 +64,19 @@ pub enum Mode {
     Results(Summary),
 }
 
+/// Approves PRs, all at once up to a limit, then merges the approved ones one at a time if
+/// asked to.
 pub struct Batch {
     pub items: Vec<BatchItem>,
+    /// Whether approved PRs are merged afterwards.
+    pub merge: bool,
 }
 
 pub struct BatchItem {
     pub pr: ConfirmPr,
-    pub status: ItemStatus,
+    pub approval: ItemStatus,
+    /// Set once the PR is approved and queued for merging.
+    pub merging: Option<ItemStatus>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -78,16 +84,43 @@ pub enum ItemStatus {
     Pending,
     Working,
     Done,
+    /// Auto-merge was turned on, so GitHub merges the PR once its checks pass.
+    AutoMerge,
     /// The error, on one line.
     Failed(String),
 }
 
+impl ItemStatus {
+    pub fn is_finished(&self) -> bool {
+        !matches!(self, Self::Pending | Self::Working)
+    }
+
+    pub fn is_ok(&self) -> bool {
+        matches!(self, Self::Done | Self::AutoMerge)
+    }
+}
+
 impl Batch {
-    pub fn finished(&self) -> usize {
-        self.items
+    /// Whether the batch has moved on to merging.
+    pub fn is_merging(&self) -> bool {
+        self.items.iter().any(|item| item.merging.is_some())
+    }
+
+    /// How many items of the current step are finished, out of how many.
+    pub fn progress(&self) -> (usize, usize) {
+        let statuses: Vec<&ItemStatus> = if self.is_merging() {
+            self.items
+                .iter()
+                .filter_map(|item| item.merging.as_ref())
+                .collect()
+        } else {
+            self.items.iter().map(|item| &item.approval).collect()
+        };
+        let finished = statuses
             .iter()
-            .filter(|item| matches!(item.status, ItemStatus::Done | ItemStatus::Failed(_)))
-            .count()
+            .filter(|status| status.is_finished())
+            .count();
+        (finished, statuses.len())
     }
 }
 
@@ -95,8 +128,13 @@ impl Batch {
 pub struct Summary {
     pub approved: usize,
     pub total: usize,
-    /// PR numbers and their errors, on one line each.
-    pub failures: Vec<(u64, String)>,
+    /// How many were merged or queued for auto-merge, out of how many were tried. `None` when
+    /// the batch didn't merge.
+    pub merged: Option<(usize, usize)>,
+    /// PR numbers, the step that failed and the error on one line.
+    pub failures: Vec<(u64, &'static str, String)>,
+    /// PRs that will merge once their checks pass.
+    pub auto_merge: Vec<u64>,
 }
 
 /// The confirm dialog. It keeps its own copy of the PRs, so a list that loads while it is open
@@ -169,6 +207,8 @@ pub enum Msg {
     DetailsLoaded(u64, Result<PrDetails>),
     /// The result of approving this PR.
     Approved(u64, Result<()>),
+    /// The result of merging this PR, or of turning on auto-merge.
+    Merged(u64, Result<()>),
     /// The result of fetching this PR again to refresh its row.
     PrRefreshed(u64, Result<Pr>),
     /// Time to advance the spinner.
@@ -229,18 +269,40 @@ impl App {
         let working = batch
             .items
             .iter()
-            .filter(|item| item.status == ItemStatus::Working)
+            .filter(|item| item.approval == ItemStatus::Working)
             .count();
         batch
             .items
             .iter_mut()
-            .filter(|item| item.status == ItemStatus::Pending)
+            .filter(|item| item.approval == ItemStatus::Pending)
             .take(MAX_APPROVALS.saturating_sub(working))
             .map(|item| {
-                item.status = ItemStatus::Working;
+                item.approval = ItemStatus::Working;
                 item.pr.number
             })
             .collect()
+    }
+
+    /// The next merge to start, and whether it should use auto-merge. Merges run one at a time,
+    /// so this returns nothing while one is working. Marks it as working, so the caller must
+    /// start it.
+    pub fn merge_to_run(&mut self) -> Option<(u64, bool)> {
+        let Mode::Running(batch) = &mut self.mode else {
+            return None;
+        };
+        if batch
+            .items
+            .iter()
+            .any(|item| item.merging == Some(ItemStatus::Working))
+        {
+            return None;
+        }
+        let item = batch
+            .items
+            .iter_mut()
+            .find(|item| item.merging == Some(ItemStatus::Pending))?;
+        item.merging = Some(ItemStatus::Working);
+        Some((item.pr.number, auto_merge(item.pr.checks)))
     }
 
     /// A submitted query and the id of its fetch, which the caller must start.
@@ -285,6 +347,7 @@ impl App {
             Msg::Key(key) => self.on_key(key),
             Msg::Tick => self.spinner = self.spinner.wrapping_add(1),
             Msg::Approved(number, result) => self.approved(number, result),
+            Msg::Merged(number, result) => self.merged(number, result),
             Msg::PrRefreshed(number, result) => {
                 self.refreshing.remove(&number);
                 match result {
@@ -344,44 +407,100 @@ impl App {
         }
     }
 
-    /// Records an approval's result. After the last one, shows the summary, clears the selection
-    /// and refreshes the batch's rows so they show their new review states.
+    /// Records an approval's result. After the last one, queues the approved PRs for merging if
+    /// asked to, or else finishes the batch.
     fn approved(&mut self, number: u64, result: Result<()>) {
         let Mode::Running(batch) = &mut self.mode else {
             return;
         };
         if let Some(item) = batch.items.iter_mut().find(|item| item.pr.number == number) {
-            item.status = match result {
-                Ok(()) => ItemStatus::Done,
-                Err(e) => ItemStatus::Failed(one_line(&e.to_string())),
-            };
+            item.approval = status(result, ItemStatus::Done);
         }
-        if batch.finished() < batch.items.len() {
+        if !batch.items.iter().all(|item| item.approval.is_finished()) {
             return;
         }
-        let failures = batch
-            .items
-            .iter()
-            .filter_map(|item| match &item.status {
-                ItemStatus::Failed(e) => Some((item.pr.number, e.clone())),
-                _ => None,
-            })
-            .collect();
-        let total = batch.items.len();
+        if batch.merge {
+            // Only PRs whose approval succeeded are merged.
+            for item in &mut batch.items {
+                if item.approval.is_ok() {
+                    item.merging = Some(ItemStatus::Pending);
+                }
+            }
+        }
+        if !batch.is_merging() {
+            self.finish_batch();
+        }
+    }
+
+    /// Records a merge's result, and finishes the batch after the last one.
+    fn merged(&mut self, number: u64, result: Result<()>) {
+        let Mode::Running(batch) = &mut self.mode else {
+            return;
+        };
+        if let Some(item) = batch.items.iter_mut().find(|item| item.pr.number == number) {
+            let ok = if auto_merge(item.pr.checks) {
+                ItemStatus::AutoMerge
+            } else {
+                ItemStatus::Done
+            };
+            item.merging = Some(status(result, ok));
+        }
+        let (finished, total) = batch.progress();
+        if finished == total {
+            self.finish_batch();
+        }
+    }
+
+    /// Shows the summary, clears the selection and refreshes the batch's rows so they show
+    /// their new states.
+    fn finish_batch(&mut self) {
+        let Mode::Running(batch) = &self.mode else {
+            return;
+        };
+        let mut failures = Vec::new();
+        for item in &batch.items {
+            let steps = [
+                ("approve", Some(&item.approval)),
+                ("merge", item.merging.as_ref()),
+            ];
+            for (step, status) in steps {
+                if let Some(ItemStatus::Failed(e)) = status {
+                    failures.push((item.pr.number, step, e.clone()));
+                }
+            }
+        }
         let approved = batch
             .items
             .iter()
-            .filter(|item| item.status == ItemStatus::Done)
+            .filter(|item| item.approval.is_ok())
             .count();
+        let merges: Vec<&ItemStatus> = batch
+            .items
+            .iter()
+            .filter_map(|item| item.merging.as_ref())
+            .collect();
+        let merged = batch.merge.then(|| {
+            let ok = merges.iter().filter(|status| status.is_ok()).count();
+            (ok, merges.len())
+        });
+        let auto_merge = batch
+            .items
+            .iter()
+            .filter(|item| item.merging == Some(ItemStatus::AutoMerge))
+            .map(|item| item.pr.number)
+            .collect();
+        let summary = Summary {
+            approved,
+            total: batch.items.len(),
+            merged,
+            failures,
+            auto_merge,
+        };
         // Only the batch's rows are refreshed. Running the search again could reorder the list
         // or drop PRs the user still means to work through.
         self.to_refresh
             .extend(batch.items.iter().map(|item| item.pr.number));
-        self.mode = Mode::Results(Summary {
-            approved,
-            total,
-            failures,
-        });
+        self.mode = Mode::Results(summary);
         self.selected.clear();
     }
 
@@ -482,23 +601,23 @@ impl App {
         let Mode::Confirm(confirm) = std::mem::replace(&mut self.mode, Mode::List) else {
             return;
         };
-        match choice {
-            Choice::Approve => {
-                // Errors from earlier no longer apply.
-                self.error = None;
-                let items = confirm
-                    .prs
-                    .into_iter()
-                    .map(|pr| BatchItem {
-                        pr,
-                        status: ItemStatus::Pending,
-                    })
-                    .collect();
-                self.mode = Mode::Running(Batch { items });
-            }
-            // Merging comes in M1 step 14.
-            Choice::ApproveAndMerge | Choice::Cancel => {}
-        }
+        let merge = match choice {
+            Choice::Approve => false,
+            Choice::ApproveAndMerge => true,
+            Choice::Cancel => return,
+        };
+        // Errors from earlier no longer apply.
+        self.error = None;
+        let items = confirm
+            .prs
+            .into_iter()
+            .map(|pr| BatchItem {
+                pr,
+                approval: ItemStatus::Pending,
+                merging: None,
+            })
+            .collect();
+        self.mode = Mode::Running(Batch { items, merge });
     }
 
     fn toggle_selected(&mut self) {
@@ -515,6 +634,20 @@ impl App {
             self.table
                 .select(Some(current.saturating_add_signed(by).min(last)));
         }
+    }
+}
+
+/// Whether a PR with these checks is merged with auto-merge, so GitHub merges it once they
+/// pass. Only pending checks count: a PR with no checks is merged straight away.
+fn auto_merge(checks: CheckState) -> bool {
+    checks == CheckState::Pending
+}
+
+/// A finished step's status: `ok` on success, or the error on one line.
+fn status(result: Result<()>, ok: ItemStatus) -> ItemStatus {
+    match result {
+        Ok(()) => ok,
+        Err(e) => ItemStatus::Failed(one_line(&e.to_string())),
     }
 }
 
@@ -825,7 +958,11 @@ mod tests {
             panic!("the results aren't shown");
         };
         assert_eq!((summary.approved, summary.total), (2, 3));
-        assert_eq!(summary.failures, [(3, "no permission".to_string())]);
+        assert_eq!(
+            summary.failures,
+            [(3, "approve", "no permission".to_string())]
+        );
+        assert_eq!(summary.merged, None);
         assert!(app.selected.is_empty());
         // Only the batch's rows are fetched again, not the whole search.
         assert_eq!(app.list_to_fetch(), None);
@@ -834,6 +971,113 @@ mod tests {
         key(&mut app, KeyCode::Char('q'));
         assert!(matches!(app.mode, Mode::List));
         assert!(!app.should_quit);
+    }
+
+    /// An open PR whose checks are passing, pending or absent.
+    fn pr_with_checks(number: u64, checks: &str) -> Pr {
+        let rollup = match checks {
+            "passing" => serde_json::json!([{
+                "__typename": "CheckRun", "name": "build", "workflowName": "CI",
+                "status": "COMPLETED", "conclusion": "SUCCESS", "startedAt": null,
+            }]),
+            "pending" => serde_json::json!([{
+                "__typename": "StatusContext", "context": "ci", "state": "PENDING",
+            }]),
+            _ => serde_json::json!([]),
+        };
+        serde_json::from_value(serde_json::json!({
+            "number": number,
+            "title": "t",
+            "state": "OPEN",
+            "statusCheckRollup": rollup,
+            "mergeable": "MERGEABLE",
+            "reviewDecision": "",
+        }))
+        .unwrap()
+    }
+
+    /// Lists PRs 1 to 4 (passing, pending, no checks, pending), selects them all and chooses
+    /// Approve & merge.
+    fn start_approving_and_merging() -> App {
+        let mut app = App::new(String::new(), "is:pr".to_string(), false);
+        let (id, _) = app.list_to_fetch().unwrap();
+        let prs = vec![
+            pr_with_checks(1, "passing"),
+            pr_with_checks(2, "pending"),
+            pr_with_checks(3, "none"),
+            pr_with_checks(4, "pending"),
+        ];
+        app.update(Msg::PrsLoaded(id, Ok(prs)));
+        assert_eq!(numbers(&app), [1, 2, 3, 4]);
+        press(&mut app, " j j j ");
+        key(&mut app, KeyCode::Enter);
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Running(_)));
+        app
+    }
+
+    fn merge(app: &mut App, number: u64, result: Result<()>) {
+        app.update(Msg::Merged(number, result));
+    }
+
+    #[test]
+    fn approve_and_merge_merges_approved_prs_one_at_a_time() {
+        let mut app = start_approving_and_merging();
+        assert_eq!(app.approvals_to_run(), [1, 2, 3, 4]);
+        // Nothing is merged until every approval has finished.
+        approve(&mut app, 1, Ok(()));
+        assert_eq!(app.merge_to_run(), None);
+        approve(&mut app, 2, Ok(()));
+        approve(&mut app, 3, Ok(()));
+        approve(&mut app, 4, Err(color_eyre::eyre::eyre!("own PR")));
+
+        // Only the approved PRs are merged, one at a time. Pending checks use auto-merge; no
+        // checks don't.
+        let Mode::Running(batch) = &app.mode else {
+            panic!("the batch stopped before merging");
+        };
+        assert!(batch.is_merging());
+        assert_eq!(batch.progress(), (0, 3));
+        assert_eq!(app.merge_to_run(), Some((1, false)));
+        assert_eq!(app.merge_to_run(), None);
+        merge(&mut app, 1, Ok(()));
+        assert_eq!(app.merge_to_run(), Some((2, true)));
+        merge(&mut app, 2, Ok(()));
+        assert_eq!(app.merge_to_run(), Some((3, false)));
+        merge(&mut app, 3, Err(color_eyre::eyre::eyre!("not mergeable")));
+        assert_eq!(app.merge_to_run(), None);
+
+        let Mode::Results(summary) = &app.mode else {
+            panic!("the results aren't shown");
+        };
+        assert_eq!((summary.approved, summary.total), (3, 4));
+        // Auto-merge counts as merged.
+        assert_eq!(summary.merged, Some((2, 3)));
+        assert_eq!(summary.auto_merge, [2]);
+        assert_eq!(
+            summary.failures,
+            [
+                (3, "merge", "not mergeable".to_string()),
+                (4, "approve", "own PR".to_string()),
+            ]
+        );
+        assert!(app.selected.is_empty());
+        assert_eq!(app.refreshes_to_run(), [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn approve_and_merge_with_no_approvals_skips_merging() {
+        let mut app = start_approving_and_merging();
+        app.approvals_to_run();
+        for number in 1..=4 {
+            approve(&mut app, number, Err(color_eyre::eyre::eyre!("no")));
+        }
+        assert_eq!(app.merge_to_run(), None);
+        let Mode::Results(summary) = &app.mode else {
+            panic!("the results aren't shown");
+        };
+        assert_eq!(summary.merged, Some((0, 0)));
     }
 
     #[test]

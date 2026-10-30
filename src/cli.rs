@@ -35,3 +35,14 @@ pub enum MergeMethod {
     Merge,
     Rebase,
 }
+
+impl MergeMethod {
+    /// The `gh pr merge` flag for this method.
+    pub fn flag(self) -> &'static str {
+        match self {
+            Self::Squash => "--squash",
+            Self::Merge => "--merge",
+            Self::Rebase => "--rebase",
+        }
+    }
+}

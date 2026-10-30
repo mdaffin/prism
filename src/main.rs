@@ -72,6 +72,14 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
                 let _ = tx.send(Msg::Approved(number, result));
             });
         }
+        if let Some((number, auto)) = app.merge_to_run() {
+            let (gh, tx) = (gh.clone(), tx.clone());
+            let method = args.merge_method;
+            tokio::spawn(async move {
+                let result = merge(&gh, number, auto, method, args.dry_run).await;
+                let _ = tx.send(Msg::Merged(number, result));
+            });
+        }
 
         terminal.draw(|frame| ui::view(&mut app, frame))?;
         let msg = tokio::select! {
@@ -96,4 +104,20 @@ async fn approve(gh: &gh::Gh, number: u64, dry_run: bool) -> Result<()> {
         return Ok(());
     }
     gh.approve(number).await
+}
+
+/// Merges one PR, or turns on auto-merge. A dry run makes no `gh` call: it waits a moment and
+/// succeeds.
+async fn merge(
+    gh: &gh::Gh,
+    number: u64,
+    auto: bool,
+    method: cli::MergeMethod,
+    dry_run: bool,
+) -> Result<()> {
+    if dry_run {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        return Ok(());
+    }
+    gh.merge(number, auto, method).await
 }

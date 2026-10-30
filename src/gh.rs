@@ -9,6 +9,8 @@ use color_eyre::eyre::{Result, bail, eyre};
 use serde::Deserialize;
 use tokio::process::Command;
 
+use crate::cli::MergeMethod;
+
 /// Fields requested from `gh pr list --json`: only what the table needs, so it renders sooner.
 const LIST_FIELDS: &str = "number,title,state,statusCheckRollup,mergeable,reviewDecision";
 
@@ -54,11 +56,44 @@ impl Gh {
         Ok(serde_json::from_slice(&stdout)?)
     }
 
-    /// Approves a PR. If `gh` fails, the error is its output alone: the caller already knows
-    /// which PR it was.
     pub async fn approve(&self, number: u64) -> Result<()> {
         let number = number.to_string();
-        match self.run(&["pr", "review", &number, "--approve"]).await {
+        self.run_action(&["pr", "review", &number, "--approve"])
+            .await
+    }
+
+    /// Merges a PR. With `auto`, GitHub merges it once its checks pass; otherwise it is merged
+    /// now and its branch deleted. The empty body keeps a squash commit's message body empty.
+    pub async fn merge(&self, number: u64, auto: bool, method: MergeMethod) -> Result<()> {
+        let number = number.to_string();
+        let args = if auto {
+            [
+                "pr",
+                "merge",
+                &number,
+                "--auto",
+                method.flag(),
+                "--body",
+                "",
+            ]
+        } else {
+            [
+                "pr",
+                "merge",
+                &number,
+                method.flag(),
+                "--delete-branch",
+                "--body",
+                "",
+            ]
+        };
+        self.run_action(&args).await
+    }
+
+    /// Runs a `gh` command that acts on one PR. If it fails, the error is gh's output alone:
+    /// the caller already knows which PR it was.
+    async fn run_action(&self, args: &[&str]) -> Result<()> {
+        match self.run(args).await {
             Ok(_) => Ok(()),
             Err(e) => match e.downcast::<GhError>() {
                 Ok(failure) => Err(eyre!(failure.output)),
