@@ -227,8 +227,59 @@ pub struct Pr {
     pub title: String,
     pub state: PrState,
     pub status_check_rollup: Vec<Check>,
-    pub mergeable: String,
-    pub review_decision: String,
+    pub mergeable: Mergeable,
+    pub review_decision: ReviewDecision,
+}
+
+/// Whether a PR merges cleanly. Only a conflict matters here.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Mergeable {
+    Conflicting,
+    #[serde(other)]
+    Other,
+}
+
+/// GitHub's review decision. It is an empty string when no review is required.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ReviewDecision {
+    Approved,
+    ChangesRequested,
+    /// Review required, or no decision.
+    #[serde(other)]
+    Other,
+}
+
+/// The status of a check run. Anything but `Completed` is still going.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RunStatus {
+    Completed,
+    #[serde(other)]
+    Other,
+}
+
+/// How a completed check run ended. Anything but the first three counts as a failure.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Conclusion {
+    Success,
+    Neutral,
+    Skipped,
+    #[serde(other)]
+    Other,
+}
+
+/// The state of a commit status. Anything but the first three counts as a failure.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ContextState {
+    Success,
+    Pending,
+    Expected,
+    #[serde(other)]
+    Other,
 }
 
 /// The rest of a PR, fetched only when it is highlighted.
@@ -299,8 +350,8 @@ pub enum Check {
 pub struct CheckRun {
     pub name: String,
     pub workflow_name: String,
-    pub status: String,
-    pub conclusion: String,
+    pub status: RunStatus,
+    pub conclusion: Conclusion,
     pub started_at: Option<String>,
 }
 
@@ -308,7 +359,7 @@ pub struct CheckRun {
 #[serde(rename_all = "camelCase")]
 pub struct StatusContext {
     pub context: String,
-    pub state: String,
+    pub state: ContextState,
     pub started_at: Option<String>,
 }
 
@@ -373,7 +424,7 @@ mod tests {
         ));
         assert!(matches!(
             &pr.status_check_rollup[1],
-            Check::StatusContext(ctx) if ctx.state == "PENDING" && ctx.started_at.is_none()
+            Check::StatusContext(ctx) if ctx.state == ContextState::Pending && ctx.started_at.is_none()
         ));
 
         assert_eq!(prs[1].state, PrState::Merged);

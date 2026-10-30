@@ -76,7 +76,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
                     mark.to_string(),
                     format!("#{}", row.pr.number),
                     checks.to_string(),
-                    model::review_label(&row.pr.review_decision).to_string(),
+                    model::review_label(row.pr.review_decision).to_string(),
                     row.pr.title.clone(),
                 ]);
                 if row.pr.state == PrState::Open {

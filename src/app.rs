@@ -469,7 +469,7 @@ impl App {
                         if let Some(row) = self.rows.iter_mut().find(|row| row.pr.number == number)
                         {
                             row.checks =
-                                model::classify_checks(&pr.mergeable, &pr.status_check_rollup);
+                                model::classify_checks(pr.mergeable, &pr.status_check_rollup);
                             row.pr = pr;
                         }
                     }
@@ -511,7 +511,7 @@ impl App {
                 let mut rows: Vec<Row> = prs
                     .into_iter()
                     .map(|pr| {
-                        let checks = model::classify_checks(&pr.mergeable, &pr.status_check_rollup);
+                        let checks = model::classify_checks(pr.mergeable, &pr.status_check_rollup);
                         Row { pr, checks }
                     })
                     .collect();
@@ -864,6 +864,7 @@ pub fn title(repo: Option<&str>, dry_run: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gh::ReviewDecision;
 
     fn pr(number: u64, state: &str) -> Pr {
         serde_json::from_value(serde_json::json!({
@@ -1265,7 +1266,7 @@ mod tests {
 
         // A merged PR would sort last, but the rows keep their order.
         let mut merged = pr(1, "MERGED");
-        merged.review_decision = "APPROVED".to_string();
+        merged.review_decision = ReviewDecision::Approved;
         app.update(Msg::PrRefreshed(1, Ok(merged)));
         app.update(Msg::PrRefreshed(2, Err(color_eyre::eyre::eyre!("failed"))));
         app.update(Msg::PrRefreshed(9, Ok(pr(9, "OPEN"))));
@@ -1278,7 +1279,7 @@ mod tests {
 
         assert_eq!(numbers(&app), [1, 2, 3]);
         assert_eq!(app.rows[0].pr.state, PrState::Merged);
-        assert_eq!(app.rows[0].pr.review_decision, "APPROVED");
+        assert_eq!(app.rows[0].pr.review_decision, ReviewDecision::Approved);
         assert_eq!(app.table.selected(), Some(1));
         // Failed refreshes are reported, and the rows keep their old state.
         assert_eq!(

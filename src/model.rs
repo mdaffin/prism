@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::gh::Check;
+use crate::gh::{Check, Conclusion, ContextState, Mergeable, ReviewDecision, RunStatus};
 
 /// The state of a single check, or of all a PR's checks together.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,15 +68,15 @@ impl Checks {
 
 pub fn check_state(check: &Check) -> CheckState {
     match check {
-        Check::CheckRun(run) if run.status != "COMPLETED" => CheckState::Pending,
-        Check::CheckRun(run) => match run.conclusion.as_str() {
-            "SUCCESS" | "NEUTRAL" | "SKIPPED" => CheckState::Passing,
-            _ => CheckState::Failing,
+        Check::CheckRun(run) if run.status != RunStatus::Completed => CheckState::Pending,
+        Check::CheckRun(run) => match run.conclusion {
+            Conclusion::Success | Conclusion::Neutral | Conclusion::Skipped => CheckState::Passing,
+            Conclusion::Other => CheckState::Failing,
         },
-        Check::StatusContext(ctx) => match ctx.state.as_str() {
-            "SUCCESS" => CheckState::Passing,
-            "PENDING" | "EXPECTED" => CheckState::Pending,
-            _ => CheckState::Failing,
+        Check::StatusContext(ctx) => match ctx.state {
+            ContextState::Success => CheckState::Passing,
+            ContextState::Pending | ContextState::Expected => CheckState::Pending,
+            ContextState::Other => CheckState::Failing,
         },
         Check::Unknown => CheckState::Pending,
     }
@@ -84,7 +84,7 @@ pub fn check_state(check: &Check) -> CheckState {
 
 /// Keeps the latest run of each check and works out the overall state. A conflict outranks the
 /// check results.
-pub fn classify_checks(mergeable: &str, rollup: &[Check]) -> Checks {
+pub fn classify_checks(mergeable: Mergeable, rollup: &[Check]) -> Checks {
     let mut latest: BTreeMap<String, &Check> = BTreeMap::new();
     for check in rollup {
         let (key, started_at) = match check {
@@ -112,7 +112,7 @@ pub fn classify_checks(mergeable: &str, rollup: &[Check]) -> Checks {
         .collect();
 
     let any = |state| results.iter().any(|r| r.state == state);
-    let state = if mergeable == "CONFLICTING" {
+    let state = if mergeable == Mergeable::Conflicting {
         CheckState::Conflict
     } else if results.is_empty() {
         CheckState::None
@@ -158,11 +158,11 @@ pub fn ago(timestamp: &str, now: jiff::Timestamp) -> String {
     "just now".to_string()
 }
 
-pub fn review_label(review_decision: &str) -> &'static str {
+pub fn review_label(review_decision: ReviewDecision) -> &'static str {
     match review_decision {
-        "APPROVED" => "✓ approved",
-        "CHANGES_REQUESTED" => "✗ changes",
-        _ => "· needed",
+        ReviewDecision::Approved => "✓ approved",
+        ReviewDecision::ChangesRequested => "✗ changes",
+        ReviewDecision::Other => "· needed",
     }
 }
 
@@ -195,30 +195,37 @@ pub fn split_ticket(title: &str) -> (&str, &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gh::{CheckRun, StatusContext};
-
+    // The checks are built from JSON, as gh prints them.
     fn run(name: &str, status: &str, conclusion: &str, started_at: Option<&str>) -> Check {
-        Check::CheckRun(CheckRun {
-            name: name.to_string(),
-            workflow_name: "CI".to_string(),
-            status: status.to_string(),
-            conclusion: conclusion.to_string(),
-            started_at: started_at.map(str::to_string),
-        })
+        serde_json::from_value(serde_json::json!({
+            "__typename": "CheckRun",
+            "name": name,
+            "workflowName": "CI",
+            "status": status,
+            "conclusion": conclusion,
+            "startedAt": started_at,
+        }))
+        .unwrap()
     }
 
     fn ctx(context: &str, state: &str, started_at: Option<&str>) -> Check {
-        Check::StatusContext(StatusContext {
-            context: context.to_string(),
-            state: state.to_string(),
-            started_at: started_at.map(str::to_string),
-        })
+        serde_json::from_value(serde_json::json!({
+            "__typename": "StatusContext",
+            "context": context,
+            "state": state,
+            "startedAt": started_at,
+        }))
+        .unwrap()
+    }
+
+    fn decision(value: &str) -> ReviewDecision {
+        serde_json::from_value(serde_json::json!(value)).unwrap()
     }
 
     #[test]
     fn an_unknown_check_keeps_the_pr_from_passing() {
         let checks = classify_checks(
-            "MERGEABLE",
+            Mergeable::Other,
             &[ctx("ci/legacy", "SUCCESS", None), Check::Unknown],
         );
         assert_eq!(checks.state, CheckState::Pending);
@@ -226,10 +233,13 @@ mod tests {
         assert_eq!(checks.results.len(), 2);
 
         // On its own it is pending too, not "no checks".
-        let checks = classify_checks("MERGEABLE", &[Check::Unknown]);
+        let checks = classify_checks(Mergeable::Other, &[Check::Unknown]);
         assert_eq!(checks.state, CheckState::Pending);
         // A failing check still outranks it.
-        let checks = classify_checks("MERGEABLE", &[Check::Unknown, ctx("a", "FAILURE", None)]);
+        let checks = classify_checks(
+            Mergeable::Other,
+            &[Check::Unknown, ctx("a", "FAILURE", None)],
+        );
         assert_eq!(checks.state, CheckState::Failing);
     }
 
@@ -268,7 +278,7 @@ mod tests {
     #[test]
     fn keeps_latest_run_per_key() {
         let checks = classify_checks(
-            "MERGEABLE",
+            Mergeable::Other,
             &[
                 run(
                     "build",
@@ -324,7 +334,7 @@ mod tests {
     #[test]
     fn checks_pane_lists_the_worst_first() {
         let checks = classify_checks(
-            "MERGEABLE",
+            Mergeable::Other,
             &[
                 run("a", "COMPLETED", "SUCCESS", None),
                 run("b", "IN_PROGRESS", "", None),
@@ -351,15 +361,21 @@ mod tests {
             let checks: Vec<Check> = checks.iter().map(|c| (*c).clone()).collect();
             classify_checks(mergeable, &checks).state
         };
-        assert_eq!(state("CONFLICTING", &[&pass]), CheckState::Conflict);
-        assert_eq!(state("CONFLICTING", &[]), CheckState::Conflict);
-        assert_eq!(state("MERGEABLE", &[]), CheckState::None);
         assert_eq!(
-            state("MERGEABLE", &[&pass, &pend, &fail]),
+            state(Mergeable::Conflicting, &[&pass]),
+            CheckState::Conflict
+        );
+        assert_eq!(state(Mergeable::Conflicting, &[]), CheckState::Conflict);
+        assert_eq!(state(Mergeable::Other, &[]), CheckState::None);
+        assert_eq!(
+            state(Mergeable::Other, &[&pass, &pend, &fail]),
             CheckState::Failing
         );
-        assert_eq!(state("UNKNOWN", &[&pass, &pend]), CheckState::Pending);
-        assert_eq!(state("MERGEABLE", &[&pass]), CheckState::Passing);
+        assert_eq!(
+            state(Mergeable::Other, &[&pass, &pend]),
+            CheckState::Pending
+        );
+        assert_eq!(state(Mergeable::Other, &[&pass]), CheckState::Passing);
     }
 
     #[test]
@@ -373,10 +389,10 @@ mod tests {
 
     #[test]
     fn review_labels() {
-        assert_eq!(review_label("APPROVED"), "✓ approved");
-        assert_eq!(review_label("CHANGES_REQUESTED"), "✗ changes");
-        assert_eq!(review_label("REVIEW_REQUIRED"), "· needed");
-        assert_eq!(review_label(""), "· needed");
+        assert_eq!(review_label(decision("APPROVED")), "✓ approved");
+        assert_eq!(review_label(decision("CHANGES_REQUESTED")), "✗ changes");
+        assert_eq!(review_label(decision("REVIEW_REQUIRED")), "· needed");
+        assert_eq!(review_label(decision("")), "· needed");
     }
 
     #[test]
