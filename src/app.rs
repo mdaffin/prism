@@ -382,21 +382,16 @@ impl App {
     }
 
     /// PRs whose details haven't been requested yet, as many as there are free fetch slots.
-    /// The highlighted PR comes first, then the rows below it, then those above, so a fetch
-    /// started as a slot frees up goes to the rows about to be viewed. Marks them as loading,
-    /// so the caller must start the fetches.
+    /// Marks them as loading, so the caller must start the fetches.
     pub fn details_to_fetch(&mut self) -> Vec<u64> {
-        let Some(start) = self.table.selected() else {
-            return Vec::new();
-        };
         let in_flight = self
             .details
             .values()
             .filter(|details| matches!(details, Details::Loading))
             .count();
-        let numbers: Vec<u64> = (start..self.rows.len())
-            .chain(0..start)
-            .map(|i| self.rows[i].pr.number)
+        let numbers: Vec<u64> = self
+            .numbers_from_highlight()
+            .into_iter()
             .filter(|number| !self.details.contains_key(number))
             .take(MAX_DETAIL_FETCHES.saturating_sub(in_flight))
             .collect();
@@ -406,23 +401,37 @@ impl App {
         numbers
     }
 
-    /// The highlighted PR, if its diff hasn't been requested and a fetch slot is free. Marks it
-    /// as loading, so the caller must start the fetch. Only the highlighted PR is fetched, so
-    /// moving quickly through the list doesn't start a fetch for every row passed.
+    /// PRs whose diffs haven't been requested yet, as many as there are free fetch slots. Marks
+    /// them as loading, so the caller must start the fetches.
     pub fn diffs_to_fetch(&mut self) -> Vec<u64> {
         let in_flight = self
             .diffs
             .values()
             .filter(|diff| matches!(diff, Diff::Loading))
             .count();
-        let Some(number) = self.highlighted().map(|row| row.pr.number) else {
+        let numbers: Vec<u64> = self
+            .numbers_from_highlight()
+            .into_iter()
+            .filter(|number| !self.diffs.contains_key(number))
+            .take(MAX_DIFF_FETCHES.saturating_sub(in_flight))
+            .collect();
+        for &number in &numbers {
+            self.diffs.insert(number, Diff::Loading);
+        }
+        numbers
+    }
+
+    /// The PR numbers in the order background fetches should take them: the highlighted PR, then
+    /// the rows below it, then those above. A fetch started as a slot frees up so goes to the
+    /// rows about to be viewed.
+    fn numbers_from_highlight(&self) -> Vec<u64> {
+        let Some(start) = self.table.selected() else {
             return Vec::new();
         };
-        if in_flight >= MAX_DIFF_FETCHES || self.diffs.contains_key(&number) {
-            return Vec::new();
-        }
-        self.diffs.insert(number, Diff::Loading);
-        vec![number]
+        (start..self.rows.len())
+            .chain(0..start)
+            .map(|i| self.rows[i].pr.number)
+            .collect()
     }
 
     pub fn highlighted(&self) -> Option<&Row> {
@@ -1325,30 +1334,31 @@ mod tests {
     }
 
     #[test]
-    fn fetches_only_the_highlighted_diff_once() {
-        let mut app = app_with_rows(6);
-        assert_eq!(app.diffs_to_fetch(), [1]);
+    fn prefetches_diffs_from_the_highlight_within_the_limit() {
+        let mut app = app_with_rows(8);
+        assert_eq!(app.diffs_to_fetch(), [1, 2, 3, 4]);
+        // Every slot is busy.
         assert!(app.diffs_to_fetch().is_empty());
 
-        // Moving on fetches the new row, up to the limit; rows passed through are not fetched
-        // unless they were highlighted when a slot was free.
-        for (row, number) in [(1, 2), (2, 3), (3, 4)] {
-            app.table.select(Some(row));
-            assert_eq!(app.diffs_to_fetch(), [number]);
-        }
-        app.table.select(Some(4));
-        assert!(app.diffs_to_fetch().is_empty());
-
-        // A freed slot lets the highlighted row go.
+        // Freed slots go to the highlighted row and those below it, then wrap to the top.
+        app.table.select(Some(5));
         app.update(Msg::DiffLoaded(1, Ok("diff\t".to_string())));
         assert!(matches!(&app.diffs[&1], Diff::Loaded(d) if d.to_string() == "diff    "));
+        assert_eq!(app.diffs_to_fetch(), [6]);
+        for number in [2, 3] {
+            app.update(Msg::DiffLoaded(number, Ok(String::new())));
+        }
+        assert_eq!(app.diffs_to_fetch(), [7, 8]);
+        app.update(Msg::DiffLoaded(4, Ok(String::new())));
         assert_eq!(app.diffs_to_fetch(), [5]);
 
-        // Going back to a loaded or failed row doesn't fetch it again.
-        app.update(Msg::DiffLoaded(2, Err(color_eyre::eyre::eyre!("failed"))));
-        app.table.select(Some(0));
-        assert!(app.diffs_to_fetch().is_empty());
-        app.table.select(Some(1));
+        // Nothing is fetched twice, including failures.
+        for number in 5..=8 {
+            app.update(Msg::DiffLoaded(
+                number,
+                Err(color_eyre::eyre::eyre!("failed")),
+            ));
+        }
         assert!(app.diffs_to_fetch().is_empty());
     }
 
