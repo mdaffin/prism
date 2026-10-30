@@ -8,7 +8,7 @@ mod ui;
 use std::time::Duration;
 
 use clap::Parser;
-use color_eyre::eyre::{Result, bail};
+use color_eyre::eyre::Result;
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
 use ratatui::DefaultTerminal;
@@ -66,9 +66,9 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
             });
         }
         for number in app.approvals_to_run() {
-            let tx = tx.clone();
+            let (gh, tx) = (gh.clone(), tx.clone());
             tokio::spawn(async move {
-                let result = approve(number, args.dry_run).await;
+                let result = approve(&gh, number, args.dry_run).await;
                 let _ = tx.send(Msg::Approved(number, result));
             });
         }
@@ -89,12 +89,11 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
     Ok(())
 }
 
-/// Approves one PR. A dry run waits a moment and succeeds.
-async fn approve(_number: u64, dry_run: bool) -> Result<()> {
+/// Approves one PR. A dry run makes no `gh` call: it waits a moment and succeeds.
+async fn approve(gh: &gh::Gh, number: u64, dry_run: bool) -> Result<()> {
     if dry_run {
         tokio::time::sleep(Duration::from_millis(300)).await;
         return Ok(());
     }
-    // Kept from touching real PRs until then.
-    bail!("real approvals come in M1 step 13")
+    gh.approve(number).await
 }

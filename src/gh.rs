@@ -1,10 +1,11 @@
 //! Everything that talks to the `gh` CLI. `gh` handles authentication, so this program never
 //! touches tokens.
 
+use std::fmt;
 use std::io::ErrorKind;
 use std::process::Stdio;
 
-use color_eyre::eyre::{Result, bail};
+use color_eyre::eyre::{Result, bail, eyre};
 use serde::Deserialize;
 use tokio::process::Command;
 
@@ -53,6 +54,19 @@ impl Gh {
         Ok(serde_json::from_slice(&stdout)?)
     }
 
+    /// Approves a PR. If `gh` fails, the error is its output alone: the caller already knows
+    /// which PR it was.
+    pub async fn approve(&self, number: u64) -> Result<()> {
+        let number = number.to_string();
+        match self.run(&["pr", "review", &number, "--approve"]).await {
+            Ok(_) => Ok(()),
+            Err(e) => match e.downcast::<GhError>() {
+                Ok(failure) => Err(eyre!(failure.output)),
+                Err(e) => Err(e),
+            },
+        }
+    }
+
     pub async fn pr_details(&self, number: u64) -> Result<PrDetails> {
         let number = number.to_string();
         let args = ["pr", "view", &number, "--json", DETAIL_FIELDS];
@@ -75,16 +89,40 @@ impl Gh {
         if !output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let message = [stdout.trim(), stderr.trim()]
+            let mut message = [stdout.trim(), stderr.trim()]
                 .into_iter()
                 .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>()
                 .join("\n");
-            bail!("`{}` failed:\n{message}", render_command(&args));
+            if message.is_empty() {
+                message = format!("exited with {}", output.status);
+            }
+            return Err(GhError {
+                command: render_command(&args),
+                output: message,
+            }
+            .into());
         }
         Ok(output.stdout)
     }
 }
+
+/// A `gh` command that exited with an error.
+#[derive(Debug)]
+pub struct GhError {
+    /// The command, ready to copy into a shell.
+    pub command: String,
+    /// Its stdout and stderr joined, or its exit status if both are empty.
+    pub output: String,
+}
+
+impl fmt::Display for GhError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "`{}` failed:\n{}", self.command, self.output)
+    }
+}
+
+impl std::error::Error for GhError {}
 
 pub fn check_installed() -> Result<()> {
     match std::process::Command::new("gh")
