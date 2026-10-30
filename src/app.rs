@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
 use color_eyre::eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::TableState;
+use tui_input::Input;
+use tui_input::backend::crossterm::EventHandler;
 
 use crate::gh::{Pr, PrDetails};
 use crate::model::{self, Checks};
@@ -13,10 +15,21 @@ const MAX_DETAIL_FETCHES: usize = 4;
 pub struct App {
     pub title: String,
     pub mode: Mode,
+    /// The search box. While it isn't being edited it holds the last submitted query.
+    pub query: Input,
+    /// The query to restore when an edit is cancelled.
+    submitted_query: String,
+    pub editing: bool,
+    /// A query submitted but not yet fetched.
+    query_to_fetch: Option<String>,
+    /// The id of the latest list fetch. Results from older fetches are dropped.
+    fetch_id: u64,
+    /// Whether the latest list fetch is still running.
+    pub searching: bool,
     pub rows: Vec<Row>,
     /// The highlighted row.
     pub table: TableState,
-    /// Why the last fetch failed.
+    /// Why the last list fetch failed.
     pub error: Option<String>,
     /// Details by PR number. An entry is added when its fetch starts, so a PR is fetched once.
     pub details: HashMap<u64, Details>,
@@ -24,6 +37,7 @@ pub struct App {
 }
 
 pub enum Mode {
+    /// No list has been fetched yet.
     Loading,
     List,
 }
@@ -48,21 +62,36 @@ pub enum Details {
 
 pub enum Msg {
     Key(KeyEvent),
-    PrsLoaded(Result<Vec<Pr>>),
+    /// The result of the list fetch with this id.
+    PrsLoaded(u64, Result<Vec<Pr>>),
     DetailsLoaded(u64, Result<PrDetails>),
 }
 
 impl App {
-    pub fn new(title: String) -> Self {
+    pub fn new(title: String, query: String) -> Self {
         Self {
             title,
             mode: Mode::Loading,
+            query: Input::new(query.clone()),
+            submitted_query: query.clone(),
+            editing: false,
+            query_to_fetch: Some(query),
+            fetch_id: 0,
+            searching: false,
             rows: Vec::new(),
             table: TableState::default(),
             error: None,
             details: HashMap::new(),
             should_quit: false,
         }
+    }
+
+    /// A submitted query and the id of its fetch, which the caller must start.
+    pub fn list_to_fetch(&mut self) -> Option<(u64, String)> {
+        let query = self.query_to_fetch.take()?;
+        self.fetch_id += 1;
+        self.searching = true;
+        Some((self.fetch_id, query))
     }
 
     /// PRs whose details haven't been requested yet, as many as there are free fetch slots.
@@ -105,11 +134,14 @@ impl App {
                 self.details
                     .insert(number, Details::Loaded { details, body });
             }
-            Msg::PrsLoaded(Err(e)) => {
+            Msg::PrsLoaded(id, _) if id != self.fetch_id => {}
+            Msg::PrsLoaded(_, Err(e)) => {
+                // The previous results stay.
                 self.error = Some(e.to_string());
+                self.searching = false;
                 self.mode = Mode::List;
             }
-            Msg::PrsLoaded(Ok(prs)) => {
+            Msg::PrsLoaded(_, Ok(prs)) => {
                 let mut rows: Vec<Row> = prs
                     .into_iter()
                     .map(|pr| {
@@ -121,7 +153,11 @@ impl App {
                 rows.sort_by_key(|row| row.checks.state.rank());
                 self.table.select((!rows.is_empty()).then_some(0));
                 self.rows = rows;
+                // Give failed details another chance with the new results.
+                self.details
+                    .retain(|_, details| !matches!(details, Details::Failed(_)));
                 self.error = None;
+                self.searching = false;
                 self.mode = Mode::List;
             }
         }
@@ -132,9 +168,35 @@ impl App {
             key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c');
         if ctrl_c {
             self.should_quit = true;
-            return;
+        } else if self.editing {
+            self.on_search_key(key);
+        } else {
+            self.on_list_key(key);
         }
+    }
+
+    /// While editing, every key other than Enter and Esc goes to the search box.
+    fn on_search_key(&mut self, key: KeyEvent) {
         match key.code {
+            KeyCode::Enter => {
+                self.editing = false;
+                self.submitted_query = self.query.value().to_string();
+                self.query_to_fetch = Some(self.submitted_query.clone());
+                self.error = None;
+            }
+            KeyCode::Esc => {
+                self.editing = false;
+                self.query = Input::new(self.submitted_query.clone());
+            }
+            _ => {
+                self.query.handle_event(&Event::Key(key));
+            }
+        }
+    }
+
+    fn on_list_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('/') => self.editing = true,
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
             KeyCode::Down | KeyCode::Char('j') => self.move_highlight(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_highlight(-1),
@@ -151,15 +213,12 @@ impl App {
     }
 }
 
-/// `Open PRs (<repo> - <author> - <search>)`, leaving out empty parts, plus ` [DRY RUN]`.
-pub fn title(repo: Option<&str>, author: Option<&str>, search: &str, dry_run: bool) -> String {
-    let parts: Vec<&str> = [repo.unwrap_or(""), author.unwrap_or(""), search.trim()]
-        .into_iter()
-        .filter(|part| !part.is_empty())
-        .collect();
-    let mut title = String::from("Open PRs");
-    if !parts.is_empty() {
-        title.push_str(&format!(" ({})", parts.join(" - ")));
+/// `PRs (<repo>)`, plus ` [DRY RUN]`. The query isn't included: it can change, and the search
+/// box shows it.
+pub fn title(repo: Option<&str>, dry_run: bool) -> String {
+    let mut title = String::from("PRs");
+    if let Some(repo) = repo {
+        title.push_str(&format!(" ({repo})"));
     }
     if dry_run {
         title.push_str(" [DRY RUN]");
@@ -171,9 +230,9 @@ pub fn title(repo: Option<&str>, author: Option<&str>, search: &str, dry_run: bo
 mod tests {
     use super::*;
 
-    fn app_with_rows(count: u64) -> App {
-        let mut app = App::new(String::new());
-        let prs: Vec<Pr> = (1..=count)
+    fn prs(numbers: impl IntoIterator<Item = u64>) -> Vec<Pr> {
+        numbers
+            .into_iter()
             .map(|number| {
                 serde_json::from_value(serde_json::json!({
                     "number": number,
@@ -185,9 +244,99 @@ mod tests {
                 }))
                 .unwrap()
             })
-            .collect();
-        app.update(Msg::PrsLoaded(Ok(prs)));
+            .collect()
+    }
+
+    fn app_with_rows(count: u64) -> App {
+        let mut app = App::new(String::new(), "is:pr".to_string());
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(id, Ok(prs(1..=count))));
         app
+    }
+
+    fn press(app: &mut App, keys: &str) {
+        for c in keys.chars() {
+            app.update(Msg::Key(KeyEvent::from(KeyCode::Char(c))));
+        }
+    }
+
+    fn numbers(app: &App) -> Vec<u64> {
+        app.rows.iter().map(|row| row.pr.number).collect()
+    }
+
+    #[test]
+    fn fetches_the_initial_query_once() {
+        let mut app = App::new(String::new(), "is:pr is:open".to_string());
+        assert_eq!(app.list_to_fetch(), Some((1, "is:pr is:open".to_string())));
+        assert_eq!(app.list_to_fetch(), None);
+    }
+
+    #[test]
+    fn search_box_takes_every_key_while_editing() {
+        let mut app = app_with_rows(3);
+        press(&mut app, "/");
+        assert!(app.editing);
+        press(&mut app, " q/jk");
+        assert!(!app.should_quit);
+        assert_eq!(app.query.value(), "is:pr q/jk");
+        assert_eq!(app.table.selected(), Some(0));
+    }
+
+    #[test]
+    fn esc_restores_the_submitted_query() {
+        let mut app = app_with_rows(3);
+        press(&mut app, "/ x");
+        app.update(Msg::Key(KeyEvent::from(KeyCode::Esc)));
+        assert!(!app.editing);
+        assert_eq!(app.query.value(), "is:pr");
+        assert_eq!(app.list_to_fetch(), None);
+    }
+
+    #[test]
+    fn enter_fetches_the_new_query_and_resets_the_highlight() {
+        let mut app = app_with_rows(3);
+        app.table.select(Some(2));
+        press(&mut app, "/ is:closed");
+        app.update(Msg::Key(KeyEvent::from(KeyCode::Enter)));
+        assert!(!app.editing);
+        let (id, query) = app.list_to_fetch().unwrap();
+        assert_eq!(query, "is:pr is:closed");
+        assert!(app.searching);
+
+        app.update(Msg::PrsLoaded(id, Ok(prs([7, 8]))));
+        assert!(!app.searching);
+        assert_eq!(numbers(&app), [7, 8]);
+        assert_eq!(app.table.selected(), Some(0));
+    }
+
+    #[test]
+    fn results_from_an_older_fetch_are_dropped() {
+        let mut app = app_with_rows(3);
+        press(&mut app, "/");
+        app.update(Msg::Key(KeyEvent::from(KeyCode::Enter)));
+        let (old, _) = app.list_to_fetch().unwrap();
+        press(&mut app, "/");
+        app.update(Msg::Key(KeyEvent::from(KeyCode::Enter)));
+        let (new, _) = app.list_to_fetch().unwrap();
+
+        app.update(Msg::PrsLoaded(new, Ok(prs([5]))));
+        app.update(Msg::PrsLoaded(old, Ok(prs([6]))));
+        assert_eq!(numbers(&app), [5]);
+    }
+
+    #[test]
+    fn a_failed_search_keeps_the_old_results() {
+        let mut app = app_with_rows(3);
+        press(&mut app, "/");
+        app.update(Msg::Key(KeyEvent::from(KeyCode::Enter)));
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(
+            id,
+            Err(color_eyre::eyre::eyre!("bad query")),
+        ));
+        assert_eq!(app.error.as_deref(), Some("bad query"));
+        assert!(!app.searching);
+        assert_eq!(numbers(&app), [1, 2, 3]);
     }
 
     fn finish(app: &mut App, number: u64) {
@@ -222,15 +371,9 @@ mod tests {
     }
 
     #[test]
-    fn title_leaves_out_empty_parts() {
-        assert_eq!(title(None, None, "", false), "Open PRs");
-        assert_eq!(
-            title(Some("o/r"), Some("app/renovate"), "label:deps", false),
-            "Open PRs (o/r - app/renovate - label:deps)"
-        );
-        assert_eq!(
-            title(None, Some("me"), " ", true),
-            "Open PRs (me) [DRY RUN]"
-        );
+    fn title_shows_repo_and_dry_run() {
+        assert_eq!(title(None, false), "PRs");
+        assert_eq!(title(Some("o/r"), false), "PRs (o/r)");
+        assert_eq!(title(Some("o/r"), true), "PRs (o/r) [DRY RUN]");
     }
 }

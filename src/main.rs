@@ -28,25 +28,31 @@ async fn main() -> Result<()> {
 }
 
 async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
-    let mut app = App::new(app::title(
-        args.repo.as_deref(),
-        args.author.as_deref(),
-        &args.search,
-        args.dry_run,
-    ));
+    let title = app::title(args.repo.as_deref(), args.dry_run);
+    let query = query::initial(args.author.as_deref(), &args.search);
+    let mut app = App::new(title, query);
     // Background work reports back through this channel.
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let query = query::initial(args.author.as_deref(), &args.search);
     let gh = gh::Gh::new(args.repo);
-    let fetch_tx = tx.clone();
-    let fetch_gh = gh.clone();
-    tokio::spawn(async move {
-        let prs = fetch_gh.list_prs(&query, args.limit).await;
-        let _ = fetch_tx.send(Msg::PrsLoaded(prs));
-    });
 
     let mut events = EventStream::new();
     while !app.should_quit {
+        // Start any fetches the last update asked for.
+        if let Some((id, query)) = app.list_to_fetch() {
+            let (gh, tx) = (gh.clone(), tx.clone());
+            tokio::spawn(async move {
+                let prs = gh.list_prs(&query, args.limit).await;
+                let _ = tx.send(Msg::PrsLoaded(id, prs));
+            });
+        }
+        for number in app.details_to_fetch() {
+            let (gh, tx) = (gh.clone(), tx.clone());
+            tokio::spawn(async move {
+                let details = gh.pr_details(number).await;
+                let _ = tx.send(Msg::DetailsLoaded(number, details));
+            });
+        }
+
         terminal.draw(|frame| ui::view(&mut app, frame))?;
         let msg = tokio::select! {
             Some(event) = events.next() => match event? {
@@ -58,13 +64,6 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
             else => break,
         };
         app.update(msg);
-        for number in app.details_to_fetch() {
-            let (gh, tx) = (gh.clone(), tx.clone());
-            tokio::spawn(async move {
-                let details = gh.pr_details(number).await;
-                let _ = tx.send(Msg::DetailsLoaded(number, details));
-            });
-        }
     }
     Ok(())
 }
