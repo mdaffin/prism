@@ -58,7 +58,7 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
             else => break,
         };
         app.update(msg);
-        if let Some(number) = app.details_to_fetch() {
+        for number in app.details_to_fetch() {
             let (gh, tx) = (gh.clone(), tx.clone());
             tokio::spawn(async move {
                 let details = gh.pr_details(number).await;
