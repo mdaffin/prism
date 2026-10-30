@@ -120,14 +120,15 @@ fn start_work(
             }
         });
     }
+    let epoch = app.batch_epoch();
     for number in app.approvals_to_run() {
         spawn(gh, tx, async move |gh| {
-            Msg::Approved(number, gh.approve(number).await)
+            Msg::Approved(epoch, number, gh.approve(number).await)
         });
     }
     if let Some((number, auto)) = app.merge_to_run() {
         spawn(gh, tx, async move |gh| {
-            Msg::Merged(number, gh.merge(number, auto, method).await)
+            Msg::Merged(epoch, number, gh.merge(number, auto, method).await)
         });
     }
 }

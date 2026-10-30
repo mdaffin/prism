@@ -1016,7 +1016,8 @@ mod tests {
         app.update(Msg::Key(KeyCode::Enter.into()));
         // Four approvals run at once; two wait.
         assert_eq!(app.approvals_to_run().len(), 4);
-        app.update(Msg::Approved(1, Ok(())));
+        let epoch = app.batch_epoch();
+        app.update(Msg::Approved(epoch, 1, Ok(())));
         let screen = lines(&draw(&mut app, 160, 30));
         // The popup draws over the table, so a status shares its line with a table row.
         let with = |text: &str| screen.iter().filter(|line| line.contains(text)).count();

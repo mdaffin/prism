@@ -333,10 +333,11 @@ pub enum Msg {
     PrsLoaded(u64, Result<Vec<Pr>>),
     DetailsLoaded(u64, Result<PrDetails>),
     DiffLoaded(u64, Result<String>),
-    /// The result of approving this PR.
-    Approved(u64, Result<()>),
-    /// The result of merging this PR, or of turning on auto-merge.
-    Merged(u64, Result<()>),
+    /// The result of approving this PR, in the batch with this epoch (see
+    /// [`App::batch_epoch`]). One from an earlier batch, such as a cancelled one, is dropped.
+    Approved(u64, u64, Result<()>),
+    /// The result of merging this PR, or of turning on auto-merge, in the batch with this epoch.
+    Merged(u64, u64, Result<()>),
     /// The result of fetching this PR again to refresh its row.
     PrRefreshed(u64, Result<Pr>),
     /// The result of opening this PR in the browser.
@@ -433,6 +434,11 @@ impl App {
     /// must start them.
     pub fn opens_to_run(&mut self) -> Vec<u64> {
         std::mem::take(&mut self.opens_to_run)
+    }
+
+    /// The epoch of the running batch, which the results of its actions carry back.
+    pub fn batch_epoch(&self) -> u64 {
+        self.batch_epoch
     }
 
     /// Approvals that can start now, up to [`MAX_APPROVALS`] at once. Marks them as working,
@@ -651,8 +657,13 @@ impl App {
                     self.apply_statuses(update);
                 }
             }
-            Msg::Approved(number, result) => self.approved(number, result),
-            Msg::Merged(number, result) => self.merged(number, result),
+            Msg::Approved(epoch, number, result) if epoch == self.batch_epoch => {
+                self.approved(number, result)
+            }
+            Msg::Merged(epoch, number, result) if epoch == self.batch_epoch => {
+                self.merged(number, result)
+            }
+            Msg::Approved(..) | Msg::Merged(..) => {}
             Msg::Opened(number, Err(e)) => {
                 let message = format!("Opening #{number} failed: {e}");
                 self.errors.opens.push(one_line(&message));
@@ -1650,7 +1661,8 @@ mod tests {
     }
 
     fn approve(app: &mut App, number: u64, result: Result<()>) {
-        app.update(Msg::Approved(number, result));
+        let epoch = app.batch_epoch();
+        app.update(Msg::Approved(epoch, number, result));
     }
 
     #[test]
@@ -1701,6 +1713,28 @@ mod tests {
         assert!(app.selected.is_empty());
         // A result that arrives after the cancel changes nothing.
         approve(&mut app, 2, Ok(()));
+        assert!(matches!(app.mode, Mode::Results(_)));
+    }
+
+    #[test]
+    fn a_result_from_a_cancelled_batch_does_not_touch_the_next_one() {
+        let mut app = app_with_rows(2);
+        start_approving(&mut app, 1);
+        assert_eq!(app.approvals_to_run(), [1]);
+        let old = app.batch_epoch();
+        key(&mut app, KeyCode::Char('q'));
+        key(&mut app, KeyCode::Enter);
+
+        // The same PR is approved again, and then the first batch's approval comes back.
+        press(&mut app, "k");
+        start_approving(&mut app, 1);
+        assert_eq!(app.approvals_to_run(), [1]);
+        app.update(Msg::Approved(old, 1, Ok(())));
+        let Mode::Running(batch) = &app.mode else {
+            panic!("the new batch was ended by an old result");
+        };
+        assert_eq!(batch.items[0].approval, ItemStatus::Working);
+        approve(&mut app, 1, Ok(()));
         assert!(matches!(app.mode, Mode::Results(_)));
     }
 
@@ -1822,7 +1856,8 @@ mod tests {
     }
 
     fn merge(app: &mut App, number: u64, result: Result<()>) {
-        app.update(Msg::Merged(number, result));
+        let epoch = app.batch_epoch();
+        app.update(Msg::Merged(epoch, number, result));
     }
 
     #[test]
