@@ -288,6 +288,10 @@ pub struct Author {
 pub enum Check {
     CheckRun(CheckRun),
     StatusContext(StatusContext),
+    /// Any other kind. It is kept, rather than failing the whole list to parse, and counts as
+    /// pending: it can't be shown to have passed.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -373,6 +377,27 @@ mod tests {
         ));
 
         assert_eq!(prs[1].state, PrState::Merged);
+    }
+
+    #[test]
+    fn an_unknown_kind_of_check_does_not_fail_the_list() {
+        let json = r#"[{
+          "number": 1,
+          "title": "t",
+          "state": "OPEN",
+          "statusCheckRollup": [
+            {"__typename": "SomethingNew", "foo": "bar"},
+            {"__typename": "StatusContext", "context": "ci/legacy", "state": "SUCCESS"}
+          ],
+          "mergeable": "MERGEABLE",
+          "reviewDecision": ""
+        }]"#;
+        let prs: Vec<Pr> = serde_json::from_str(json).unwrap();
+        assert!(matches!(prs[0].status_check_rollup[0], Check::Unknown));
+        assert!(matches!(
+            prs[0].status_check_rollup[1],
+            Check::StatusContext(_)
+        ));
     }
 
     #[test]

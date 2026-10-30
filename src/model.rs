@@ -78,6 +78,7 @@ pub fn check_state(check: &Check) -> CheckState {
             "PENDING" | "EXPECTED" => CheckState::Pending,
             _ => CheckState::Failing,
         },
+        Check::Unknown => CheckState::Pending,
     }
 }
 
@@ -92,6 +93,7 @@ pub fn classify_checks(mergeable: &str, rollup: &[Check]) -> Checks {
                 &run.started_at,
             ),
             Check::StatusContext(ctx) => (ctx.context.clone(), &ctx.started_at),
+            Check::Unknown => ("(unrecognised check)".to_string(), &None),
         };
         // A missing start time sorts as earliest; on a tie the later entry wins.
         let newer = latest
@@ -128,6 +130,7 @@ fn started_at_of(check: &Check) -> &Option<String> {
     match check {
         Check::CheckRun(run) => &run.started_at,
         Check::StatusContext(ctx) => &ctx.started_at,
+        Check::Unknown => &None,
     }
 }
 
@@ -210,6 +213,24 @@ mod tests {
             state: state.to_string(),
             started_at: started_at.map(str::to_string),
         })
+    }
+
+    #[test]
+    fn an_unknown_check_keeps_the_pr_from_passing() {
+        let checks = classify_checks(
+            "MERGEABLE",
+            &[ctx("ci/legacy", "SUCCESS", None), Check::Unknown],
+        );
+        assert_eq!(checks.state, CheckState::Pending);
+        // It is listed, so the checks pane shows why.
+        assert_eq!(checks.results.len(), 2);
+
+        // On its own it is pending too, not "no checks".
+        let checks = classify_checks("MERGEABLE", &[Check::Unknown]);
+        assert_eq!(checks.state, CheckState::Pending);
+        // A failing check still outranks it.
+        let checks = classify_checks("MERGEABLE", &[Check::Unknown, ctx("a", "FAILURE", None)]);
+        assert_eq!(checks.state, CheckState::Failing);
     }
 
     #[test]
