@@ -1,10 +1,11 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Position, Rect};
+use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
 use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Text};
-use ratatui::widgets::{Block, Paragraph, Row, Table, Wrap};
+use ratatui::widgets::{Block, Clear, Paragraph, Row, Table, Wrap};
 
-use crate::app::{App, Details, Mode};
+use crate::app::{App, Confirm, Details, Mode};
+use crate::gh::PrState;
 use crate::model;
 
 /// The most rows a list fetch error takes above the status bar.
@@ -43,20 +44,32 @@ pub fn view(app: &mut App, frame: &mut Frame) {
             };
             frame.render_widget(Line::from(message), table_area)
         }
-        Mode::List => {
+        // The dialog is drawn over the table.
+        Mode::List | Mode::Confirm(_) => {
             let rows = app.rows.iter().map(|row| {
                 let mark = if app.selected.contains(&row.pr.number) {
                     "[x]"
                 } else {
                     "[ ]"
                 };
-                Row::new([
+                // The checks of a closed or merged PR no longer matter.
+                let checks = match row.pr.state {
+                    PrState::Open => row.checks.state.label(),
+                    PrState::Closed => "· closed",
+                    PrState::Merged => "· merged",
+                };
+                let cells = Row::new([
                     mark.to_string(),
                     format!("#{}", row.pr.number),
-                    row.checks.state.label().to_string(),
+                    checks.to_string(),
                     model::review_label(&row.pr.review_decision).to_string(),
                     row.pr.title.clone(),
-                ])
+                ]);
+                if row.pr.state == PrState::Open {
+                    cells
+                } else {
+                    cells.dim()
+                }
             });
             let widths = [
                 Constraint::Length(3),
@@ -81,10 +94,13 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         let error = Paragraph::new(error).red().wrap(Wrap { trim: false });
         frame.render_widget(error, error_area);
     }
-    let keys = if app.editing {
+    let keys = if let Mode::Confirm(confirm) = &app.mode {
+        confirm_dialog(confirm, app.dry_run, frame, body_area);
+        "←/→ Tab: Choose | Enter: Confirm | Esc: Cancel"
+    } else if app.editing {
         "Enter: Search | Esc: Cancel"
     } else {
-        "/: Search | ↑/↓ j/k: Move | Space: Select | q: Quit"
+        "/: Search | ↑/↓ j/k: Move | Space: Select | Enter: Review | q: Quit"
     };
     let mut parts = Vec::new();
     if app.searching {
@@ -99,6 +115,71 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         Line::from(status).style(Style::new().reversed()),
         status_area,
     );
+}
+
+fn confirm_dialog(confirm: &Confirm, dry_run: bool, frame: &mut Frame, area: Rect) {
+    let mut lines: Vec<Line> = confirm
+        .prs
+        .iter()
+        .map(|pr| {
+            Line::from(format!(
+                "#{:<6} {:<12} {}",
+                pr.number,
+                pr.checks.label(),
+                pr.title
+            ))
+        })
+        .collect();
+    if confirm.prs.is_empty() {
+        lines.push(Line::from("Nothing to review."));
+    }
+    if !confirm.left_out.is_empty() {
+        let numbers: Vec<String> = confirm.left_out.iter().map(|n| format!("#{n}")).collect();
+        lines.push(Line::default());
+        lines.push(
+            Line::from(format!("Left out closed or merged: {}", numbers.join(", "))).yellow(),
+        );
+    }
+    lines.push(Line::default());
+    let mut buttons = Line::default();
+    for (i, choice) in confirm.choices().iter().enumerate() {
+        let label = format!("[ {} ]", choice.label());
+        buttons.push_span(if i == confirm.choice {
+            label.reversed()
+        } else {
+            label.into()
+        });
+        buttons.push_span("  ");
+    }
+    lines.push(buttons.centered());
+
+    let mut title = format!("Review {}", count(confirm.prs.len(), "PR"));
+    if dry_run {
+        title.push_str(" [DRY RUN]");
+    }
+    let width = area.width.saturating_sub(4).min(90);
+    let height = (lines.len() as u16 + 2).min(area.height);
+    let [area] = Layout::horizontal([Constraint::Length(width)])
+        .flex(Flex::Center)
+        .areas(area);
+    let [area] = Layout::vertical([Constraint::Length(height)])
+        .flex(Flex::Center)
+        .areas(area);
+    let block = Block::bordered()
+        .border_style(Style::new().cyan())
+        .title(Line::from(title).bold());
+    let dialog = Paragraph::new(lines).block(block);
+    frame.render_widget(Clear, area);
+    frame.render_widget(dialog, area);
+}
+
+/// `1 PR`, `3 PRs`.
+fn count(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("{n} {noun}")
+    } else {
+        format!("{n} {noun}s")
+    }
 }
 
 /// About how many rows `text` takes when wrapped to `width`, at most [`MAX_ERROR_ROWS`].

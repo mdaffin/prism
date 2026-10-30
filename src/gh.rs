@@ -113,8 +113,6 @@ fn render_command(args: &[&str]) -> String {
 pub struct Pr {
     pub number: u64,
     pub title: String,
-    // Read by the confirm dialog (M1 step 11).
-    #[allow(dead_code)]
     pub state: PrState,
     pub status_check_rollup: Vec<Check>,
     pub mergeable: String,
