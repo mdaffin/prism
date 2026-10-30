@@ -14,8 +14,8 @@ const MAX_ERROR_ROWS: u16 = 5;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 pub fn view(app: &mut App, frame: &mut Frame) {
-    let error_rows = app
-        .error
+    let error = app.error_text();
+    let error_rows = error
         .as_deref()
         .map_or(0, |error| wrapped_rows(error, frame.area().width));
     let [title_area, body_area, error_area, status_area] = Layout::vertical([
@@ -51,7 +51,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     match app.mode {
         Mode::Loading => frame.render_widget(Line::from("Loading…"), table_area),
         Mode::List if app.rows.is_empty() => {
-            let message = if app.error.is_some() {
+            let message = if app.error_text().is_some() {
                 "No PRs loaded."
             } else {
                 "No matching PRs found."
@@ -109,7 +109,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     description(app, frame, description_area);
     diff(app, frame, diff_area);
 
-    if let Some(error) = app.error.as_deref() {
+    if let Some(error) = error {
         let error = Paragraph::new(error).red().wrap(Wrap { trim: false });
         frame.render_widget(error, error_area);
     }

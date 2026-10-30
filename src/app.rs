@@ -20,6 +20,9 @@ const MAX_DIFF_FETCHES: usize = 4;
 /// The most approvals to run at once.
 const MAX_APPROVALS: usize = 4;
 
+/// The most failed row refreshes to list above the status bar.
+const MAX_REFRESH_ERRORS: usize = 3;
+
 /// The most row refreshes to run at once.
 const MAX_REFRESHES: usize = 4;
 
@@ -56,8 +59,10 @@ pub struct App {
     pub page: u16,
     /// The numbers of the PRs marked with Space.
     pub selected: HashSet<u64>,
-    /// Why the last search or row refreshes failed, shown above the status bar.
+    /// Why the last search failed, shown above the status bar.
     pub error: Option<String>,
+    /// One line for each row refresh that failed, shown after `error`.
+    refresh_errors: Vec<String>,
     /// Details by PR number. An entry is added when its fetch starts, so a PR is fetched once.
     pub details: HashMap<u64, Fetch<Details>>,
     /// Diffs by PR number. An entry is added when its fetch starts, so a PR is fetched once.
@@ -318,6 +323,7 @@ impl App {
             comment_scroll: 0,
             page: 1,
             error: None,
+            refresh_errors: Vec::new(),
             selected: HashSet::new(),
             details: HashMap::new(),
             diffs: HashMap::new(),
@@ -429,6 +435,23 @@ impl App {
             .collect()
     }
 
+    /// What to show above the status bar: why the search failed, then the row refreshes that
+    /// failed. Only the first few of those are listed, as the space for them is small.
+    pub fn error_text(&self) -> Option<String> {
+        let mut lines: Vec<String> = self.error.iter().cloned().collect();
+        lines.extend(self.refresh_errors.iter().take(MAX_REFRESH_ERRORS).cloned());
+        let more = self.refresh_errors.len().saturating_sub(MAX_REFRESH_ERRORS);
+        if more > 0 {
+            lines.push(format!("… and {more} more refreshes failed"));
+        }
+        (!lines.is_empty()).then(|| lines.join("\n"))
+    }
+
+    fn clear_errors(&mut self) {
+        self.error = None;
+        self.refresh_errors.clear();
+    }
+
     pub fn highlighted(&self) -> Option<&Row> {
         self.table.selected().and_then(|i| self.rows.get(i))
     }
@@ -453,10 +476,7 @@ impl App {
                     // The row keeps its old state, so say why it didn't change.
                     Err(e) => {
                         let message = format!("Refreshing #{number} failed: {e}");
-                        self.error = Some(match self.error.take() {
-                            Some(error) => format!("{error}\n{message}"),
-                            None => message,
-                        });
+                        self.refresh_errors.push(one_line(&message));
                     }
                 }
             }
@@ -504,7 +524,7 @@ impl App {
                 // Give failed details another chance with the new results.
                 forget_failed(&mut self.details);
                 forget_failed(&mut self.diffs);
-                self.error = None;
+                self.clear_errors();
                 self.searching = false;
                 self.loaded();
             }
@@ -644,7 +664,7 @@ impl App {
                 self.editing = false;
                 self.submitted_query = self.query.value().to_string();
                 self.query_to_fetch = Some(self.submitted_query.clone());
-                self.error = None;
+                self.clear_errors();
             }
             KeyCode::Esc => {
                 self.editing = false;
@@ -715,7 +735,7 @@ impl App {
             Choice::Cancel => return,
         };
         // Errors from earlier no longer apply.
-        self.error = None;
+        self.clear_errors();
         let items = confirm
             .prs
             .into_iter()
@@ -1262,10 +1282,41 @@ mod tests {
         assert_eq!(app.table.selected(), Some(1));
         // Failed refreshes are reported, and the rows keep their old state.
         assert_eq!(
-            app.error.as_deref(),
+            app.error_text().as_deref(),
             Some("Refreshing #2 failed: failed\nRefreshing #3 failed: timed out")
         );
         assert_eq!(app.rows[1].pr.state, PrState::Open);
+    }
+
+    #[test]
+    fn refresh_failures_are_listed_few_at_a_time_after_a_search_failure() {
+        let mut app = app_with_rows(5);
+        app.to_refresh = (1..=5).collect();
+        app.refreshes_to_run();
+        app.update(Msg::PrRefreshed(1, Err(color_eyre::eyre::eyre!("a\nb"))));
+        for number in 2..=5 {
+            app.update(Msg::PrRefreshed(
+                number,
+                Err(color_eyre::eyre::eyre!("failed")),
+            ));
+        }
+        // A failed search leaves the refresh failures, which are about the rows still shown.
+        app.error = Some("Search failed: bad query".to_string());
+        let text = app.error_text().unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 5);
+        assert_eq!(lines[0], "Search failed: bad query");
+        // Each failure takes one line, however many lines the error has.
+        assert_eq!(lines[1], "Refreshing #1 failed: a b");
+        assert_eq!(lines[4], "… and 2 more refreshes failed");
+
+        // New results make them all stale.
+        let (id, _) = {
+            app.query_to_fetch = Some(String::new());
+            app.list_to_fetch().unwrap()
+        };
+        app.update(Msg::PrsLoaded(id, Ok(prs(1..=2))));
+        assert_eq!(app.error_text(), None);
     }
 
     #[test]
