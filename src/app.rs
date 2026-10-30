@@ -38,7 +38,7 @@ pub struct App {
     pub table: TableState,
     /// The numbers of the PRs marked with Space.
     pub selected: HashSet<u64>,
-    /// Why the last list fetch failed.
+    /// Why the last search or row refreshes failed, shown above the status bar.
     pub error: Option<String>,
     /// Details by PR number. An entry is added when its fetch starts, so a PR is fetched once.
     pub details: HashMap<u64, Details>,
@@ -287,12 +287,23 @@ impl App {
             Msg::Approved(number, result) => self.approved(number, result),
             Msg::PrRefreshed(number, result) => {
                 self.refreshing.remove(&number);
-                // On failure the row keeps its old state.
-                if let Ok(pr) = result
-                    && let Some(row) = self.rows.iter_mut().find(|row| row.pr.number == number)
-                {
-                    row.checks = model::classify_checks(&pr.mergeable, &pr.status_check_rollup);
-                    row.pr = pr;
+                match result {
+                    Ok(pr) => {
+                        if let Some(row) = self.rows.iter_mut().find(|row| row.pr.number == number)
+                        {
+                            row.checks =
+                                model::classify_checks(&pr.mergeable, &pr.status_check_rollup);
+                            row.pr = pr;
+                        }
+                    }
+                    // The row keeps its old state, so say why it didn't change.
+                    Err(e) => {
+                        let message = format!("Refreshing #{number} failed: {e}");
+                        self.error = Some(match self.error.take() {
+                            Some(error) => format!("{error}\n{message}"),
+                            None => message,
+                        });
+                    }
                 }
             }
             Msg::DetailsLoaded(number, Err(e)) => {
@@ -306,7 +317,7 @@ impl App {
             Msg::PrsLoaded(id, _) if id != self.fetch_id => {}
             Msg::PrsLoaded(_, Err(e)) => {
                 // The previous results stay.
-                self.error = Some(e.to_string());
+                self.error = Some(format!("Search failed: {e}"));
                 self.searching = false;
                 self.loaded();
             }
@@ -473,6 +484,8 @@ impl App {
         };
         match choice {
             Choice::Approve => {
+                // Errors from earlier no longer apply.
+                self.error = None;
                 let items = confirm
                     .prs
                     .into_iter()
@@ -838,13 +851,22 @@ mod tests {
         app.update(Msg::PrRefreshed(2, Err(color_eyre::eyre::eyre!("failed"))));
         app.update(Msg::PrRefreshed(9, Ok(pr(9, "OPEN"))));
         assert!(app.refreshing());
-        app.update(Msg::PrRefreshed(3, Ok(pr(3, "OPEN"))));
+        app.update(Msg::PrRefreshed(
+            3,
+            Err(color_eyre::eyre::eyre!("timed out")),
+        ));
         assert!(!app.refreshing());
 
         assert_eq!(numbers(&app), [1, 2, 3]);
         assert_eq!(app.rows[0].pr.state, PrState::Merged);
         assert_eq!(app.rows[0].pr.review_decision, "APPROVED");
         assert_eq!(app.table.selected(), Some(1));
+        // Failed refreshes are reported, and the rows keep their old state.
+        assert_eq!(
+            app.error.as_deref(),
+            Some("Refreshing #2 failed: failed\nRefreshing #3 failed: timed out")
+        );
+        assert_eq!(app.rows[1].pr.state, PrState::Open);
     }
 
     #[test]
@@ -868,7 +890,7 @@ mod tests {
             id,
             Err(color_eyre::eyre::eyre!("bad query")),
         ));
-        assert_eq!(app.error.as_deref(), Some("bad query"));
+        assert_eq!(app.error.as_deref(), Some("Search failed: bad query"));
         assert!(!app.searching);
         assert_eq!(numbers(&app), [1, 2, 3]);
         assert_eq!(app.selected, HashSet::from([1]));

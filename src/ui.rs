@@ -14,11 +14,8 @@ const MAX_ERROR_ROWS: u16 = 5;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 pub fn view(app: &mut App, frame: &mut Frame) {
-    let error = app
+    let error_rows = app
         .error
-        .as_ref()
-        .map(|error| format!("Search failed: {error}"));
-    let error_rows = error
         .as_deref()
         .map_or(0, |error| wrapped_rows(error, frame.area().width));
     let [title_area, body_area, error_area, status_area] = Layout::vertical([
@@ -92,7 +89,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     }
     description(app, frame, detail_area);
 
-    if let Some(error) = error {
+    if let Some(error) = app.error.as_deref() {
         let error = Paragraph::new(error).red().wrap(Wrap { trim: false });
         frame.render_widget(error, error_area);
     }
