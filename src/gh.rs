@@ -45,6 +45,14 @@ impl Gh {
         Ok(serde_json::from_slice(&stdout)?)
     }
 
+    /// One PR with the same fields as the list, to refresh its row.
+    pub async fn pr(&self, number: u64) -> Result<Pr> {
+        let number = number.to_string();
+        let args = ["pr", "view", &number, "--json", LIST_FIELDS];
+        let stdout = self.run(&args).await?;
+        Ok(serde_json::from_slice(&stdout)?)
+    }
+
     pub async fn pr_details(&self, number: u64) -> Result<PrDetails> {
         let number = number.to_string();
         let args = ["pr", "view", &number, "--json", DETAIL_FIELDS];

@@ -4,12 +4,14 @@ use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Clear, Paragraph, Row, Table, Wrap};
 
-use crate::app::{App, Confirm, Details, Mode};
+use crate::app::{App, Batch, Confirm, Details, Mode, Summary};
 use crate::gh::PrState;
 use crate::model;
 
 /// The most rows a list fetch error takes above the status bar.
 const MAX_ERROR_ROWS: u16 = 5;
+
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 pub fn view(app: &mut App, frame: &mut Frame) {
     let error = app
@@ -44,8 +46,8 @@ pub fn view(app: &mut App, frame: &mut Frame) {
             };
             frame.render_widget(Line::from(message), table_area)
         }
-        // The dialog is drawn over the table.
-        Mode::List | Mode::Confirm(_) => {
+        // Popups are drawn over the table.
+        Mode::List | Mode::Confirm(_) | Mode::Running(_) | Mode::Results(_) => {
             let rows = app.rows.iter().map(|row| {
                 let mark = if app.selected.contains(&row.pr.number) {
                     "[x]"
@@ -94,17 +96,28 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         let error = Paragraph::new(error).red().wrap(Wrap { trim: false });
         frame.render_widget(error, error_area);
     }
-    let keys = if let Mode::Confirm(confirm) = &app.mode {
-        confirm_dialog(confirm, app.dry_run, frame, body_area);
-        "←/→ Tab: Choose | Enter: Confirm | Esc: Cancel"
-    } else if app.editing {
-        "Enter: Search | Esc: Cancel"
-    } else {
-        "/: Search | ↑/↓ j/k: Move | Space: Select | Enter: Review | q: Quit"
+    let keys = match &app.mode {
+        Mode::Confirm(confirm) => {
+            confirm_dialog(confirm, app.dry_run, frame, body_area);
+            "←/→ Tab: Choose | Enter: Confirm | Esc: Cancel"
+        }
+        Mode::Running(batch) => {
+            running_popup(batch, app.dry_run, spinner(app), frame, body_area);
+            "Ctrl-C: Quit"
+        }
+        Mode::Results(summary) => {
+            results_popup(summary, app.dry_run, frame, body_area);
+            "Enter/Esc: Close"
+        }
+        _ if app.editing => "Enter: Search | Esc: Cancel",
+        _ => "/: Search | ↑/↓ j/k: Move | Space: Select | Enter: Review | q: Quit",
     };
     let mut parts = Vec::new();
     if app.searching {
-        parts.push("Searching…".to_string());
+        parts.push(format!("{} Searching", spinner(app)));
+    }
+    if app.refreshing() {
+        parts.push(format!("{} Refreshing", spinner(app)));
     }
     if !app.selected.is_empty() {
         parts.push(format!("{} selected", app.selected.len()));
@@ -133,14 +146,15 @@ fn confirm_dialog(confirm: &Confirm, dry_run: bool, frame: &mut Frame, area: Rec
     if confirm.prs.is_empty() {
         lines.push(Line::from("Nothing to review."));
     }
+    let mut footer = Vec::new();
     if !confirm.left_out.is_empty() {
         let numbers: Vec<String> = confirm.left_out.iter().map(|n| format!("#{n}")).collect();
-        lines.push(Line::default());
-        lines.push(
+        footer.push(Line::default());
+        footer.push(
             Line::from(format!("Left out closed or merged: {}", numbers.join(", "))).yellow(),
         );
     }
-    lines.push(Line::default());
+    footer.push(Line::default());
     let mut buttons = Line::default();
     for (i, choice) in confirm.choices().iter().enumerate() {
         let label = format!("[ {} ]", choice.label());
@@ -151,14 +165,71 @@ fn confirm_dialog(confirm: &Confirm, dry_run: bool, frame: &mut Frame, area: Rec
         });
         buttons.push_span("  ");
     }
-    lines.push(buttons.centered());
+    footer.push(buttons.centered());
 
-    let mut title = format!("Review {}", count(confirm.prs.len(), "PR"));
+    let title = format!("Review {}", count(confirm.prs.len(), "PR"));
+    // One PR per line: long titles are cut off rather than wrapped.
+    popup(frame, area, title, dry_run, lines, false, footer);
+}
+
+fn running_popup(batch: &Batch, dry_run: bool, spinner: &str, frame: &mut Frame, area: Rect) {
+    let progress = format!("{spinner} {}/{} done", batch.finished(), batch.items.len());
+    let title = format!("Approving {}", count(batch.items.len(), "PR"));
+    let lines = vec![Line::from(progress)];
+    popup(frame, area, title, dry_run, lines, false, Vec::new());
+}
+
+fn results_popup(summary: &Summary, dry_run: bool, frame: &mut Frame, area: Rect) {
+    let mut lines = vec![Line::from(format!(
+        "Approved: {}/{}",
+        summary.approved, summary.total
+    ))];
+    if !summary.failures.is_empty() {
+        lines.push(Line::default());
+        for (number, error) in &summary.failures {
+            lines.push(Line::from(format!("#{number}  ✗ failed: {error}")).red());
+        }
+    }
+    let footer = vec![Line::default(), Line::from("[ OK ]".reversed()).centered()];
+    // Errors can be long, so they wrap.
+    popup(
+        frame,
+        area,
+        "Results".to_string(),
+        dry_run,
+        lines,
+        true,
+        footer,
+    );
+}
+
+/// Draws a bordered popup in the middle of `area`. The `footer` lines, such as buttons, are
+/// pinned to the bottom so they stay visible even when `lines` doesn't fit. Wrapped lines are
+/// sized by estimate, so with `wrap` the popup may cut off the end of `lines`.
+fn popup(
+    frame: &mut Frame,
+    area: Rect,
+    mut title: String,
+    dry_run: bool,
+    lines: Vec<Line>,
+    wrap: bool,
+    footer: Vec<Line>,
+) {
     if dry_run {
         title.push_str(" [DRY RUN]");
     }
     let width = area.width.saturating_sub(4).min(90);
-    let height = (lines.len() as u16 + 2).min(area.height);
+    let inner_width = usize::from(width.saturating_sub(2).max(1));
+    let rows: usize = if wrap {
+        lines
+            .iter()
+            .map(|line| line.width().div_ceil(inner_width).max(1))
+            .sum()
+    } else {
+        lines.len()
+    };
+    let footer_rows = footer.len() as u16;
+    let height = (rows as u16 + footer_rows + 2).min(area.height);
     let [area] = Layout::horizontal([Constraint::Length(width)])
         .flex(Flex::Center)
         .areas(area);
@@ -168,9 +239,22 @@ fn confirm_dialog(confirm: &Confirm, dry_run: bool, frame: &mut Frame, area: Rec
     let block = Block::bordered()
         .border_style(Style::new().cyan())
         .title(Line::from(title).bold());
-    let dialog = Paragraph::new(lines).block(block);
+    let [content_area, footer_area] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_rows)])
+            .areas(block.inner(area));
+    let mut content = Paragraph::new(lines);
+    if wrap {
+        content = content.wrap(Wrap { trim: false });
+    }
     frame.render_widget(Clear, area);
-    frame.render_widget(dialog, area);
+    frame.render_widget(block, area);
+    frame.render_widget(content, content_area);
+    frame.render_widget(Paragraph::new(footer), footer_area);
+}
+
+/// The spinner's current frame.
+fn spinner(app: &App) -> &'static str {
+    SPINNER[app.spinner % SPINNER.len()]
 }
 
 /// `1 PR`, `3 PRs`.
@@ -197,7 +281,7 @@ fn search(app: &App, frame: &mut Frame, area: Rect) {
     let scroll = app.query.visual_scroll(usize::from(width));
     let mut title = Line::from("Search");
     if app.searching {
-        title.push_span(" · searching…".yellow().bold());
+        title.push_span(format!(" · {} searching", spinner(app)).yellow().bold());
     }
     let mut block = Block::bordered().title(title);
     if app.editing {

@@ -5,12 +5,15 @@ mod model;
 mod query;
 mod ui;
 
+use std::time::Duration;
+
 use clap::Parser;
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, bail};
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
 use ratatui::DefaultTerminal;
 use tokio::sync::mpsc;
+use tokio::time::MissedTickBehavior;
 
 use app::{App, Msg};
 
@@ -36,8 +39,11 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
     let gh = gh::Gh::new(args.repo);
 
     let mut events = EventStream::new();
+    let mut ticker = tokio::time::interval(Duration::from_millis(100));
+    // The ticker is only polled while animating; don't catch up on the ticks missed between.
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
     while !app.should_quit {
-        // Start any fetches the last update asked for.
+        // Start any work the last update asked for.
         if let Some((id, query)) = app.list_to_fetch() {
             let (gh, tx) = (gh.clone(), tx.clone());
             tokio::spawn(async move {
@@ -52,6 +58,20 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
                 let _ = tx.send(Msg::DetailsLoaded(number, details));
             });
         }
+        for number in app.refreshes_to_run() {
+            let (gh, tx) = (gh.clone(), tx.clone());
+            tokio::spawn(async move {
+                let pr = gh.pr(number).await;
+                let _ = tx.send(Msg::PrRefreshed(number, pr));
+            });
+        }
+        for number in app.approvals_to_run() {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let result = approve(number, args.dry_run).await;
+                let _ = tx.send(Msg::Approved(number, result));
+            });
+        }
 
         terminal.draw(|frame| ui::view(&mut app, frame))?;
         let msg = tokio::select! {
@@ -61,9 +81,20 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
                 _ => continue,
             },
             Some(msg) = rx.recv() => msg,
+            _ = ticker.tick(), if app.animating() => Msg::Tick,
             else => break,
         };
         app.update(msg);
     }
     Ok(())
+}
+
+/// Approves one PR. A dry run waits a moment and succeeds.
+async fn approve(_number: u64, dry_run: bool) -> Result<()> {
+    if dry_run {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        return Ok(());
+    }
+    // Kept from touching real PRs until then.
+    bail!("real approvals come in M1 step 13")
 }

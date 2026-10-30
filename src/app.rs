@@ -12,6 +12,12 @@ use crate::model::{self, CheckState, Checks};
 /// The most detail fetches to run at once.
 const MAX_DETAIL_FETCHES: usize = 4;
 
+/// The most approvals to run at once.
+const MAX_APPROVALS: usize = 4;
+
+/// The most row refreshes to run at once.
+const MAX_REFRESHES: usize = 4;
+
 pub struct App {
     pub title: String,
     pub dry_run: bool,
@@ -36,6 +42,13 @@ pub struct App {
     pub error: Option<String>,
     /// Details by PR number. An entry is added when its fetch starts, so a PR is fetched once.
     pub details: HashMap<u64, Details>,
+    /// Rows to fetch again after a batch, so they show their new state without replacing the
+    /// list.
+    to_refresh: Vec<u64>,
+    /// The PRs whose rows are being refreshed.
+    refreshing: HashSet<u64>,
+    /// Advances on each tick while something is animating.
+    pub spinner: usize,
     pub should_quit: bool,
 }
 
@@ -45,6 +58,45 @@ pub enum Mode {
     List,
     /// Asking what to do with the selected PRs.
     Confirm(Confirm),
+    /// Approving PRs.
+    Running(Batch),
+    /// Showing how a batch went.
+    Results(Summary),
+}
+
+pub struct Batch {
+    pub items: Vec<BatchItem>,
+}
+
+pub struct BatchItem {
+    pub pr: ConfirmPr,
+    pub status: ItemStatus,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ItemStatus {
+    Pending,
+    Working,
+    Done,
+    /// The error, on one line.
+    Failed(String),
+}
+
+impl Batch {
+    pub fn finished(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| matches!(item.status, ItemStatus::Done | ItemStatus::Failed(_)))
+            .count()
+    }
+}
+
+#[derive(Debug)]
+pub struct Summary {
+    pub approved: usize,
+    pub total: usize,
+    /// PR numbers and their errors, on one line each.
+    pub failures: Vec<(u64, String)>,
 }
 
 /// The confirm dialog. It keeps its own copy of the PRs, so a list that loads while it is open
@@ -115,6 +167,12 @@ pub enum Msg {
     /// The result of the list fetch with this id.
     PrsLoaded(u64, Result<Vec<Pr>>),
     DetailsLoaded(u64, Result<PrDetails>),
+    /// The result of approving this PR.
+    Approved(u64, Result<()>),
+    /// The result of fetching this PR again to refresh its row.
+    PrRefreshed(u64, Result<Pr>),
+    /// Time to advance the spinner.
+    Tick,
 }
 
 impl App {
@@ -134,8 +192,55 @@ impl App {
             error: None,
             selected: HashSet::new(),
             details: HashMap::new(),
+            to_refresh: Vec::new(),
+            refreshing: HashSet::new(),
+            spinner: 0,
             should_quit: false,
         }
+    }
+
+    /// Whether the spinner needs ticks.
+    pub fn animating(&self) -> bool {
+        self.searching || self.refreshing() || matches!(self.mode, Mode::Running(_))
+    }
+
+    /// Whether any rows are being refreshed or are waiting to be.
+    pub fn refreshing(&self) -> bool {
+        !self.refreshing.is_empty() || !self.to_refresh.is_empty()
+    }
+
+    /// Rows to refresh now, up to [`MAX_REFRESHES`] at once. The caller must start them.
+    pub fn refreshes_to_run(&mut self) -> Vec<u64> {
+        let free = MAX_REFRESHES.saturating_sub(self.refreshing.len());
+        let numbers: Vec<u64> = self
+            .to_refresh
+            .drain(..free.min(self.to_refresh.len()))
+            .collect();
+        self.refreshing.extend(&numbers);
+        numbers
+    }
+
+    /// Approvals that can start now, up to [`MAX_APPROVALS`] at once. Marks them as working,
+    /// so the caller must start them.
+    pub fn approvals_to_run(&mut self) -> Vec<u64> {
+        let Mode::Running(batch) = &mut self.mode else {
+            return Vec::new();
+        };
+        let working = batch
+            .items
+            .iter()
+            .filter(|item| item.status == ItemStatus::Working)
+            .count();
+        batch
+            .items
+            .iter_mut()
+            .filter(|item| item.status == ItemStatus::Pending)
+            .take(MAX_APPROVALS.saturating_sub(working))
+            .map(|item| {
+                item.status = ItemStatus::Working;
+                item.pr.number
+            })
+            .collect()
     }
 
     /// A submitted query and the id of its fetch, which the caller must start.
@@ -178,6 +283,18 @@ impl App {
     pub fn update(&mut self, msg: Msg) {
         match msg {
             Msg::Key(key) => self.on_key(key),
+            Msg::Tick => self.spinner = self.spinner.wrapping_add(1),
+            Msg::Approved(number, result) => self.approved(number, result),
+            Msg::PrRefreshed(number, result) => {
+                self.refreshing.remove(&number);
+                // On failure the row keeps its old state.
+                if let Ok(pr) = result
+                    && let Some(row) = self.rows.iter_mut().find(|row| row.pr.number == number)
+                {
+                    row.checks = model::classify_checks(&pr.mergeable, &pr.status_check_rollup);
+                    row.pr = pr;
+                }
+            }
             Msg::DetailsLoaded(number, Err(e)) => {
                 self.details.insert(number, Details::Failed(e.to_string()));
             }
@@ -216,6 +333,47 @@ impl App {
         }
     }
 
+    /// Records an approval's result. After the last one, shows the summary, clears the selection
+    /// and refreshes the batch's rows so they show their new review states.
+    fn approved(&mut self, number: u64, result: Result<()>) {
+        let Mode::Running(batch) = &mut self.mode else {
+            return;
+        };
+        if let Some(item) = batch.items.iter_mut().find(|item| item.pr.number == number) {
+            item.status = match result {
+                Ok(()) => ItemStatus::Done,
+                Err(e) => ItemStatus::Failed(one_line(&e.to_string())),
+            };
+        }
+        if batch.finished() < batch.items.len() {
+            return;
+        }
+        let failures = batch
+            .items
+            .iter()
+            .filter_map(|item| match &item.status {
+                ItemStatus::Failed(e) => Some((item.pr.number, e.clone())),
+                _ => None,
+            })
+            .collect();
+        let total = batch.items.len();
+        let approved = batch
+            .items
+            .iter()
+            .filter(|item| item.status == ItemStatus::Done)
+            .count();
+        // Only the batch's rows are refreshed. Running the search again could reorder the list
+        // or drop PRs the user still means to work through.
+        self.to_refresh
+            .extend(batch.items.iter().map(|item| item.pr.number));
+        self.mode = Mode::Results(Summary {
+            approved,
+            total,
+            failures,
+        });
+        self.selected.clear();
+    }
+
     /// Leaves `Loading` once a list fetch finishes, without closing an open dialog.
     fn loaded(&mut self) {
         if matches!(self.mode, Mode::Loading) {
@@ -231,6 +389,12 @@ impl App {
         } else if let Mode::Confirm(confirm) = &mut self.mode {
             if let Some(choice) = on_confirm_key(confirm, key) {
                 self.choose(choice);
+            }
+        } else if matches!(self.mode, Mode::Running(_)) {
+            // Cancelling a batch comes in M4 step 3.
+        } else if matches!(self.mode, Mode::Results(_)) {
+            if matches!(key.code, KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q')) {
+                self.mode = Mode::List;
             }
         } else if self.editing {
             self.on_search_key(key);
@@ -304,11 +468,23 @@ impl App {
     }
 
     fn choose(&mut self, choice: Choice) {
+        let Mode::Confirm(confirm) = std::mem::replace(&mut self.mode, Mode::List) else {
+            return;
+        };
         match choice {
-            // The actions come in M1 steps 12 to 14.
-            Choice::Approve | Choice::ApproveAndMerge | Choice::Cancel => {
-                self.mode = Mode::List;
+            Choice::Approve => {
+                let items = confirm
+                    .prs
+                    .into_iter()
+                    .map(|pr| BatchItem {
+                        pr,
+                        status: ItemStatus::Pending,
+                    })
+                    .collect();
+                self.mode = Mode::Running(Batch { items });
             }
+            // Merging comes in M1 step 14.
+            Choice::ApproveAndMerge | Choice::Cancel => {}
         }
     }
 
@@ -327,6 +503,11 @@ impl App {
                 .select(Some(current.saturating_add_signed(by).min(last)));
         }
     }
+}
+
+/// Joins the lines of `text` with spaces, so it fits in one row.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Moves between the dialog's choices, and returns the choice made, if any.
@@ -575,6 +756,105 @@ mod tests {
         key(&mut app, KeyCode::Enter);
         app.update(Msg::PrsLoaded(id, Ok(prs([7]))));
         assert_eq!(confirm_numbers(&app), [1]);
+    }
+
+    /// Selects the first `count` rows and chooses Approve.
+    fn start_approving(app: &mut App, count: usize) {
+        for _ in 0..count {
+            press(app, " j");
+        }
+        key(app, KeyCode::Enter);
+        key(app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Running(_)));
+    }
+
+    fn approve(app: &mut App, number: u64, result: Result<()>) {
+        app.update(Msg::Approved(number, result));
+    }
+
+    #[test]
+    fn approvals_run_at_most_four_at_once() {
+        let mut app = app_with_rows(6);
+        start_approving(&mut app, 6);
+        assert_eq!(app.approvals_to_run(), [1, 2, 3, 4]);
+        assert!(app.approvals_to_run().is_empty());
+        approve(&mut app, 2, Ok(()));
+        assert_eq!(app.approvals_to_run(), [5]);
+        approve(&mut app, 1, Ok(()));
+        approve(&mut app, 3, Ok(()));
+        assert_eq!(app.approvals_to_run(), [6]);
+        assert!(app.approvals_to_run().is_empty());
+    }
+
+    #[test]
+    fn keys_are_ignored_while_approving() {
+        let mut app = app_with_rows(2);
+        start_approving(&mut app, 1);
+        for code in [KeyCode::Esc, KeyCode::Char('q'), KeyCode::Enter] {
+            key(&mut app, code);
+        }
+        assert!(matches!(app.mode, Mode::Running(_)));
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn the_last_approval_shows_results_and_refreshes_the_batch() {
+        let mut app = app_with_rows(4);
+        start_approving(&mut app, 3);
+        app.approvals_to_run();
+        approve(&mut app, 1, Ok(()));
+        approve(&mut app, 3, Err(color_eyre::eyre::eyre!("no\npermission")));
+        assert!(matches!(app.mode, Mode::Running(_)));
+        assert!(app.refreshes_to_run().is_empty());
+
+        approve(&mut app, 2, Ok(()));
+        let Mode::Results(summary) = &app.mode else {
+            panic!("the results aren't shown");
+        };
+        assert_eq!((summary.approved, summary.total), (2, 3));
+        assert_eq!(summary.failures, [(3, "no permission".to_string())]);
+        assert!(app.selected.is_empty());
+        // Only the batch's rows are fetched again, not the whole search.
+        assert_eq!(app.list_to_fetch(), None);
+        assert_eq!(app.refreshes_to_run(), [1, 2, 3]);
+
+        key(&mut app, KeyCode::Char('q'));
+        assert!(matches!(app.mode, Mode::List));
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn refreshed_rows_update_in_place() {
+        let mut app = app_with_rows(3);
+        app.table.select(Some(1));
+        app.to_refresh = vec![1, 2, 3];
+        assert_eq!(app.refreshes_to_run(), [1, 2, 3]);
+        assert!(app.refreshing());
+
+        // A merged PR would sort last, but the rows keep their order.
+        let mut merged = pr(1, "MERGED");
+        merged.review_decision = "APPROVED".to_string();
+        app.update(Msg::PrRefreshed(1, Ok(merged)));
+        app.update(Msg::PrRefreshed(2, Err(color_eyre::eyre::eyre!("failed"))));
+        app.update(Msg::PrRefreshed(9, Ok(pr(9, "OPEN"))));
+        assert!(app.refreshing());
+        app.update(Msg::PrRefreshed(3, Ok(pr(3, "OPEN"))));
+        assert!(!app.refreshing());
+
+        assert_eq!(numbers(&app), [1, 2, 3]);
+        assert_eq!(app.rows[0].pr.state, PrState::Merged);
+        assert_eq!(app.rows[0].pr.review_decision, "APPROVED");
+        assert_eq!(app.table.selected(), Some(1));
+    }
+
+    #[test]
+    fn refreshes_run_at_most_four_at_once() {
+        let mut app = app_with_rows(6);
+        app.to_refresh = (1..=6).collect();
+        assert_eq!(app.refreshes_to_run(), [1, 2, 3, 4]);
+        assert!(app.refreshes_to_run().is_empty());
+        app.update(Msg::PrRefreshed(1, Ok(pr(1, "OPEN"))));
+        assert_eq!(app.refreshes_to_run(), [5]);
     }
 
     #[test]
