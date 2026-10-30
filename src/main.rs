@@ -1,4 +1,5 @@
 mod app;
+mod batch;
 mod cli;
 mod gh;
 mod keys;

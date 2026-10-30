@@ -4,7 +4,8 @@ use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap};
 
-use crate::app::{App, Batch, Confirm, ConfirmOpen, Details, Fetch, Mode, Pane, Summary};
+use crate::app::{App, ConfirmOpen, Details, Fetch, Mode, Pane};
+use crate::batch::{Batch, Confirm, Summary};
 use crate::gh::PrState;
 use crate::keys;
 use crate::model::{self, CheckState};
