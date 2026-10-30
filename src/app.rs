@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
+use ansi_to_tui::IntoText;
 use color_eyre::eyre::Result;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-use ansi_to_tui::IntoText;
 use ratatui::text::Text;
 use ratatui::widgets::TableState;
 use tui_input::Input;
@@ -41,6 +41,14 @@ pub struct App {
     pub rows: Vec<Row>,
     /// The highlighted row.
     pub table: TableState,
+    /// The pane that Up/Down and PgUp/PgDn act on.
+    pub focus: Pane,
+    /// Rows scrolled off the top of the description and diff panes. They go back to the top
+    /// when the highlight moves. The view clamps them to the content it draws.
+    pub description_scroll: u16,
+    pub diff_scroll: u16,
+    /// The rows a PgUp/PgDn moves in the focused pane, set by the view as it draws.
+    pub page: u16,
     /// The numbers of the PRs marked with Space.
     pub selected: HashSet<u64>,
     /// Why the last search or row refreshes failed, shown above the status bar.
@@ -57,6 +65,32 @@ pub struct App {
     /// Advances on each tick while something is animating.
     pub spinner: usize,
     pub should_quit: bool,
+}
+
+/// The panes that can have focus. Tab cycles through them in this order.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Pane {
+    Table,
+    Description,
+    Diff,
+}
+
+impl Pane {
+    fn next(self) -> Self {
+        match self {
+            Pane::Table => Pane::Description,
+            Pane::Description => Pane::Diff,
+            Pane::Diff => Pane::Table,
+        }
+    }
+
+    fn previous(self) -> Self {
+        match self {
+            Pane::Table => Pane::Diff,
+            Pane::Description => Pane::Table,
+            Pane::Diff => Pane::Description,
+        }
+    }
 }
 
 pub enum Mode {
@@ -246,6 +280,10 @@ impl App {
             searching: false,
             rows: Vec::new(),
             table: TableState::default(),
+            focus: Pane::Table,
+            description_scroll: 0,
+            diff_scroll: 0,
+            page: 1,
             error: None,
             selected: HashSet::new(),
             details: HashMap::new(),
@@ -444,6 +482,7 @@ impl App {
                 // Open PRs first, passing first; closed and merged PRs can't be acted on.
                 rows.sort_by_key(|row| (row.pr.state != PrState::Open, row.checks.state.rank()));
                 self.table.select((!rows.is_empty()).then_some(0));
+                self.reset_scroll();
                 self.rows = rows;
                 self.selected.clear();
                 // Give failed details another chance with the new results.
@@ -607,8 +646,12 @@ impl App {
         match key.code {
             KeyCode::Char('/') => self.editing = true,
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
-            KeyCode::Down | KeyCode::Char('j') => self.move_highlight(1),
-            KeyCode::Up | KeyCode::Char('k') => self.move_highlight(-1),
+            KeyCode::Tab => self.focus = self.focus.next(),
+            KeyCode::BackTab => self.focus = self.focus.previous(),
+            KeyCode::Down | KeyCode::Char('j') => self.move_focused(1),
+            KeyCode::Up | KeyCode::Char('k') => self.move_focused(-1),
+            KeyCode::PageDown => self.move_focused(self.page as isize),
+            KeyCode::PageUp => self.move_focused(-(self.page as isize)),
             KeyCode::Char(' ') => self.toggle_selected(),
             KeyCode::Enter => self.open_confirm(),
             _ => {}
@@ -679,13 +722,39 @@ impl App {
         }
     }
 
+    /// Moves the table's highlight, or scrolls the focused pane, by `by` rows.
+    fn move_focused(&mut self, by: isize) {
+        match self.focus {
+            Pane::Table => self.move_highlight(by),
+            Pane::Description => {
+                self.description_scroll =
+                    self.description_scroll.saturating_add_signed(clamp_i16(by));
+            }
+            Pane::Diff => {
+                self.diff_scroll = self.diff_scroll.saturating_add_signed(clamp_i16(by));
+            }
+        }
+    }
+
     fn move_highlight(&mut self, by: isize) {
         if let Some(current) = self.table.selected() {
             let last = self.rows.len().saturating_sub(1);
-            self.table
-                .select(Some(current.saturating_add_signed(by).min(last)));
+            let new = current.saturating_add_signed(by).min(last);
+            if new != current {
+                self.table.select(Some(new));
+                self.reset_scroll();
+            }
         }
     }
+
+    fn reset_scroll(&mut self) {
+        self.description_scroll = 0;
+        self.diff_scroll = 0;
+    }
+}
+
+fn clamp_i16(n: isize) -> i16 {
+    n.clamp(i16::MIN.into(), i16::MAX.into()) as i16
 }
 
 /// Whether a PR with these checks is merged with auto-merge, so GitHub merges it once they
@@ -1253,7 +1322,10 @@ mod tests {
     #[test]
     fn diff_colours_become_styles() {
         let mut app = app_with_rows(1);
-        app.update(Msg::DiffLoaded(1, Ok("\x1b[32m+added\x1b[m\n ctx".to_string())));
+        app.update(Msg::DiffLoaded(
+            1,
+            Ok("\x1b[32m+added\x1b[m\n ctx".to_string()),
+        ));
         let Diff::Loaded(text) = &app.diffs[&1] else {
             panic!("diff should be loaded");
         };
@@ -1262,6 +1334,65 @@ mod tests {
             text.lines[0].spans[0].style.fg,
             Some(ratatui::style::Color::Green)
         );
+    }
+
+    #[test]
+    fn tab_cycles_focus_and_arrows_act_on_the_focused_pane() {
+        let mut app = app_with_rows(3);
+        app.page = 5;
+        assert!(app.focus == Pane::Table);
+
+        // The table moves its highlight; a page is clamped to the last row.
+        key(&mut app, KeyCode::Down);
+        assert_eq!(app.table.selected(), Some(1));
+        key(&mut app, KeyCode::PageDown);
+        assert_eq!(app.table.selected(), Some(2));
+
+        key(&mut app, KeyCode::Tab);
+        assert!(app.focus == Pane::Description);
+        press(&mut app, "jj");
+        key(&mut app, KeyCode::PageDown);
+        assert_eq!(app.description_scroll, 7);
+        key(&mut app, KeyCode::PageUp);
+        key(&mut app, KeyCode::Up);
+        assert_eq!(app.description_scroll, 1);
+        // The highlight stayed where it was, and the diff didn't scroll.
+        assert_eq!(app.table.selected(), Some(2));
+        assert_eq!(app.diff_scroll, 0);
+        key(&mut app, KeyCode::PageUp);
+        assert_eq!(app.description_scroll, 0);
+
+        key(&mut app, KeyCode::Tab);
+        assert!(app.focus == Pane::Diff);
+        press(&mut app, "k");
+        key(&mut app, KeyCode::Down);
+        assert_eq!(app.diff_scroll, 1);
+
+        key(&mut app, KeyCode::Tab);
+        assert!(app.focus == Pane::Table);
+        key(&mut app, KeyCode::BackTab);
+        assert!(app.focus == Pane::Diff);
+    }
+
+    #[test]
+    fn scroll_goes_back_to_the_top_when_the_highlight_moves() {
+        let mut app = app_with_rows(3);
+        key(&mut app, KeyCode::Tab);
+        press(&mut app, "jjj");
+        key(&mut app, KeyCode::Tab);
+        press(&mut app, "jj");
+        key(&mut app, KeyCode::Tab);
+        key(&mut app, KeyCode::Down);
+        assert_eq!((app.description_scroll, app.diff_scroll), (0, 0));
+
+        // A highlight that can't move, at the last row, leaves the scroll alone.
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Tab);
+        press(&mut app, "j");
+        key(&mut app, KeyCode::Tab);
+        key(&mut app, KeyCode::Tab);
+        key(&mut app, KeyCode::Down);
+        assert_eq!(app.description_scroll, 1);
     }
 
     #[test]

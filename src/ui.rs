@@ -4,7 +4,7 @@ use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Clear, Paragraph, Row, Table, Wrap};
 
-use crate::app::{App, Batch, Confirm, Details, Diff, Mode, Summary};
+use crate::app::{App, Batch, Confirm, Details, Diff, Mode, Pane, Summary};
 use crate::gh::PrState;
 use crate::model;
 
@@ -32,6 +32,15 @@ pub fn view(app: &mut App, frame: &mut Frame) {
 
     frame.render_widget(Line::from(app.title.as_str()).bold().reversed(), title_area);
     search(app, frame, search_area);
+
+    let table_block = pane_block("Pull requests", app.focus == Pane::Table);
+    let table_inner = table_block.inner(table_area);
+    frame.render_widget(table_block, table_area);
+    let table_area = table_inner;
+    if app.focus == Pane::Table {
+        // One row of the table is its header.
+        app.page = table_area.height.saturating_sub(2).max(1);
+    }
 
     match app.mode {
         Mode::Loading => frame.render_widget(Line::from("Loading…"), table_area),
@@ -110,7 +119,9 @@ pub fn view(app: &mut App, frame: &mut Frame) {
             "Enter/Esc: Close"
         }
         _ if app.editing => "Enter: Search | Esc: Cancel",
-        _ => "/: Search | ↑/↓ j/k: Move | Space: Select | Enter: Review | q: Quit",
+        _ => {
+            "/: Search | Tab: Pane | ↑/↓ j/k PgUp/PgDn: Move | Space: Select | Enter: Review | q: Quit"
+        }
     };
     let mut parts = Vec::new();
     if app.searching {
@@ -317,28 +328,65 @@ fn search(app: &App, frame: &mut Frame, area: Rect) {
     }
 }
 
-fn diff(app: &App, frame: &mut Frame, area: Rect) {
-    let text = match app.highlighted() {
-        None => Text::default(),
-        Some(row) => match app.diffs.get(&row.pr.number) {
-            // A PR waiting for a free fetch slot has no entry yet.
-            None | Some(Diff::Loading) => Text::from("Loading…"),
-            // Only the rows that fit are copied, as a diff can be very long.
-            Some(Diff::Loaded(diff)) => Text::from(
-                diff.lines
-                    .iter()
-                    .take(usize::from(area.height))
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            ),
-            Some(Diff::Failed(error)) => Text::from(format!("Failed to load diff: {error}")).red(),
-        },
-    };
-    let pane = Paragraph::new(text).block(Block::bordered().title("Diff"));
-    frame.render_widget(pane, area);
+/// A bordered pane, with a cyan border and title while it has focus.
+fn pane_block(title: &str, focused: bool) -> Block<'_> {
+    let block = Block::bordered().title(title);
+    // Not `block.cyan()`, which would colour the text inside the pane as well.
+    if focused {
+        block
+            .border_style(Style::new().cyan())
+            .title_style(Style::new().cyan())
+    } else {
+        block
+    }
 }
 
-fn description(app: &App, frame: &mut Frame, area: Rect) {
+/// The furthest a pane can scroll: until its last row is at the bottom.
+fn max_scroll(content_rows: usize, area_rows: u16) -> u16 {
+    let max = content_rows.saturating_sub(usize::from(area_rows));
+    u16::try_from(max).unwrap_or(u16::MAX)
+}
+
+fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
+    let block = pane_block("Diff", app.focus == Pane::Diff);
+    let inner = block.inner(area);
+    if app.focus == Pane::Diff {
+        app.page = inner.height.saturating_sub(1).max(1);
+    }
+    let diff = app
+        .highlighted()
+        .and_then(|row| app.diffs.get(&row.pr.number));
+    let mut scroll = 0;
+    let text = match diff {
+        None if app.highlighted().is_none() => Text::default(),
+        // A PR waiting for a free fetch slot has no entry yet.
+        None | Some(Diff::Loading) => Text::from("Loading…"),
+        Some(Diff::Loaded(diff)) => {
+            scroll = app
+                .diff_scroll
+                .min(max_scroll(diff.lines.len(), inner.height));
+            // Only the rows that fit are copied, as a diff can be very long.
+            Text::from(
+                diff.lines
+                    .iter()
+                    .skip(usize::from(scroll))
+                    .take(usize::from(inner.height))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
+        }
+        Some(Diff::Failed(error)) => Text::from(format!("Failed to load diff: {error}")).red(),
+    };
+    frame.render_widget(Paragraph::new(text).block(block), area);
+    app.diff_scroll = scroll;
+}
+
+fn description(app: &mut App, frame: &mut Frame, area: Rect) {
+    let block = pane_block("Description", app.focus == Pane::Description);
+    let inner = block.inner(area);
+    if app.focus == Pane::Description {
+        app.page = inner.height.saturating_sub(1).max(1);
+    }
     let text = match app.highlighted() {
         None => Text::default(),
         Some(row) => match app.details.get(&row.pr.number) {
@@ -349,8 +397,10 @@ fn description(app: &App, frame: &mut Frame, area: Rect) {
             }
         },
     };
-    let pane = Paragraph::new(text)
-        .block(Block::bordered().title("Description"))
-        .wrap(Wrap { trim: false });
-    frame.render_widget(pane, area);
+    let pane = Paragraph::new(text).wrap(Wrap { trim: false });
+    let scroll = app
+        .description_scroll
+        .min(max_scroll(pane.line_count(inner.width), inner.height));
+    frame.render_widget(pane.scroll((scroll, 0)).block(block), area);
+    app.description_scroll = scroll;
 }
