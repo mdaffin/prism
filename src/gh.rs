@@ -109,6 +109,13 @@ impl Gh {
         Ok(serde_json::from_slice(&stdout)?)
     }
 
+    /// The PR's diff as plain text.
+    pub async fn pr_diff(&self, number: u64) -> Result<String> {
+        let number = number.to_string();
+        let stdout = self.run(&["pr", "diff", &number, "--color=never"]).await?;
+        Ok(String::from_utf8_lossy(&stdout).into_owned())
+    }
+
     /// Runs `gh <args> [--repo <repo>]` and returns its stdout. `--repo` belongs to each
     /// subcommand rather than to `gh` itself, so it goes last.
     async fn run(&self, args: &[&str]) -> Result<Vec<u8>> {

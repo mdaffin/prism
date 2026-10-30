@@ -12,6 +12,9 @@ use crate::model::{self, CheckState, Checks};
 /// The most detail fetches to run at once.
 const MAX_DETAIL_FETCHES: usize = 4;
 
+/// The most diffs fetched at once.
+const MAX_DIFF_FETCHES: usize = 4;
+
 /// The most approvals to run at once.
 const MAX_APPROVALS: usize = 4;
 
@@ -42,6 +45,8 @@ pub struct App {
     pub error: Option<String>,
     /// Details by PR number. An entry is added when its fetch starts, so a PR is fetched once.
     pub details: HashMap<u64, Details>,
+    /// Diffs by PR number. An entry is added when its fetch starts, so a PR is fetched once.
+    pub diffs: HashMap<u64, Diff>,
     /// Rows to fetch again after a batch, so they show their new state without replacing the
     /// list.
     to_refresh: Vec<u64>,
@@ -200,11 +205,20 @@ pub enum Details {
     Failed(String),
 }
 
+/// A PR's diff, fetched when the PR is highlighted.
+pub enum Diff {
+    Loading,
+    Loaded(String),
+    /// Kept rather than removed, so a failing PR isn't fetched again on every update.
+    Failed(String),
+}
+
 pub enum Msg {
     Key(KeyEvent),
     /// The result of the list fetch with this id.
     PrsLoaded(u64, Result<Vec<Pr>>),
     DetailsLoaded(u64, Result<PrDetails>),
+    DiffLoaded(u64, Result<String>),
     /// The result of approving this PR.
     Approved(u64, Result<()>),
     /// The result of merging this PR, or of turning on auto-merge.
@@ -232,6 +246,7 @@ impl App {
             error: None,
             selected: HashSet::new(),
             details: HashMap::new(),
+            diffs: HashMap::new(),
             to_refresh: Vec::new(),
             refreshing: HashSet::new(),
             spinner: 0,
@@ -338,6 +353,25 @@ impl App {
         numbers
     }
 
+    /// The highlighted PR, if its diff hasn't been requested and a fetch slot is free. Marks it
+    /// as loading, so the caller must start the fetch. Only the highlighted PR is fetched, so
+    /// moving quickly through the list doesn't start a fetch for every row passed.
+    pub fn diffs_to_fetch(&mut self) -> Vec<u64> {
+        let in_flight = self
+            .diffs
+            .values()
+            .filter(|diff| matches!(diff, Diff::Loading))
+            .count();
+        let Some(number) = self.highlighted().map(|row| row.pr.number) else {
+            return Vec::new();
+        };
+        if in_flight >= MAX_DIFF_FETCHES || self.diffs.contains_key(&number) {
+            return Vec::new();
+        }
+        self.diffs.insert(number, Diff::Loading);
+        vec![number]
+    }
+
     pub fn highlighted(&self) -> Option<&Row> {
         self.table.selected().and_then(|i| self.rows.get(i))
     }
@@ -377,6 +411,14 @@ impl App {
                 self.details
                     .insert(number, Details::Loaded { details, body });
             }
+            Msg::DiffLoaded(number, Err(e)) => {
+                self.diffs.insert(number, Diff::Failed(e.to_string()));
+            }
+            Msg::DiffLoaded(number, Ok(diff)) => {
+                // A tab would be drawn as a single cell.
+                self.diffs
+                    .insert(number, Diff::Loaded(diff.replace('\t', "    ")));
+            }
             Msg::PrsLoaded(id, _) if id != self.fetch_id => {}
             Msg::PrsLoaded(_, Err(e)) => {
                 // The previous results stay.
@@ -400,6 +442,8 @@ impl App {
                 // Give failed details another chance with the new results.
                 self.details
                     .retain(|_, details| !matches!(details, Details::Failed(_)));
+                self.diffs
+                    .retain(|_, diff| !matches!(diff, Diff::Failed(_)));
                 self.error = None;
                 self.searching = false;
                 self.loaded();
@@ -1169,6 +1213,34 @@ mod tests {
             finish(&mut app, number);
         }
         assert!(app.details_to_fetch().is_empty());
+    }
+
+    #[test]
+    fn fetches_only_the_highlighted_diff_once() {
+        let mut app = app_with_rows(6);
+        assert_eq!(app.diffs_to_fetch(), [1]);
+        assert!(app.diffs_to_fetch().is_empty());
+
+        // Moving on fetches the new row, up to the limit; rows passed through are not fetched
+        // unless they were highlighted when a slot was free.
+        for (row, number) in [(1, 2), (2, 3), (3, 4)] {
+            app.table.select(Some(row));
+            assert_eq!(app.diffs_to_fetch(), [number]);
+        }
+        app.table.select(Some(4));
+        assert!(app.diffs_to_fetch().is_empty());
+
+        // A freed slot lets the highlighted row go.
+        app.update(Msg::DiffLoaded(1, Ok("diff\t".to_string())));
+        assert!(matches!(&app.diffs[&1], Diff::Loaded(d) if d == "diff    "));
+        assert_eq!(app.diffs_to_fetch(), [5]);
+
+        // Going back to a loaded or failed row doesn't fetch it again.
+        app.update(Msg::DiffLoaded(2, Err(color_eyre::eyre::eyre!("failed"))));
+        app.table.select(Some(0));
+        assert!(app.diffs_to_fetch().is_empty());
+        app.table.select(Some(1));
+        assert!(app.diffs_to_fetch().is_empty());
     }
 
     #[test]

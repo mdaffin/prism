@@ -58,6 +58,13 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
                 let _ = tx.send(Msg::DetailsLoaded(number, details));
             });
         }
+        for number in app.diffs_to_fetch() {
+            let (gh, tx) = (gh.clone(), tx.clone());
+            tokio::spawn(async move {
+                let diff = gh.pr_diff(number).await;
+                let _ = tx.send(Msg::DiffLoaded(number, diff));
+            });
+        }
         for number in app.refreshes_to_run() {
             let (gh, tx) = (gh.clone(), tx.clone());
             tokio::spawn(async move {

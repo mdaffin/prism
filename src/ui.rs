@@ -4,7 +4,7 @@ use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Clear, Paragraph, Row, Table, Wrap};
 
-use crate::app::{App, Batch, Confirm, Details, Mode, Summary};
+use crate::app::{App, Batch, Confirm, Details, Diff, Mode, Summary};
 use crate::gh::PrState;
 use crate::model;
 
@@ -87,7 +87,10 @@ pub fn view(app: &mut App, frame: &mut Frame) {
             frame.render_stateful_widget(table, table_area, &mut app.table);
         }
     }
-    description(app, frame, detail_area);
+    let [description_area, diff_area] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Fill(2)]).areas(detail_area);
+    description(app, frame, description_area);
+    diff(app, frame, diff_area);
 
     if let Some(error) = app.error.as_deref() {
         let error = Paragraph::new(error).red().wrap(Wrap { trim: false });
@@ -312,6 +315,26 @@ fn search(app: &App, frame: &mut Frame, area: Rect) {
         let x = app.query.visual_cursor().saturating_sub(scroll) as u16;
         frame.set_cursor_position(Position::new(area.x + 1 + x, area.y + 1));
     }
+}
+
+fn diff(app: &App, frame: &mut Frame, area: Rect) {
+    let text = match app.highlighted() {
+        None => Text::default(),
+        Some(row) => match app.diffs.get(&row.pr.number) {
+            // A PR waiting for a free fetch slot has no entry yet.
+            None | Some(Diff::Loading) => Text::from("Loading…"),
+            // Only the rows that fit are built, as a diff can be very long.
+            Some(Diff::Loaded(diff)) => Text::from(
+                diff.lines()
+                    .take(usize::from(area.height))
+                    .map(Line::from)
+                    .collect::<Vec<_>>(),
+            ),
+            Some(Diff::Failed(error)) => Text::from(format!("Failed to load diff: {error}")).red(),
+        },
+    };
+    let pane = Paragraph::new(text).block(Block::bordered().title("Diff"));
+    frame.render_widget(pane, area);
 }
 
 fn description(app: &App, frame: &mut Frame, area: Rect) {
