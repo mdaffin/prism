@@ -145,7 +145,8 @@ pub fn clean_body(body: Option<&str>) -> String {
 }
 
 /// Splits a leading ticket such as `ABC-123:` off a title. Returns an empty ticket and the full
-/// title when there is none.
+/// title when there is none. Read by the ticket column (M4).
+#[allow(dead_code)]
 pub fn split_ticket(title: &str) -> (&str, &str) {
     match TICKET.captures(title) {
         Some(caps) => (

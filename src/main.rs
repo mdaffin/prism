@@ -46,7 +46,7 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
 
     let mut events = EventStream::new();
     while !app.should_quit {
-        terminal.draw(|frame| ui::view(&app, frame))?;
+        terminal.draw(|frame| ui::view(&mut app, frame))?;
         let msg = tokio::select! {
             Some(event) = events.next() => match event? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => Msg::Key(key),
@@ -56,7 +56,7 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
             Some(msg) = rx.recv() => msg,
             else => break,
         };
-        app.update(msg)?;
+        app.update(msg);
     }
     Ok(())
 }
