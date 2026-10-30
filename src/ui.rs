@@ -39,10 +39,59 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     frame.render_widget(Line::from(app.title.as_str()).bold().reversed(), title_area);
     search(app, frame, search_area);
 
+    pr_table(app, frame, table_area);
+    let [description_area, diff_area] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Fill(2)]).areas(detail_area);
+    checks(app, frame, checks_area);
+    comments(app, frame, comments_area);
+    description(app, frame, description_area);
+    diff(app, frame, diff_area);
+
+    if let Some(error) = error {
+        let error = Paragraph::new(error).red().wrap(Wrap { trim: false });
+        frame.render_widget(error, error_area);
+    }
+    let keys = match &app.mode {
+        Mode::Confirm(confirm) => {
+            confirm_dialog(confirm, app.dry_run, frame, body_area);
+            "←/→ Tab: Choose | Enter: Confirm | Esc: Cancel"
+        }
+        Mode::Running(batch) => {
+            running_popup(batch, app.dry_run, spinner(app), frame, body_area);
+            "Ctrl-C: Quit"
+        }
+        Mode::Results(summary) => {
+            results_popup(summary, app.dry_run, frame, body_area);
+            "Enter/Esc: Close"
+        }
+        _ if app.editing => "Enter: Search | Esc: Cancel",
+        _ => {
+            "/: Search | Tab: Pane | ↑/↓ j/k PgUp/PgDn: Move | Space: Select | Enter: Review | q: Quit"
+        }
+    };
+    let mut parts = Vec::new();
+    if app.searching {
+        parts.push(format!("{} Searching", spinner(app)));
+    }
+    if app.refreshing() {
+        parts.push(format!("{} Refreshing", spinner(app)));
+    }
+    if !app.selected.is_empty() {
+        parts.push(format!("{} selected", app.selected.len()));
+    }
+    parts.push(keys.to_string());
+    let status = parts.join(" | ");
+    frame.render_widget(
+        Line::from(status).style(Style::new().reversed()),
+        status_area,
+    );
+}
+
+/// The table of PRs in a bordered pane, or a message in its place while there are none.
+fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
     let table_block = pane_block("Pull requests", app.focus == Pane::Table);
-    let table_inner = table_block.inner(table_area);
-    frame.render_widget(table_block, table_area);
-    let table_area = table_inner;
+    let table_area = table_block.inner(area);
+    frame.render_widget(table_block, area);
     if app.focus == Pane::Table {
         // One row of the table is its header.
         app.page = table_area.height.saturating_sub(2).max(1);
@@ -102,51 +151,6 @@ pub fn view(app: &mut App, frame: &mut Frame) {
             frame.render_stateful_widget(table, table_area, &mut app.table);
         }
     }
-    let [description_area, diff_area] =
-        Layout::vertical([Constraint::Fill(1), Constraint::Fill(2)]).areas(detail_area);
-    checks(app, frame, checks_area);
-    comments(app, frame, comments_area);
-    description(app, frame, description_area);
-    diff(app, frame, diff_area);
-
-    if let Some(error) = error {
-        let error = Paragraph::new(error).red().wrap(Wrap { trim: false });
-        frame.render_widget(error, error_area);
-    }
-    let keys = match &app.mode {
-        Mode::Confirm(confirm) => {
-            confirm_dialog(confirm, app.dry_run, frame, body_area);
-            "←/→ Tab: Choose | Enter: Confirm | Esc: Cancel"
-        }
-        Mode::Running(batch) => {
-            running_popup(batch, app.dry_run, spinner(app), frame, body_area);
-            "Ctrl-C: Quit"
-        }
-        Mode::Results(summary) => {
-            results_popup(summary, app.dry_run, frame, body_area);
-            "Enter/Esc: Close"
-        }
-        _ if app.editing => "Enter: Search | Esc: Cancel",
-        _ => {
-            "/: Search | Tab: Pane | ↑/↓ j/k PgUp/PgDn: Move | Space: Select | Enter: Review | q: Quit"
-        }
-    };
-    let mut parts = Vec::new();
-    if app.searching {
-        parts.push(format!("{} Searching", spinner(app)));
-    }
-    if app.refreshing() {
-        parts.push(format!("{} Refreshing", spinner(app)));
-    }
-    if !app.selected.is_empty() {
-        parts.push(format!("{} selected", app.selected.len()));
-    }
-    parts.push(keys.to_string());
-    let status = parts.join(" | ");
-    frame.render_widget(
-        Line::from(status).style(Style::new().reversed()),
-        status_area,
-    );
 }
 
 fn confirm_dialog(confirm: &Confirm, dry_run: bool, frame: &mut Frame, area: Rect) {
