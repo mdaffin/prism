@@ -1,6 +1,6 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
-use ratatui::style::{Style, Stylize};
+use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap};
 
@@ -333,6 +333,7 @@ fn popup(
     if dry_run {
         title.push_str(" [DRY RUN]");
     }
+    let full = area;
     let width = area.width.saturating_sub(4).min(90);
     let inner_width = usize::from(width.saturating_sub(2).max(1));
     let rows: usize = if wrap {
@@ -361,6 +362,7 @@ fn popup(
     if wrap {
         content = content.wrap(Wrap { trim: false });
     }
+    frame.buffer_mut().set_style(full, Modifier::DIM);
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
     frame.render_widget(content, content_area);
@@ -844,6 +846,22 @@ mod tests {
         assert!(!screen.iter().any(|line| line.contains("Bump alpha")));
         // PR 1 is selected, and the filter hides it.
         assert!(screen.last().unwrap().contains("1 selected (1 hidden)"));
+    }
+
+    #[test]
+    fn dims_everything_behind_a_popup() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        let plain = draw(&mut app, 160, 30);
+        let table = find(&plain, "is:pr").unwrap();
+        assert!(!plain[table].modifier.contains(Modifier::DIM));
+
+        press(&mut app, "?");
+        let buffer = draw(&mut app, 160, 30);
+        assert!(buffer[table].modifier.contains(Modifier::DIM));
+        let popup = find(&buffer, "Keys").unwrap();
+        let inside = Position::new(popup.x + 2, popup.y + 1);
+        assert!(!buffer[popup].modifier.contains(Modifier::DIM));
+        assert!(!buffer[inside].modifier.contains(Modifier::DIM));
     }
 
     #[test]
