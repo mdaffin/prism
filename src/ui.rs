@@ -1,10 +1,10 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Style, Stylize};
-use ratatui::text::Line;
+use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Paragraph, Row, Table, Wrap};
 
-use crate::app::{App, Mode};
+use crate::app::{App, Details, Mode};
 use crate::model;
 
 pub fn view(app: &mut App, frame: &mut Frame) {
@@ -61,12 +61,17 @@ pub fn view(app: &mut App, frame: &mut Frame) {
 }
 
 fn description(app: &App, frame: &mut Frame, area: Rect) {
-    let body = app
-        .table
-        .selected()
-        .and_then(|i| app.rows.get(i))
-        .map_or("", |row| row.body.as_str());
-    let pane = Paragraph::new(body)
+    let text = match app
+        .highlighted()
+        .and_then(|row| app.details.get(&row.pr.number))
+    {
+        None | Some(Details::Loading) => Text::from("Loading…"),
+        Some(Details::Loaded { body, .. }) => Text::from(body.as_str()),
+        Some(Details::Failed(error)) => {
+            Text::from(format!("Failed to load details: {error}")).red()
+        }
+    };
+    let pane = Paragraph::new(text)
         .block(Block::bordered().title("Description"))
         .wrap(Wrap { trim: false });
     frame.render_widget(pane, area);

@@ -8,10 +8,14 @@ use color_eyre::eyre::{Result, bail};
 use serde::Deserialize;
 use tokio::process::Command;
 
-/// Fields requested from `gh pr list --json`.
-const PR_FIELDS: &str = "number,title,state,headRefName,files,labels,body,comments,\
-    statusCheckRollup,mergeable,reviewDecision,additions,deletions,updatedAt,url";
+/// Fields requested from `gh pr list --json`: only what the table needs, so it renders sooner.
+const LIST_FIELDS: &str = "number,title,state,statusCheckRollup,mergeable,reviewDecision";
 
+/// Fields requested from `gh pr view --json` for the highlighted PR.
+const DETAIL_FIELDS: &str =
+    "headRefName,files,labels,body,comments,additions,deletions,updatedAt,url";
+
+#[derive(Clone)]
 pub struct Gh {
     repo: Option<String>,
 }
@@ -24,8 +28,22 @@ impl Gh {
     pub async fn list_prs(&self, query: &str, limit: u32) -> Result<Vec<Pr>> {
         let limit = limit.to_string();
         let args = [
-            "pr", "list", "--search", query, "--limit", &limit, "--json", PR_FIELDS,
+            "pr",
+            "list",
+            "--search",
+            query,
+            "--limit",
+            &limit,
+            "--json",
+            LIST_FIELDS,
         ];
+        let stdout = self.run(&args).await?;
+        Ok(serde_json::from_slice(&stdout)?)
+    }
+
+    pub async fn pr_details(&self, number: u64) -> Result<PrDetails> {
+        let number = number.to_string();
+        let args = ["pr", "view", &number, "--json", DETAIL_FIELDS];
         let stdout = self.run(&args).await?;
         Ok(serde_json::from_slice(&stdout)?)
     }
@@ -89,22 +107,31 @@ fn render_command(args: &[&str]) -> String {
     line
 }
 
-// Most fields are first read by later steps (checks, panes, actions).
-#[allow(dead_code)]
+/// A PR as listed in the table.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Pr {
     pub number: u64,
     pub title: String,
+    // Read by the confirm dialog (M1 step 11).
+    #[allow(dead_code)]
     pub state: PrState,
+    pub status_check_rollup: Vec<Check>,
+    pub mergeable: String,
+    pub review_decision: String,
+}
+
+/// The rest of a PR, fetched only when it is highlighted.
+// Most fields are first read by later steps (panes, Ctrl-O).
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrDetails {
     pub head_ref_name: String,
     pub files: Vec<File>,
     pub labels: Vec<Label>,
     pub body: Option<String>,
     pub comments: Vec<Comment>,
-    pub status_check_rollup: Vec<Check>,
-    pub mergeable: String,
-    pub review_decision: String,
     pub additions: u64,
     pub deletions: u64,
     pub updated_at: String,
@@ -177,19 +204,11 @@ pub struct StatusContext {
 mod tests {
     use super::*;
 
-    const FIXTURE: &str = r#"[
+    const LIST_FIXTURE: &str = r#"[
       {
         "number": 12,
         "title": "ABC-1: Update example-lib to v2",
         "state": "OPEN",
-        "headRefName": "renovate/example-lib-2.x",
-        "files": [{"path": "Cargo.toml", "additions": 1, "deletions": 1}],
-        "labels": [{"id": "L1", "name": "deps", "description": "", "color": "ededed"}],
-        "body": null,
-        "comments": [
-          {"author": null, "createdAt": "2026-01-02T03:04:05Z", "body": "hello"},
-          {"author": {"login": "someone"}, "createdAt": "2026-01-02T03:04:06Z", "body": null}
-        ],
         "statusCheckRollup": [
           {
             "__typename": "CheckRun",
@@ -202,41 +221,40 @@ mod tests {
           {"__typename": "StatusContext", "context": "ci/legacy", "state": "PENDING"}
         ],
         "mergeable": "MERGEABLE",
-        "reviewDecision": "",
-        "additions": 1,
-        "deletions": 1,
-        "updatedAt": "2026-01-02T03:04:06Z",
-        "url": "https://github.com/example/repo/pull/12"
+        "reviewDecision": ""
       },
       {
         "number": 13,
         "title": "Merged one",
         "state": "MERGED",
-        "headRefName": "b",
-        "files": [],
-        "labels": [],
-        "body": "text",
-        "comments": [],
         "statusCheckRollup": [],
         "mergeable": "UNKNOWN",
-        "reviewDecision": "APPROVED",
-        "additions": 0,
-        "deletions": 0,
-        "updatedAt": "2026-01-02T03:04:06Z",
-        "url": "https://github.com/example/repo/pull/13"
+        "reviewDecision": "APPROVED"
       }
     ]"#;
 
+    const DETAIL_FIXTURE: &str = r#"{
+      "headRefName": "renovate/example-lib-2.x",
+      "files": [{"path": "Cargo.toml", "additions": 1, "deletions": 1}],
+      "labels": [{"id": "L1", "name": "deps", "description": "", "color": "ededed"}],
+      "body": null,
+      "comments": [
+        {"author": null, "createdAt": "2026-01-02T03:04:05Z", "body": "hello"},
+        {"author": {"login": "someone"}, "createdAt": "2026-01-02T03:04:06Z", "body": null}
+      ],
+      "additions": 1,
+      "deletions": 1,
+      "updatedAt": "2026-01-02T03:04:06Z",
+      "url": "https://github.com/example/repo/pull/12"
+    }"#;
+
     #[test]
     fn parses_pr_list() {
-        let prs: Vec<Pr> = serde_json::from_str(FIXTURE).unwrap();
+        let prs: Vec<Pr> = serde_json::from_str(LIST_FIXTURE).unwrap();
         assert_eq!(prs.len(), 2);
 
         let pr = &prs[0];
         assert_eq!(pr.state, PrState::Open);
-        assert!(pr.body.is_none());
-        assert!(pr.comments[0].author.is_none());
-        assert!(pr.comments[1].body.is_none());
         assert!(matches!(
             &pr.status_check_rollup[0],
             Check::CheckRun(run) if run.workflow_name == "CI" && run.started_at.is_some()
@@ -247,6 +265,15 @@ mod tests {
         ));
 
         assert_eq!(prs[1].state, PrState::Merged);
+    }
+
+    #[test]
+    fn parses_pr_details() {
+        let details: PrDetails = serde_json::from_str(DETAIL_FIXTURE).unwrap();
+        assert!(details.body.is_none());
+        assert!(details.comments[0].author.is_none());
+        assert!(details.comments[1].body.is_none());
+        assert_eq!(details.labels[0].name, "deps");
     }
 
     #[test]

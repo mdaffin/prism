@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+
 use color_eyre::eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::TableState;
 
-use crate::gh::Pr;
+use crate::gh::{Pr, PrDetails};
 use crate::model::{self, Checks};
 
 pub struct App {
@@ -13,6 +15,8 @@ pub struct App {
     pub table: TableState,
     /// Why the last fetch failed.
     pub error: Option<String>,
+    /// Details by PR number. An entry is added when its fetch starts, so a PR is fetched once.
+    pub details: HashMap<u64, Details>,
     pub should_quit: bool,
 }
 
@@ -24,13 +28,25 @@ pub enum Mode {
 pub struct Row {
     pub pr: Pr,
     pub checks: Checks,
-    /// The body with HTML comments and extra blank lines removed.
-    pub body: String,
+}
+
+pub enum Details {
+    Loading,
+    Loaded {
+        // Read by the detail panes (M2).
+        #[allow(dead_code)]
+        details: PrDetails,
+        /// The body with HTML comments and extra blank lines removed.
+        body: String,
+    },
+    /// Kept rather than removed, so a failing PR isn't fetched again on every update.
+    Failed(String),
 }
 
 pub enum Msg {
     Key(KeyEvent),
     PrsLoaded(Result<Vec<Pr>>),
+    DetailsLoaded(u64, Result<PrDetails>),
 }
 
 impl App {
@@ -41,13 +57,37 @@ impl App {
             rows: Vec::new(),
             table: TableState::default(),
             error: None,
+            details: HashMap::new(),
             should_quit: false,
         }
+    }
+
+    /// The highlighted PR, if its details haven't been requested yet. Marks them as loading,
+    /// so the caller must start the fetch.
+    pub fn details_to_fetch(&mut self) -> Option<u64> {
+        let number = self.highlighted()?.pr.number;
+        if self.details.contains_key(&number) {
+            return None;
+        }
+        self.details.insert(number, Details::Loading);
+        Some(number)
+    }
+
+    pub fn highlighted(&self) -> Option<&Row> {
+        self.table.selected().and_then(|i| self.rows.get(i))
     }
 
     pub fn update(&mut self, msg: Msg) {
         match msg {
             Msg::Key(key) => self.on_key(key),
+            Msg::DetailsLoaded(number, Err(e)) => {
+                self.details.insert(number, Details::Failed(e.to_string()));
+            }
+            Msg::DetailsLoaded(number, Ok(details)) => {
+                let body = model::clean_body(details.body.as_deref());
+                self.details
+                    .insert(number, Details::Loaded { details, body });
+            }
             Msg::PrsLoaded(Err(e)) => {
                 self.error = Some(e.to_string());
                 self.mode = Mode::List;
@@ -57,8 +97,7 @@ impl App {
                     .into_iter()
                     .map(|pr| {
                         let checks = model::classify_checks(&pr.mergeable, &pr.status_check_rollup);
-                        let body = model::clean_body(pr.body.as_deref());
-                        Row { pr, checks, body }
+                        Row { pr, checks }
                     })
                     .collect();
                 // Passing first.

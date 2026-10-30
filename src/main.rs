@@ -39,8 +39,9 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
     let query = query::initial(args.author.as_deref(), &args.search);
     let gh = gh::Gh::new(args.repo);
     let fetch_tx = tx.clone();
+    let fetch_gh = gh.clone();
     tokio::spawn(async move {
-        let prs = gh.list_prs(&query, args.limit).await;
+        let prs = fetch_gh.list_prs(&query, args.limit).await;
         let _ = fetch_tx.send(Msg::PrsLoaded(prs));
     });
 
@@ -57,6 +58,13 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
             else => break,
         };
         app.update(msg);
+        if let Some(number) = app.details_to_fetch() {
+            let (gh, tx) = (gh.clone(), tx.clone());
+            tokio::spawn(async move {
+                let details = gh.pr_details(number).await;
+                let _ = tx.send(Msg::DetailsLoaded(number, details));
+            });
+        }
     }
     Ok(())
 }
