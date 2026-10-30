@@ -101,7 +101,7 @@ impl Gh {
             tokio::time::sleep(Duration::from_millis(300)).await;
             return Ok(());
         }
-        match self.run(args).await {
+        match self.exec(args, false).await {
             Ok(_) => Ok(()),
             Err(e) => match e.downcast::<GhError>() {
                 Ok(failure) => Err(eyre!(failure.output)),
@@ -125,9 +125,17 @@ impl Gh {
         Ok(String::from_utf8_lossy(&stdout).into_owned())
     }
 
-    /// Runs `gh <args> [--repo <repo>]` and returns its stdout. `--repo` belongs to each
-    /// subcommand rather than to `gh` itself, so it goes last.
+    /// Runs a read-only `gh` command and returns its stdout. If the caller stops waiting, such as
+    /// when the program quits, `gh` is killed rather than left running.
     async fn run(&self, args: &[&str]) -> Result<Vec<u8>> {
+        self.exec(args, true).await
+    }
+
+    /// Runs `gh <args> [--repo <repo>]` and returns its stdout. `--repo` belongs to each
+    /// subcommand rather than to `gh` itself, so it goes last. With `kill_on_drop`, `gh` is
+    /// killed if the caller stops waiting. Actions leave it off: stopping one halfway could leave
+    /// a PR approved but not merged, or the reverse, with nothing to show for it.
+    async fn exec(&self, args: &[&str], kill_on_drop: bool) -> Result<Vec<u8>> {
         let mut args: Vec<&str> = args.to_vec();
         if let Some(repo) = &self.repo {
             args.extend(["--repo", repo]);
@@ -135,6 +143,7 @@ impl Gh {
         let output = Command::new("gh")
             .args(&args)
             .stdin(Stdio::null())
+            .kill_on_drop(kill_on_drop)
             .output()
             .await?;
         if !output.status.success() {
