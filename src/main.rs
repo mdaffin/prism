@@ -36,7 +36,7 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
     let mut app = App::new(title, query, args.dry_run);
     // Background work reports back through this channel.
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let gh = gh::Gh::new(args.repo);
+    let gh = gh::Gh::new(args.repo, args.dry_run);
 
     let mut events = EventStream::new();
     let mut ticker = tokio::time::interval(Duration::from_millis(100));
@@ -75,7 +75,7 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
         for number in app.approvals_to_run() {
             let (gh, tx) = (gh.clone(), tx.clone());
             tokio::spawn(async move {
-                let result = approve(&gh, number, args.dry_run).await;
+                let result = gh.approve(number).await;
                 let _ = tx.send(Msg::Approved(number, result));
             });
         }
@@ -83,7 +83,7 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
             let (gh, tx) = (gh.clone(), tx.clone());
             let method = args.merge_method;
             tokio::spawn(async move {
-                let result = merge(&gh, number, auto, method, args.dry_run).await;
+                let result = gh.merge(number, auto, method).await;
                 let _ = tx.send(Msg::Merged(number, result));
             });
         }
@@ -102,29 +102,4 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
         app.update(msg);
     }
     Ok(())
-}
-
-/// Approves one PR. A dry run makes no `gh` call: it waits a moment and succeeds.
-async fn approve(gh: &gh::Gh, number: u64, dry_run: bool) -> Result<()> {
-    if dry_run {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        return Ok(());
-    }
-    gh.approve(number).await
-}
-
-/// Merges one PR, or turns on auto-merge. A dry run makes no `gh` call: it waits a moment and
-/// succeeds.
-async fn merge(
-    gh: &gh::Gh,
-    number: u64,
-    auto: bool,
-    method: cli::MergeMethod,
-    dry_run: bool,
-) -> Result<()> {
-    if dry_run {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        return Ok(());
-    }
-    gh.merge(number, auto, method).await
 }

@@ -4,6 +4,7 @@
 use std::fmt;
 use std::io::ErrorKind;
 use std::process::Stdio;
+use std::time::Duration;
 
 use color_eyre::eyre::{Result, bail, eyre};
 use serde::Deserialize;
@@ -21,11 +22,13 @@ const DETAIL_FIELDS: &str =
 #[derive(Clone)]
 pub struct Gh {
     repo: Option<String>,
+    /// Whether actions skip `gh`: see [`Gh::run_action`].
+    dry_run: bool,
 }
 
 impl Gh {
-    pub fn new(repo: Option<String>) -> Self {
-        Self { repo }
+    pub fn new(repo: Option<String>, dry_run: bool) -> Self {
+        Self { repo, dry_run }
     }
 
     pub async fn list_prs(&self, query: &str, limit: u32) -> Result<Vec<Pr>> {
@@ -91,8 +94,13 @@ impl Gh {
     }
 
     /// Runs a `gh` command that acts on one PR. If it fails, the error is gh's output alone:
-    /// the caller already knows which PR it was.
+    /// the caller already knows which PR it was. Every command that changes a PR goes through
+    /// here, so a dry run makes no `gh` call: it waits a moment and succeeds.
     async fn run_action(&self, args: &[&str]) -> Result<()> {
+        if self.dry_run {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            return Ok(());
+        }
         match self.run(args).await {
             Ok(_) => Ok(()),
             Err(e) => match e.downcast::<GhError>() {
