@@ -134,9 +134,7 @@ static BLANK_LINES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{3,}").unw
 static TICKET: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(?<ticket>[A-Z][A-Z0-9]+-\d+)[:\s]*(?<rest>.*)$").unwrap());
 
-/// Removes HTML comments and runs of blank lines from a PR or comment body. Read by the
-/// description pane (M1 step 7).
-#[allow(dead_code)]
+/// Removes HTML comments and runs of blank lines from a PR or comment body.
 pub fn clean_body(body: Option<&str>) -> String {
     let body = body.unwrap_or_default().replace("\r\n", "\n");
     let body = HTML_COMMENT.replace_all(&body, "");

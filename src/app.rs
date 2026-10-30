@@ -24,6 +24,8 @@ pub enum Mode {
 pub struct Row {
     pub pr: Pr,
     pub checks: Checks,
+    /// The body with HTML comments and extra blank lines removed.
+    pub body: String,
 }
 
 pub enum Msg {
@@ -55,7 +57,8 @@ impl App {
                     .into_iter()
                     .map(|pr| {
                         let checks = model::classify_checks(&pr.mergeable, &pr.status_check_rollup);
-                        Row { pr, checks }
+                        let body = model::clean_body(pr.body.as_deref());
+                        Row { pr, checks, body }
                     })
                     .collect();
                 // Passing first.

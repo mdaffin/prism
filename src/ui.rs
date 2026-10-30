@@ -1,8 +1,8 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Style, Stylize};
 use ratatui::text::Line;
-use ratatui::widgets::{Paragraph, Row, Table, Wrap};
+use ratatui::widgets::{Block, Paragraph, Row, Table, Wrap};
 
 use crate::app::{App, Mode};
 use crate::model;
@@ -46,7 +46,10 @@ pub fn view(app: &mut App, frame: &mut Frame) {
                 let table = Table::new(rows, widths)
                     .header(Row::new(["#", "Checks", "Review", "Title"]).bold())
                     .row_highlight_style(Style::new().reversed());
-                frame.render_stateful_widget(table, body_area, &mut app.table);
+                let [table_area, detail_area] =
+                    Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).areas(body_area);
+                frame.render_stateful_widget(table, table_area, &mut app.table);
+                description(app, frame, detail_area);
             }
         }
     }
@@ -55,4 +58,16 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         Line::from("↑/↓ j/k: Move | q: Quit").style(Style::new().reversed()),
         status_area,
     );
+}
+
+fn description(app: &App, frame: &mut Frame, area: Rect) {
+    let body = app
+        .table
+        .selected()
+        .and_then(|i| app.rows.get(i))
+        .map_or("", |row| row.body.as_str());
+    let pane = Paragraph::new(body)
+        .block(Block::bordered().title("Description"))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(pane, area);
 }
