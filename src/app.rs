@@ -620,24 +620,7 @@ impl App {
                 self.open_errors.push(one_line(&message));
             }
             Msg::Opened(_, Ok(())) => {}
-            Msg::PrRefreshed(number, result) => {
-                self.refreshing.remove(&number);
-                match result {
-                    Ok(pr) => {
-                        if let Some(row) = self.rows.iter_mut().find(|row| row.pr.number == number)
-                        {
-                            row.checks =
-                                model::classify_checks(pr.mergeable, &pr.status_check_rollup);
-                            row.pr = pr;
-                        }
-                    }
-                    // The row keeps its old state, so say why it didn't change.
-                    Err(e) => {
-                        let message = format!("Refreshing #{number} failed: {e}");
-                        self.refresh_errors.push(one_line(&message));
-                    }
-                }
-            }
+            Msg::PrRefreshed(number, result) => self.row_refreshed(number, result),
             Msg::DetailsLoaded(number, Err(e)) => {
                 self.details.insert(number, Fetch::Failed(e.to_string()));
             }
@@ -665,53 +648,75 @@ impl App {
                 self.searching = false;
                 self.loaded();
             }
-            Msg::PrsLoaded(_, Ok(mut prs)) => {
-                // GitHub was asked for one more than the limit, to tell whether it was reached.
-                self.truncated = prs.len() > self.limit;
-                prs.truncate(self.limit);
-                let mut rows: Vec<Row> = prs
-                    .into_iter()
-                    .map(|pr| {
-                        let checks = model::classify_checks(pr.mergeable, &pr.status_check_rollup);
-                        Row { pr, checks }
-                    })
-                    .collect();
-                // Open PRs first, passing first; closed and merged PRs can't be acted on.
-                rows.sort_by_key(|row| (row.pr.state != PrState::Open, row.checks.state.rank()));
-                let before = self.highlighted().map(|row| row.pr.number);
-                // A refresh keeps the highlight on the same PR if it is still listed.
-                let highlight = before
-                    .filter(|_| self.fetch_is_refresh)
-                    .and_then(|number| rows.iter().position(|row| row.pr.number == number))
-                    .or((!rows.is_empty()).then_some(0));
-                self.table.select(highlight);
-                if !self.fetch_is_refresh || highlight.map(|i| rows[i].pr.number) != before {
-                    self.reset_scroll();
+            Msg::PrsLoaded(_, Ok(prs)) => self.list_loaded(prs),
+        }
+    }
+
+    /// Replaces the list with the latest fetch's PRs. A new search starts afresh; a refresh
+    /// (Ctrl-R) keeps the highlight and the selection on the same PRs where they are still listed.
+    fn list_loaded(&mut self, mut prs: Vec<Pr>) {
+        // GitHub was asked for one more than the limit, to tell whether it was reached.
+        self.truncated = prs.len() > self.limit;
+        prs.truncate(self.limit);
+        let mut rows: Vec<Row> = prs
+            .into_iter()
+            .map(|pr| {
+                let checks = model::classify_checks(pr.mergeable, &pr.status_check_rollup);
+                Row { pr, checks }
+            })
+            .collect();
+        // Open PRs first, passing first; closed and merged PRs can't be acted on.
+        rows.sort_by_key(|row| (row.pr.state != PrState::Open, row.checks.state.rank()));
+        let before = self.highlighted().map(|row| row.pr.number);
+        // A refresh keeps the highlight on the same PR if it is still listed.
+        let highlight = before
+            .filter(|_| self.fetch_is_refresh)
+            .and_then(|number| rows.iter().position(|row| row.pr.number == number))
+            .or((!rows.is_empty()).then_some(0));
+        self.table.select(highlight);
+        if !self.fetch_is_refresh || highlight.map(|i| rows[i].pr.number) != before {
+            self.reset_scroll();
+        }
+        self.visible = (0..rows.len()).collect();
+        self.rows = rows;
+        self.list_query = self.fetching_query.clone();
+        // The filter is cleared either way.
+        self.filter = Input::default();
+        self.filtering = false;
+        if self.fetch_is_refresh {
+            // The selection is kept by PR number, so a PR that moved is still selected.
+            // One that is no longer listed is dropped.
+            let listed: HashSet<u64> = self.rows.iter().map(|row| row.pr.number).collect();
+            self.selected.retain(|number| listed.contains(number));
+            // The panes show current data, so nothing fetched earlier is kept.
+            self.details.clear();
+            self.diffs.clear();
+        } else {
+            self.selected.clear();
+            // A PR's details don't depend on the query, so a new search keeps them. Give
+            // failed ones another chance.
+            forget_failed(&mut self.details);
+            forget_failed(&mut self.diffs);
+        }
+        self.clear_errors();
+        self.searching = false;
+        self.loaded();
+    }
+
+    /// Replaces one row with its freshly fetched PR, or says why it couldn't be.
+    fn row_refreshed(&mut self, number: u64, result: Result<Pr>) {
+        self.refreshing.remove(&number);
+        match result {
+            Ok(pr) => {
+                if let Some(row) = self.rows.iter_mut().find(|row| row.pr.number == number) {
+                    row.checks = model::classify_checks(pr.mergeable, &pr.status_check_rollup);
+                    row.pr = pr;
                 }
-                self.visible = (0..rows.len()).collect();
-                self.rows = rows;
-                self.list_query = self.fetching_query.clone();
-                // The filter is cleared either way.
-                self.filter = Input::default();
-                self.filtering = false;
-                if self.fetch_is_refresh {
-                    // The selection is kept by PR number, so a PR that moved is still selected.
-                    // One that is no longer listed is dropped.
-                    let listed: HashSet<u64> = self.rows.iter().map(|row| row.pr.number).collect();
-                    self.selected.retain(|number| listed.contains(number));
-                    // The panes show current data, so nothing fetched earlier is kept.
-                    self.details.clear();
-                    self.diffs.clear();
-                } else {
-                    self.selected.clear();
-                    // A PR's details don't depend on the query, so a new search keeps them. Give
-                    // failed ones another chance.
-                    forget_failed(&mut self.details);
-                    forget_failed(&mut self.diffs);
-                }
-                self.clear_errors();
-                self.searching = false;
-                self.loaded();
+            }
+            // The row keeps its old state, so say why it didn't change.
+            Err(e) => {
+                let message = format!("Refreshing #{number} failed: {e}");
+                self.refresh_errors.push(one_line(&message));
             }
         }
     }
