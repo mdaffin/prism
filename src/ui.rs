@@ -47,7 +47,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     ])
     .areas(top_area);
 
-    frame.render_widget(Line::from(app.title.as_str()).bold().reversed(), title_area);
+    frame.render_widget(Line::from(app.title()).bold().reversed(), title_area);
     search(app, frame, search_area);
     if filter_rows > 0 {
         filter(app, frame, filter_area);

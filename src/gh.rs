@@ -30,8 +30,10 @@ impl Gh {
         Self { repo, dry_run }
     }
 
+    /// Lists up to one more PR than `limit`, so the caller can tell whether the list was cut
+    /// short.
     pub async fn list_prs(&self, query: &str, limit: u32) -> Result<Vec<Pr>> {
-        let limit = limit.to_string();
+        let limit = limit.saturating_add(1).to_string();
         // Without `--state all`, gh adds `state:open` when the query has no state qualifier. A
         // qualifier in the query still wins, as on GitHub's web UI.
         // The query is joined to the flag with `=`, so one that starts with `-`, such as

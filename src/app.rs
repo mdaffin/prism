@@ -30,7 +30,13 @@ const MAX_REFRESHES: usize = 4;
 const MAX_OPEN_WITHOUT_ASKING: usize = 5;
 
 pub struct App {
-    pub title: String,
+    /// The title without the note about a truncated list: see [`App::title`].
+    title: String,
+    /// The most PRs to show. GitHub is asked for one more, so that a list that is cut short can
+    /// say so.
+    limit: usize,
+    /// Whether the latest list had more PRs than `limit`.
+    truncated: bool,
     pub dry_run: bool,
     pub mode: Mode,
     /// The search box. While it isn't being edited it holds the last submitted query.
@@ -357,6 +363,8 @@ impl App {
     pub fn new(title: String, query: String, dry_run: bool) -> Self {
         Self {
             title,
+            limit: usize::MAX,
+            truncated: false,
             dry_run,
             mode: Mode::Loading,
             query: Input::new(query.clone()),
@@ -388,6 +396,21 @@ impl App {
             refreshing: HashSet::new(),
             spinner: 0,
             should_quit: false,
+        }
+    }
+
+    /// Shows at most `limit` PRs, and says when there are more.
+    pub fn with_limit(mut self, limit: u32) -> Self {
+        self.limit = limit as usize;
+        self
+    }
+
+    /// The title, with a note when the list was cut short.
+    pub fn title(&self) -> String {
+        if self.truncated {
+            format!("{} - showing first {}, more exist", self.title, self.limit)
+        } else {
+            self.title.clone()
         }
     }
 
@@ -633,7 +656,10 @@ impl App {
                 self.searching = false;
                 self.loaded();
             }
-            Msg::PrsLoaded(_, Ok(prs)) => {
+            Msg::PrsLoaded(_, Ok(mut prs)) => {
+                // GitHub was asked for one more than the limit, to tell whether it was reached.
+                self.truncated = prs.len() > self.limit;
+                prs.truncate(self.limit);
                 let mut rows: Vec<Row> = prs
                     .into_iter()
                     .map(|pr| {
@@ -2041,5 +2067,48 @@ mod tests {
         assert_eq!(title(None, false), "PRs");
         assert_eq!(title(Some("o/r"), false), "PRs (o/r)");
         assert_eq!(title(Some("o/r"), true), "PRs (o/r) [DRY RUN]");
+    }
+
+    fn limited_app(limit: u32) -> App {
+        App::new("PRs".to_string(), "is:pr".to_string(), false).with_limit(limit)
+    }
+
+    #[test]
+    fn a_list_longer_than_the_limit_is_cut_and_the_title_says_so() {
+        let mut app = limited_app(2);
+        let (id, _) = app.list_to_fetch().unwrap();
+        // GitHub was asked for 3, one more than the limit, and returned all of them.
+        app.update(Msg::PrsLoaded(id, Ok(prs(1..=3))));
+        assert_eq!(numbers(&app), [1, 2]);
+        assert_eq!(app.title(), "PRs - showing first 2, more exist");
+    }
+
+    #[test]
+    fn a_list_exactly_the_limit_has_no_note() {
+        let mut app = limited_app(2);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(id, Ok(prs(1..=2))));
+        assert_eq!(numbers(&app), [1, 2]);
+        assert_eq!(app.title(), "PRs");
+    }
+
+    #[test]
+    fn the_note_follows_the_latest_list_and_survives_a_failed_search() {
+        let mut app = limited_app(1);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(id, Ok(prs(1..=2))));
+        assert!(app.title().ends_with("more exist"));
+
+        press(&mut app, "/");
+        key(&mut app, KeyCode::Enter);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(id, Err(color_eyre::eyre::eyre!("boom"))));
+        assert!(app.title().ends_with("more exist"));
+
+        press(&mut app, "/");
+        key(&mut app, KeyCode::Enter);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(id, Ok(prs(1..=1))));
+        assert_eq!(app.title(), "PRs");
     }
 }

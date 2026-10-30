@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
 async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
     let title = app::title(args.repo.as_deref(), args.dry_run);
     let query = query::initial(args.author.as_deref(), &args.search);
-    let mut app = App::new(title, query, args.dry_run);
+    let mut app = App::new(title, query, args.dry_run).with_limit(args.limit);
     // Background work reports back through this channel.
     let (tx, mut rx) = mpsc::unbounded_channel();
     let gh = gh::Gh::new(args.repo, args.dry_run);
