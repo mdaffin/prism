@@ -34,11 +34,24 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         Constraint::Max(10),
     ])
     .areas(left_area);
-    let [search_area, table_area] =
-        Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(top_area);
+    // The filter box is only there while it is being edited or has text in it.
+    let filter_rows = if app.filtering || !app.filter.value().is_empty() {
+        3
+    } else {
+        0
+    };
+    let [search_area, filter_area, table_area] = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Length(filter_rows),
+        Constraint::Fill(1),
+    ])
+    .areas(top_area);
 
     frame.render_widget(Line::from(app.title.as_str()).bold().reversed(), title_area);
     search(app, frame, search_area);
+    if filter_rows > 0 {
+        filter(app, frame, filter_area);
+    }
 
     pr_table(app, frame, table_area);
     let [description_area, diff_area] =
@@ -74,6 +87,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
             "Enter/Esc: Close"
         }
         _ if app.editing => "Enter: Search | Esc: Cancel",
+        _ if app.filtering => "Enter: Keep filter | Esc: Clear filter",
         _ => &keys::bar(),
     };
     let mut parts = Vec::new();
@@ -84,7 +98,12 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         parts.push(format!("{} Refreshing", spinner(app)));
     }
     if !app.selected.is_empty() {
-        parts.push(format!("{} selected", app.selected.len()));
+        let hidden = app.hidden_selected();
+        let mut selected = format!("{} selected", app.selected.len());
+        if hidden > 0 {
+            selected.push_str(&format!(" ({hidden} hidden)"));
+        }
+        parts.push(selected);
     }
     parts.push(hints.to_string());
     let status = parts.join(" | ");
@@ -106,6 +125,9 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
 
     match app.mode {
         Mode::Loading => frame.render_widget(Line::from("Loading…"), table_area),
+        Mode::List if !app.rows.is_empty() && app.visible.is_empty() => {
+            frame.render_widget(Line::from("No PRs match the filter."), table_area)
+        }
         Mode::List if app.rows.is_empty() => {
             let message = if app.error_text().is_some() {
                 "No PRs loaded."
@@ -121,19 +143,19 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
         | Mode::Help
         | Mode::Running(_)
         | Mode::Results(_) => {
-            let rows = app.rows.iter().map(|row| {
+            // Borrowing the fields rather than calling `visible_rows` leaves `app.table` free.
+            let rows = app.visible.iter().map(|&i| &app.rows[i]).map(|row| {
                 let mark = if app.selected.contains(&row.pr.number) {
                     "[x]"
                 } else {
                     "[ ]"
                 };
-                // The checks of a closed or merged PR no longer matter.
-                let checks = match row.pr.state {
-                    PrState::Open => {
-                        Cell::new(row.checks.state.label()).style(state_style(row.checks.state))
-                    }
-                    PrState::Closed => Cell::new("· closed"),
-                    PrState::Merged => Cell::new("· merged"),
+                let checks = Cell::new(row.checks_label());
+                // The checks of a closed or merged PR no longer matter, so they aren't coloured.
+                let checks = if row.pr.state == PrState::Open {
+                    checks.style(state_style(row.checks.state))
+                } else {
+                    checks
                 };
                 let cells = Row::new([
                     Cell::new(mark),
@@ -372,6 +394,24 @@ fn wrapped_rows(text: &str, width: u16) -> u16 {
         .map(|line| line.chars().count().div_ceil(width).max(1))
         .sum();
     rows.min(usize::from(MAX_ERROR_ROWS)) as u16
+}
+
+/// The local filter box, drawn like the search box.
+fn filter(app: &App, frame: &mut Frame, area: Rect) {
+    let width = area.width.saturating_sub(2);
+    let scroll = app.filter.visual_scroll(usize::from(width));
+    let mut block = Block::bordered().title("Filter");
+    if app.filtering {
+        block = block.cyan();
+    }
+    let input = Paragraph::new(app.filter.value())
+        .scroll((0, scroll as u16))
+        .block(block);
+    frame.render_widget(input, area);
+    if app.filtering {
+        let x = app.filter.visual_cursor().saturating_sub(scroll) as u16;
+        frame.set_cursor_position(Position::new(area.x + 1 + x, area.y + 1));
+    }
 }
 
 fn search(app: &App, frame: &mut Frame, area: Rect) {
@@ -775,5 +815,37 @@ mod tests {
                 .unwrap_or_else(|| panic!("no dialog row for {label}"));
             assert_eq!(buffer[position].fg, colour, "{label}");
         }
+    }
+
+    #[test]
+    fn draws_the_filter_box_and_the_filtered_rows() {
+        let mut app = app_with(vec![
+            pr(1, "Bump alpha", "OPEN", ""),
+            pr(2, "Bump beta", "OPEN", ""),
+            pr(3, "Update gamma", "OPEN", ""),
+        ]);
+        // No box until there is a filter.
+        let screen = lines(&draw(&mut app, 160, 30));
+        assert!(!screen.iter().any(|line| line.contains("Filter")));
+
+        press(&mut app, " jjfgamma");
+        let screen = lines(&draw(&mut app, 160, 30));
+        assert!(screen.iter().any(|line| line.contains("Filter")));
+        assert!(screen.iter().any(|line| line.contains("Update gamma")));
+        assert!(!screen.iter().any(|line| line.contains("Bump alpha")));
+        // PR 1 is selected, and the filter hides it.
+        assert!(screen.last().unwrap().contains("1 selected (1 hidden)"));
+    }
+
+    #[test]
+    fn says_when_the_filter_hides_every_pr() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        press(&mut app, "fzzz");
+        let screen = lines(&draw(&mut app, 160, 30));
+        assert!(
+            screen
+                .iter()
+                .any(|line| line.contains("No PRs match the filter."))
+        );
     }
 }

@@ -45,7 +45,15 @@ pub struct App {
     /// Whether the latest list fetch is still running.
     pub searching: bool,
     pub rows: Vec<Row>,
-    /// The highlighted row.
+    /// The indices into `rows` that the filter shows, in order. It is worked out when the filter
+    /// changes or a list loads, not when a row is refreshed, so a row whose status changes
+    /// doesn't vanish from under the cursor.
+    pub visible: Vec<usize>,
+    /// The local filter box.
+    pub filter: Input,
+    /// Whether the filter box is being edited.
+    pub filtering: bool,
+    /// The highlighted row, as a position in `visible`.
     pub table: TableState,
     /// The pane that Up/Down and PgUp/PgDn act on.
     pub focus: Pane,
@@ -263,6 +271,29 @@ pub struct Row {
     pub checks: Checks,
 }
 
+impl Row {
+    /// The checks column as drawn: the checks of a closed or merged PR no longer matter.
+    pub fn checks_label(&self) -> &'static str {
+        match self.pr.state {
+            PrState::Open => self.checks.state.label(),
+            PrState::Closed => "· closed",
+            PrState::Merged => "· merged",
+        }
+    }
+
+    /// Whether any visible column contains `text`, which must be lowercase.
+    fn matches(&self, text: &str) -> bool {
+        [
+            format!("#{}", self.pr.number),
+            self.checks_label().to_string(),
+            model::review_label(self.pr.review_decision).to_string(),
+            self.pr.title.clone(),
+        ]
+        .iter()
+        .any(|column| column.to_lowercase().contains(text))
+    }
+}
+
 /// Something fetched in the background for a PR, such as its details or its diff.
 pub enum Fetch<T> {
     Loading,
@@ -335,6 +366,9 @@ impl App {
             fetch_id: 0,
             searching: false,
             rows: Vec::new(),
+            visible: Vec::new(),
+            filter: Input::default(),
+            filtering: false,
             table: TableState::default(),
             focus: Pane::Table,
             checks_scroll: 0,
@@ -455,7 +489,8 @@ impl App {
     /// the rows below it, then those above. A fetch started as a slot frees up so goes to the
     /// rows about to be viewed.
     fn numbers_from_highlight(&self) -> Vec<u64> {
-        let Some(start) = self.table.selected() else {
+        // Rows the filter hides are fetched too.
+        let Some(start) = self.highlighted_index() else {
             return Vec::new();
         };
         (start..self.rows.len())
@@ -487,8 +522,59 @@ impl App {
         self.open_errors.clear();
     }
 
+    /// The index in `rows` of the highlighted row.
+    fn highlighted_index(&self) -> Option<usize> {
+        self.table
+            .selected()
+            .and_then(|i| self.visible.get(i))
+            .copied()
+    }
+
     pub fn highlighted(&self) -> Option<&Row> {
-        self.table.selected().and_then(|i| self.rows.get(i))
+        self.highlighted_index().map(|i| &self.rows[i])
+    }
+
+    /// The rows the filter shows, in order.
+    pub fn visible_rows(&self) -> impl Iterator<Item = &Row> {
+        self.visible.iter().map(|&i| &self.rows[i])
+    }
+
+    /// How many selected PRs the filter hides.
+    pub fn hidden_selected(&self) -> usize {
+        let visible = self
+            .visible_rows()
+            .filter(|row| self.selected.contains(&row.pr.number));
+        self.selected.len() - visible.count()
+    }
+
+    /// Works out `visible` from the filter. The highlighted PR stays highlighted if it is still
+    /// visible, else the first row is.
+    fn refilter(&mut self) {
+        let before = self.highlighted().map(|row| row.pr.number);
+        let text = self.filter.value().to_lowercase();
+        self.visible = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.matches(&text))
+            .map(|(i, _)| i)
+            .collect();
+        let position = before.and_then(|number| {
+            self.visible
+                .iter()
+                .position(|&i| self.rows[i].pr.number == number)
+        });
+        self.table
+            .select(position.or((!self.visible.is_empty()).then_some(0)));
+        if self.highlighted().map(|row| row.pr.number) != before {
+            self.reset_scroll();
+        }
+    }
+
+    fn clear_filter(&mut self) {
+        self.filter = Input::default();
+        self.filtering = false;
+        self.refilter();
     }
 
     pub fn update(&mut self, msg: Msg) {
@@ -559,7 +645,11 @@ impl App {
                 rows.sort_by_key(|row| (row.pr.state != PrState::Open, row.checks.state.rank()));
                 self.table.select((!rows.is_empty()).then_some(0));
                 self.reset_scroll();
+                self.visible = (0..rows.len()).collect();
                 self.rows = rows;
+                // A new search clears the filter.
+                self.filter = Input::default();
+                self.filtering = false;
                 self.selected.clear();
                 // Give failed details another chance with the new results.
                 forget_failed(&mut self.details);
@@ -707,6 +797,8 @@ impl App {
             }
         } else if self.editing {
             self.on_search_key(key);
+        } else if self.filtering {
+            self.on_filter_key(key);
         } else {
             self.on_list_key(key);
         }
@@ -731,6 +823,19 @@ impl App {
         }
     }
 
+    /// While filtering, every key other than Enter and Esc goes to the filter box, and the list
+    /// is filtered as you type. Enter keeps the filter; Esc clears it.
+    fn on_filter_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter => self.filtering = false,
+            KeyCode::Esc => self.clear_filter(),
+            _ => {
+                self.filter.handle_event(&Event::Key(key));
+                self.refilter();
+            }
+        }
+    }
+
     fn on_list_key(&mut self, key: KeyEvent) {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
             self.open_in_browser();
@@ -738,9 +843,12 @@ impl App {
         }
         match key.code {
             KeyCode::Char('/') => self.editing = true,
+            KeyCode::Char('f') => self.filtering = true,
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Char('q') => self.should_quit = true,
-            // Esc never quits: it is too easy to hit by accident.
+            // Esc never quits: it is too easy to hit by accident. It clears the filter, then
+            // the selection.
+            KeyCode::Esc if !self.filter.value().is_empty() => self.clear_filter(),
             KeyCode::Esc => self.selected.clear(),
             KeyCode::Tab => self.focus = self.focus.next(),
             KeyCode::BackTab => self.focus = self.focus.previous(),
@@ -878,7 +986,7 @@ impl App {
 
     fn move_highlight(&mut self, by: isize) {
         if let Some(current) = self.table.selected() {
-            let last = self.rows.len().saturating_sub(1);
+            let last = self.visible.len().saturating_sub(1);
             let new = current.saturating_add_signed(by).min(last);
             if new != current {
                 self.table.select(Some(new));
@@ -1077,6 +1185,167 @@ mod tests {
         app.update(Msg::PrsLoaded(new, Ok(prs([5]))));
         app.update(Msg::PrsLoaded(old, Ok(prs([6]))));
         assert_eq!(numbers(&app), [5]);
+    }
+
+    fn titled(number: u64, title: &str) -> Pr {
+        let mut pr = pr(number, "OPEN");
+        pr.title = title.to_string();
+        pr
+    }
+
+    /// Three open PRs titled "Bump alpha", "Bump beta" and "Update gamma".
+    fn app_with_titles() -> App {
+        let mut app = App::new(String::new(), "is:pr".to_string(), false);
+        let (id, _) = app.list_to_fetch().unwrap();
+        let prs = vec![
+            titled(1, "Bump alpha"),
+            titled(2, "Bump beta"),
+            titled(3, "Update gamma"),
+        ];
+        app.update(Msg::PrsLoaded(id, Ok(prs)));
+        app
+    }
+
+    fn visible_numbers(app: &App) -> Vec<u64> {
+        app.visible_rows().map(|row| row.pr.number).collect()
+    }
+
+    #[test]
+    fn the_filter_matches_each_visible_column_without_case() {
+        let mut app = app_with_titles();
+        press(&mut app, "fBUMP");
+        assert_eq!(visible_numbers(&app), [1, 2]);
+        for (text, expected) in [
+            ("#3", vec![3]),
+            ("no checks", vec![1, 2, 3]),
+            ("needed", vec![1, 2, 3]),
+            ("approved", vec![]),
+        ] {
+            key(&mut app, KeyCode::Esc);
+            press(&mut app, "f");
+            press(&mut app, text);
+            assert_eq!(visible_numbers(&app), expected, "{text}");
+        }
+    }
+
+    #[test]
+    fn the_filter_matches_closed_and_merged_as_drawn() {
+        let mut app = App::new(String::new(), "is:pr".to_string(), false);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(
+            id,
+            Ok(vec![pr(1, "OPEN"), pr(2, "MERGED"), pr(3, "CLOSED")]),
+        ));
+        press(&mut app, "fmerged");
+        assert_eq!(visible_numbers(&app), [2]);
+    }
+
+    #[test]
+    fn the_highlight_stays_on_its_pr_while_it_is_visible() {
+        let mut app = app_with_titles();
+        press(&mut app, "jf");
+        assert_eq!(app.highlighted().unwrap().pr.number, 2);
+        // Row 2 is now the first visible row, but still highlighted.
+        press(&mut app, "beta");
+        assert_eq!(visible_numbers(&app), [2]);
+        assert_eq!(app.highlighted().unwrap().pr.number, 2);
+        // Once it is hidden, the first visible row is highlighted.
+        key(&mut app, KeyCode::Backspace);
+        key(&mut app, KeyCode::Backspace);
+        key(&mut app, KeyCode::Backspace);
+        key(&mut app, KeyCode::Backspace);
+        press(&mut app, "gamma");
+        assert_eq!(app.highlighted().unwrap().pr.number, 3);
+    }
+
+    #[test]
+    fn moving_stays_within_the_visible_rows() {
+        let mut app = app_with_titles();
+        press(&mut app, "fbump");
+        key(&mut app, KeyCode::Enter);
+        press(&mut app, "jjj");
+        assert_eq!(app.highlighted().unwrap().pr.number, 2);
+        press(&mut app, "kkk");
+        assert_eq!(app.highlighted().unwrap().pr.number, 1);
+    }
+
+    #[test]
+    fn enter_keeps_the_filter_and_esc_clears_it_before_the_selection() {
+        let mut app = app_with_titles();
+        press(&mut app, " fgamma");
+        key(&mut app, KeyCode::Enter);
+        assert!(!app.filtering);
+        assert_eq!(visible_numbers(&app), [3]);
+        // Esc in the list clears the filter first and leaves the selection.
+        key(&mut app, KeyCode::Esc);
+        assert_eq!(visible_numbers(&app), [1, 2, 3]);
+        assert_eq!(app.selected, HashSet::from([1]));
+        key(&mut app, KeyCode::Esc);
+        assert!(app.selected.is_empty());
+    }
+
+    #[test]
+    fn esc_in_the_box_clears_the_filter() {
+        let mut app = app_with_titles();
+        press(&mut app, "fgamma");
+        key(&mut app, KeyCode::Esc);
+        assert!(!app.filtering);
+        assert_eq!(app.filter.value(), "");
+        assert_eq!(visible_numbers(&app), [1, 2, 3]);
+    }
+
+    #[test]
+    fn the_filter_box_takes_every_key_while_editing() {
+        let mut app = app_with_titles();
+        press(&mut app, "fq j/");
+        assert!(!app.should_quit);
+        assert!(!app.editing);
+        assert_eq!(app.filter.value(), "q j/");
+    }
+
+    #[test]
+    fn hidden_selected_prs_stay_selected_and_are_reviewed() {
+        let mut app = app_with_titles();
+        press(&mut app, " jj ");
+        assert_eq!(app.selected, HashSet::from([1, 3]));
+        press(&mut app, "fbeta");
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(visible_numbers(&app), [2]);
+        assert_eq!(app.selected, HashSet::from([1, 3]));
+        assert_eq!(app.hidden_selected(), 2);
+
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(confirm_numbers(&app), [1, 3]);
+    }
+
+    #[test]
+    fn a_new_search_clears_the_filter() {
+        let mut app = app_with_titles();
+        press(&mut app, "fgamma");
+        key(&mut app, KeyCode::Enter);
+        press(&mut app, "/");
+        key(&mut app, KeyCode::Enter);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(id, Ok(vec![titled(7, "Bump alpha")])));
+        assert_eq!(app.filter.value(), "");
+        assert_eq!(visible_numbers(&app), [7]);
+    }
+
+    #[test]
+    fn a_refreshed_row_stays_where_it_was_even_if_it_no_longer_matches() {
+        let mut app = app_with_titles();
+        press(&mut app, "falpha");
+        assert_eq!(visible_numbers(&app), [1]);
+        app.update(Msg::PrRefreshed(1, Ok(titled(1, "Something else"))));
+        assert_eq!(visible_numbers(&app), [1]);
+        assert_eq!(app.highlighted().unwrap().pr.title, "Something else");
+    }
+
+    #[test]
+    fn rows_the_filter_hides_are_still_prefetched() {
+        let mut app = app_with_titles();
+        press(&mut app, "fgamma");
+        assert_eq!(app.details_to_fetch(), [3, 1, 2]);
     }
 
     fn ctrl_o(app: &mut App) {

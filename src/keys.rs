@@ -15,6 +15,7 @@ const fn key(keys: &'static str, action: &'static str, bar: Option<&'static str>
 pub const KEYS: &[KeyHelp] = &[
     key("?", "Show every key", Some("Help")),
     key("/", "Edit the GitHub search query", Some("Search")),
+    key("f", "Filter the list as you type", None),
     key("Tab / Shift-Tab", "Move focus between the panes", None),
     key(
         "Up/Down, j/k",
@@ -33,7 +34,7 @@ pub const KEYS: &[KeyHelp] = &[
         "Open the selected or highlighted PRs in the browser",
         None,
     ),
-    key("Esc", "Clear the selection", None),
+    key("Esc", "Clear the filter, then the selection", None),
     key("q", "Quit, or close the current dialog", Some("Quit")),
     key("Ctrl-C", "Quit from anywhere", None),
 ];
