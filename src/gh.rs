@@ -35,13 +35,15 @@ impl Gh {
         let limit = limit.to_string();
         // Without `--state all`, gh adds `state:open` when the query has no state qualifier. A
         // qualifier in the query still wins, as on GitHub's web UI.
+        // The query is joined to the flag with `=`, so one that starts with `-`, such as
+        // `-label:major`, can't be read as a flag of its own.
+        let search = format!("--search={query}");
         let args = [
             "pr",
             "list",
             "--state",
             "all",
-            "--search",
-            query,
+            &search,
             "--limit",
             &limit,
             "--json",
