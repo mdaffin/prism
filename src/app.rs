@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use color_eyre::eyre::Result;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
@@ -29,6 +29,8 @@ pub struct App {
     pub rows: Vec<Row>,
     /// The highlighted row.
     pub table: TableState,
+    /// The numbers of the PRs marked with Space.
+    pub selected: HashSet<u64>,
     /// Why the last list fetch failed.
     pub error: Option<String>,
     /// Details by PR number. An entry is added when its fetch starts, so a PR is fetched once.
@@ -81,6 +83,7 @@ impl App {
             rows: Vec::new(),
             table: TableState::default(),
             error: None,
+            selected: HashSet::new(),
             details: HashMap::new(),
             should_quit: false,
         }
@@ -153,6 +156,7 @@ impl App {
                 rows.sort_by_key(|row| row.checks.state.rank());
                 self.table.select((!rows.is_empty()).then_some(0));
                 self.rows = rows;
+                self.selected.clear();
                 // Give failed details another chance with the new results.
                 self.details
                     .retain(|_, details| !matches!(details, Details::Failed(_)));
@@ -200,7 +204,16 @@ impl App {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
             KeyCode::Down | KeyCode::Char('j') => self.move_highlight(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_highlight(-1),
+            KeyCode::Char(' ') => self.toggle_selected(),
             _ => {}
+        }
+    }
+
+    fn toggle_selected(&mut self) {
+        if let Some(number) = self.highlighted().map(|row| row.pr.number)
+            && !self.selected.remove(&number)
+        {
+            self.selected.insert(number);
         }
     }
 
@@ -325,8 +338,28 @@ mod tests {
     }
 
     #[test]
+    fn space_toggles_the_highlighted_pr_until_new_results() {
+        let mut app = app_with_rows(3);
+        press(&mut app, " jj ");
+        assert_eq!(app.selected, HashSet::from([1, 3]));
+        press(&mut app, "k ");
+        assert_eq!(app.selected, HashSet::from([1, 2, 3]));
+        press(&mut app, " ");
+        assert_eq!(app.selected, HashSet::from([1, 3]));
+
+        // Not cleared until the new results arrive.
+        press(&mut app, "/");
+        app.update(Msg::Key(KeyEvent::from(KeyCode::Enter)));
+        let (id, _) = app.list_to_fetch().unwrap();
+        assert_eq!(app.selected.len(), 2);
+        app.update(Msg::PrsLoaded(id, Ok(prs([1, 2, 3]))));
+        assert!(app.selected.is_empty());
+    }
+
+    #[test]
     fn a_failed_search_keeps_the_old_results() {
         let mut app = app_with_rows(3);
+        press(&mut app, " ");
         press(&mut app, "/");
         app.update(Msg::Key(KeyEvent::from(KeyCode::Enter)));
         let (id, _) = app.list_to_fetch().unwrap();
@@ -337,6 +370,7 @@ mod tests {
         assert_eq!(app.error.as_deref(), Some("bad query"));
         assert!(!app.searching);
         assert_eq!(numbers(&app), [1, 2, 3]);
+        assert_eq!(app.selected, HashSet::from([1]));
     }
 
     fn finish(app: &mut App, number: u64) {

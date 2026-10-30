@@ -45,7 +45,13 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         }
         Mode::List => {
             let rows = app.rows.iter().map(|row| {
+                let mark = if app.selected.contains(&row.pr.number) {
+                    "[x]"
+                } else {
+                    "[ ]"
+                };
                 Row::new([
+                    mark.to_string(),
                     format!("#{}", row.pr.number),
                     row.checks.state.label().to_string(),
                     model::review_label(&row.pr.review_decision).to_string(),
@@ -53,13 +59,14 @@ pub fn view(app: &mut App, frame: &mut Frame) {
                 ])
             });
             let widths = [
+                Constraint::Length(3),
                 Constraint::Length(7),
                 Constraint::Length(12),
                 Constraint::Length(11),
                 Constraint::Fill(1),
             ];
             let mut table = Table::new(rows, widths)
-                .header(Row::new(["#", "Checks", "Review", "Title"]).bold())
+                .header(Row::new(["", "#", "Checks", "Review", "Title"]).bold())
                 .row_highlight_style(Style::new().reversed());
             // The rows are about to be replaced.
             if app.searching {
@@ -77,13 +84,17 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     let keys = if app.editing {
         "Enter: Search | Esc: Cancel"
     } else {
-        "/: Search | ↑/↓ j/k: Move | q: Quit"
+        "/: Search | ↑/↓ j/k: Move | Space: Select | q: Quit"
     };
-    let status = if app.searching {
-        format!("Searching… | {keys}")
-    } else {
-        keys.to_string()
-    };
+    let mut parts = Vec::new();
+    if app.searching {
+        parts.push("Searching…".to_string());
+    }
+    if !app.selected.is_empty() {
+        parts.push(format!("{} selected", app.selected.len()));
+    }
+    parts.push(keys.to_string());
+    let status = parts.join(" | ");
     frame.render_widget(
         Line::from(status).style(Style::new().reversed()),
         status_area,
