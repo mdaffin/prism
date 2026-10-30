@@ -124,6 +124,8 @@ pub enum Mode {
     Confirm(Confirm),
     /// Asking before opening many PRs in the browser.
     ConfirmOpen(ConfirmOpen),
+    /// Listing every key.
+    Help,
     /// Approving PRs.
     Running(Batch),
     /// Showing how a batch went.
@@ -693,6 +695,10 @@ impl App {
                 KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::List,
                 _ => {}
             }
+        } else if matches!(self.mode, Mode::Help) {
+            if matches!(key.code, KeyCode::Esc | KeyCode::Char('?' | 'q')) {
+                self.mode = Mode::List;
+            }
         } else if matches!(self.mode, Mode::Running(_)) {
             // Cancelling a batch comes in M4 step 3.
         } else if matches!(self.mode, Mode::Results(_)) {
@@ -732,7 +738,10 @@ impl App {
         }
         match key.code {
             KeyCode::Char('/') => self.editing = true,
-            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+            KeyCode::Char('?') => self.mode = Mode::Help,
+            KeyCode::Char('q') => self.should_quit = true,
+            // Esc never quits: it is too easy to hit by accident.
+            KeyCode::Esc => self.selected.clear(),
             KeyCode::Tab => self.focus = self.focus.next(),
             KeyCode::BackTab => self.focus = self.focus.previous(),
             KeyCode::Down | KeyCode::Char('j') => self.move_focused(1),
@@ -989,6 +998,32 @@ mod tests {
             Some((1, "is:pr state:open".to_string()))
         );
         assert_eq!(app.list_to_fetch(), None);
+    }
+
+    #[test]
+    fn esc_in_the_list_clears_the_selection_and_never_quits() {
+        let mut app = app_with_rows(3);
+        press(&mut app, " j ");
+        assert_eq!(app.selected.len(), 2);
+        key(&mut app, KeyCode::Esc);
+        assert!(app.selected.is_empty());
+        key(&mut app, KeyCode::Esc);
+        assert!(!app.should_quit);
+        press(&mut app, "q");
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn help_opens_with_question_mark_and_closes_again() {
+        let mut app = app_with_rows(3);
+        for close in [KeyCode::Esc, KeyCode::Char('?'), KeyCode::Char('q')] {
+            press(&mut app, "?");
+            assert!(matches!(app.mode, Mode::Help));
+            key(&mut app, close);
+            assert!(matches!(app.mode, Mode::List));
+        }
+        // `q` closed the popup rather than quitting.
+        assert!(!app.should_quit);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 mod app;
 mod cli;
 mod gh;
+mod keys;
 mod model;
 mod query;
 mod ui;

@@ -6,6 +6,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Row, Table, TableState,
 
 use crate::app::{App, Batch, Confirm, ConfirmOpen, Details, Fetch, Mode, Pane, Summary};
 use crate::gh::PrState;
+use crate::keys;
 use crate::model;
 
 /// The most rows a list fetch error takes above the status bar.
@@ -51,7 +52,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         let error = Paragraph::new(error).red().wrap(Wrap { trim: false });
         frame.render_widget(error, error_area);
     }
-    let keys = match &app.mode {
+    let hints = match &app.mode {
         Mode::Confirm(confirm) => {
             confirm_dialog(confirm, app.dry_run, frame, body_area);
             "←/→ Tab: Choose | Enter: Confirm | Esc: Cancel"
@@ -59,6 +60,10 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         Mode::ConfirmOpen(confirm) => {
             open_dialog(confirm, frame, body_area);
             "←/→ Tab: Choose | Enter: Confirm | Esc: Cancel"
+        }
+        Mode::Help => {
+            help_popup(frame, body_area);
+            "Esc ? q: Close"
         }
         Mode::Running(batch) => {
             running_popup(batch, app.dry_run, spinner(app), frame, body_area);
@@ -69,9 +74,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
             "Enter/Esc: Close"
         }
         _ if app.editing => "Enter: Search | Esc: Cancel",
-        _ => {
-            "/: Search | Tab: Pane | ↑/↓ j/k PgUp/PgDn: Move | Space: Select | Enter: Review | Ctrl-O: Open | q: Quit"
-        }
+        _ => &keys::bar(),
     };
     let mut parts = Vec::new();
     if app.searching {
@@ -83,7 +86,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     if !app.selected.is_empty() {
         parts.push(format!("{} selected", app.selected.len()));
     }
-    parts.push(keys.to_string());
+    parts.push(hints.to_string());
     let status = parts.join(" | ");
     frame.render_widget(
         Line::from(status).style(Style::new().reversed()),
@@ -115,6 +118,7 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
         Mode::List
         | Mode::Confirm(_)
         | Mode::ConfirmOpen(_)
+        | Mode::Help
         | Mode::Running(_)
         | Mode::Results(_) => {
             let rows = app.rows.iter().map(|row| {
@@ -222,6 +226,15 @@ fn open_dialog(confirm: &ConfirmOpen, frame: &mut Frame, area: Rect) {
         count(confirm.numbers.len(), "PR")
     );
     popup(frame, area, title, false, lines, true, footer);
+}
+
+fn help_popup(frame: &mut Frame, area: Rect) {
+    let lines = keys::KEYS
+        .iter()
+        .map(|help| Line::from(format!("{:<16} {}", help.keys, help.action)))
+        .collect();
+    let footer = vec![Line::default(), Line::from("[ OK ]".reversed()).centered()];
+    popup(frame, area, "Keys".to_string(), false, lines, false, footer);
 }
 
 fn running_popup(batch: &Batch, dry_run: bool, spinner: &str, frame: &mut Frame, area: Rect) {
