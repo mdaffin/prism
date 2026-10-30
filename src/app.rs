@@ -46,6 +46,10 @@ pub struct App {
     pub editing: bool,
     /// A query submitted but not yet fetched.
     query_to_fetch: Option<String>,
+    /// Whether `query_to_fetch` is a Ctrl-R refresh rather than a new search.
+    refresh_requested: bool,
+    /// Whether the latest list fetch is a refresh. A refresh keeps the selection.
+    fetch_is_refresh: bool,
     /// The id of the latest list fetch. Results from older fetches are dropped.
     fetch_id: u64,
     /// Whether the latest list fetch is still running.
@@ -371,6 +375,8 @@ impl App {
             submitted_query: query.clone(),
             editing: false,
             query_to_fetch: Some(query),
+            refresh_requested: false,
+            fetch_is_refresh: false,
             fetch_id: 0,
             searching: false,
             rows: Vec::new(),
@@ -489,6 +495,7 @@ impl App {
     /// A submitted query and the id of its fetch, which the caller must start.
     pub fn list_to_fetch(&mut self) -> Option<(u64, String)> {
         let query = self.query_to_fetch.take()?;
+        self.fetch_is_refresh = std::mem::take(&mut self.refresh_requested);
         self.fetch_id += 1;
         self.searching = true;
         Some((self.fetch_id, query))
@@ -669,17 +676,36 @@ impl App {
                     .collect();
                 // Open PRs first, passing first; closed and merged PRs can't be acted on.
                 rows.sort_by_key(|row| (row.pr.state != PrState::Open, row.checks.state.rank()));
-                self.table.select((!rows.is_empty()).then_some(0));
-                self.reset_scroll();
+                let before = self.highlighted().map(|row| row.pr.number);
+                // A refresh keeps the highlight on the same PR if it is still listed.
+                let highlight = before
+                    .filter(|_| self.fetch_is_refresh)
+                    .and_then(|number| rows.iter().position(|row| row.pr.number == number))
+                    .or((!rows.is_empty()).then_some(0));
+                self.table.select(highlight);
+                if !self.fetch_is_refresh || highlight.map(|i| rows[i].pr.number) != before {
+                    self.reset_scroll();
+                }
                 self.visible = (0..rows.len()).collect();
                 self.rows = rows;
-                // A new search clears the filter.
+                // The filter is cleared either way.
                 self.filter = Input::default();
                 self.filtering = false;
-                self.selected.clear();
-                // Give failed details another chance with the new results.
-                forget_failed(&mut self.details);
-                forget_failed(&mut self.diffs);
+                if self.fetch_is_refresh {
+                    // The selection is kept by PR number, so a PR that moved is still selected.
+                    // One that is no longer listed is dropped.
+                    let listed: HashSet<u64> = self.rows.iter().map(|row| row.pr.number).collect();
+                    self.selected.retain(|number| listed.contains(number));
+                    // The panes show current data, so nothing fetched earlier is kept.
+                    self.details.clear();
+                    self.diffs.clear();
+                } else {
+                    self.selected.clear();
+                    // A PR's details don't depend on the query, so a new search keeps them. Give
+                    // failed ones another chance.
+                    forget_failed(&mut self.details);
+                    forget_failed(&mut self.diffs);
+                }
                 self.clear_errors();
                 self.searching = false;
                 self.loaded();
@@ -837,6 +863,7 @@ impl App {
                 self.editing = false;
                 self.submitted_query = self.query.value().to_string();
                 self.query_to_fetch = Some(self.submitted_query.clone());
+                self.refresh_requested = false;
                 self.clear_errors();
             }
             KeyCode::Esc => {
@@ -867,6 +894,7 @@ impl App {
             match key.code {
                 KeyCode::Char('o') => self.open_in_browser(),
                 KeyCode::Char('a') => self.select_passing(),
+                KeyCode::Char('r') => self.refresh_list(),
                 _ => {}
             }
             return;
@@ -972,6 +1000,17 @@ impl App {
             })
             .collect();
         self.mode = Mode::Running(Batch { items, merge });
+    }
+
+    /// Runs the submitted query again and repopulates everything, keeping the selection. Does
+    /// nothing while a search is running.
+    fn refresh_list(&mut self) {
+        if self.searching || self.query_to_fetch.is_some() {
+            return;
+        }
+        self.query_to_fetch = Some(self.submitted_query.clone());
+        self.refresh_requested = true;
+        self.clear_errors();
     }
 
     /// Selects every visible open PR whose checks pass, keeping what is already selected.
@@ -2110,5 +2149,120 @@ mod tests {
         let (id, _) = app.list_to_fetch().unwrap();
         app.update(Msg::PrsLoaded(id, Ok(prs(1..=1))));
         assert_eq!(app.title(), "PRs");
+    }
+
+    fn ctrl_r(app: &mut App) {
+        app.update(Msg::Key(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::CONTROL,
+        )));
+    }
+
+    #[test]
+    fn ctrl_r_fetches_the_submitted_query() {
+        let mut app = app_with_rows(3);
+        ctrl_r(&mut app);
+        let (_, query) = app.list_to_fetch().unwrap();
+        assert_eq!(query, "is:pr");
+    }
+
+    #[test]
+    fn ctrl_r_is_ignored_while_a_search_runs_and_under_dialogs() {
+        let mut app = app_with_rows(3);
+        ctrl_r(&mut app);
+        assert!(app.list_to_fetch().is_some());
+        // The fetch is running.
+        ctrl_r(&mut app);
+        assert_eq!(app.list_to_fetch(), None);
+
+        let mut app = app_with_rows(3);
+        press(&mut app, "?");
+        ctrl_r(&mut app);
+        assert_eq!(app.list_to_fetch(), None);
+        key(&mut app, KeyCode::Esc);
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Confirm(_)));
+        ctrl_r(&mut app);
+        assert_eq!(app.list_to_fetch(), None);
+    }
+
+    #[test]
+    fn ctrl_r_keeps_the_selection_by_number_when_rows_move() {
+        let mut app = app_with_rows(3);
+        press(&mut app, " jj ");
+        assert_eq!(app.selected, HashSet::from([1, 3]));
+        ctrl_r(&mut app);
+        let (id, _) = app.list_to_fetch().unwrap();
+        // 3 moves to the top, 1 is gone and 4 is new.
+        app.update(Msg::PrsLoaded(id, Ok(prs([3, 2, 4]))));
+        assert_eq!(numbers(&app), [3, 2, 4]);
+        assert_eq!(app.selected, HashSet::from([3]));
+        assert_eq!(app.hidden_selected(), 0);
+    }
+
+    #[test]
+    fn a_new_search_still_clears_the_selection() {
+        let mut app = app_with_rows(3);
+        press(&mut app, " ");
+        press(&mut app, "/");
+        key(&mut app, KeyCode::Enter);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(id, Ok(prs([1, 2, 3]))));
+        assert!(app.selected.is_empty());
+    }
+
+    #[test]
+    fn ctrl_r_keeps_the_highlight_on_the_same_pr_and_clears_the_filter() {
+        let mut app = app_with_titles();
+        press(&mut app, "jfbeta");
+        key(&mut app, KeyCode::Enter);
+        ctrl_r(&mut app);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(
+            id,
+            Ok(vec![titled(3, "c"), titled(2, "Bump beta"), titled(1, "a")]),
+        ));
+        assert_eq!(app.filter.value(), "");
+        assert_eq!(visible_numbers(&app), [3, 2, 1]);
+        assert_eq!(app.highlighted().unwrap().pr.number, 2);
+
+        // If it is gone, the first row is highlighted.
+        ctrl_r(&mut app);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(id, Ok(vec![titled(8, "x"), titled(9, "y")])));
+        assert_eq!(app.highlighted().unwrap().pr.number, 8);
+    }
+
+    #[test]
+    fn ctrl_r_drops_cached_details_and_diffs_but_a_new_search_keeps_them() {
+        let mut app = app_with_rows(2);
+        app.details_to_fetch();
+        app.diffs_to_fetch();
+        assert_eq!(app.details.len(), 2);
+
+        press(&mut app, "/");
+        key(&mut app, KeyCode::Enter);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(id, Ok(prs(1..=2))));
+        assert_eq!((app.details.len(), app.diffs.len()), (2, 2));
+
+        ctrl_r(&mut app);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(id, Ok(prs(1..=2))));
+        assert_eq!((app.details.len(), app.diffs.len()), (0, 0));
+        // So they are fetched again.
+        assert_eq!(app.details_to_fetch(), [1, 2]);
+    }
+
+    #[test]
+    fn a_failed_ctrl_r_keeps_the_list_and_the_selection() {
+        let mut app = app_with_rows(3);
+        press(&mut app, " ");
+        ctrl_r(&mut app);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(id, Err(color_eyre::eyre::eyre!("boom"))));
+        assert_eq!(numbers(&app), [1, 2, 3]);
+        assert_eq!(app.selected, HashSet::from([1]));
+        assert!(app.error_text().unwrap().contains("boom"));
     }
 }

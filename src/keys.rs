@@ -39,6 +39,7 @@ pub const KEYS: &[KeyHelp] = &[
         "Select every visible PR with passing checks",
         None,
     ),
+    key("Ctrl-R", "Run the query again, keeping the selection", None),
     key("Esc", "Clear the filter, then the selection", None),
     key("q", "Quit, or close the current dialog", Some("Quit")),
     key("Ctrl-C", "Quit from anywhere", None),
