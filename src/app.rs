@@ -48,6 +48,10 @@ pub struct App {
     pub checks_scroll: u16,
     pub description_scroll: u16,
     pub diff_scroll: u16,
+    /// The selected comment of the highlighted PR. The view clamps it to the comments there are.
+    pub comment: usize,
+    /// Rows scrolled off the top of the selected comment's preview.
+    pub comment_scroll: u16,
     /// The rows a PgUp/PgDn moves in the focused pane, set by the view as it draws.
     pub page: u16,
     /// The numbers of the PRs marked with Space.
@@ -73,6 +77,7 @@ pub struct App {
 pub enum Pane {
     Table,
     Checks,
+    Comments,
     Description,
     Diff,
 }
@@ -81,7 +86,8 @@ impl Pane {
     fn next(self) -> Self {
         match self {
             Pane::Table => Pane::Checks,
-            Pane::Checks => Pane::Description,
+            Pane::Checks => Pane::Comments,
+            Pane::Comments => Pane::Description,
             Pane::Description => Pane::Diff,
             Pane::Diff => Pane::Table,
         }
@@ -91,7 +97,8 @@ impl Pane {
         match self {
             Pane::Table => Pane::Diff,
             Pane::Checks => Pane::Table,
-            Pane::Description => Pane::Checks,
+            Pane::Comments => Pane::Checks,
+            Pane::Description => Pane::Comments,
             Pane::Diff => Pane::Description,
         }
     }
@@ -235,8 +242,6 @@ pub struct Row {
 pub enum Details {
     Loading,
     Loaded {
-        // Read by the detail panes (M2).
-        #[allow(dead_code)]
         details: PrDetails,
         /// The body with HTML comments and extra blank lines removed.
         body: String,
@@ -288,6 +293,8 @@ impl App {
             checks_scroll: 0,
             description_scroll: 0,
             diff_scroll: 0,
+            comment: 0,
+            comment_scroll: 0,
             page: 1,
             error: None,
             selected: HashSet::new(),
@@ -655,8 +662,8 @@ impl App {
             KeyCode::BackTab => self.focus = self.focus.previous(),
             KeyCode::Down | KeyCode::Char('j') => self.move_focused(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_focused(-1),
-            KeyCode::PageDown => self.move_focused(self.page as isize),
-            KeyCode::PageUp => self.move_focused(-(self.page as isize)),
+            KeyCode::PageDown => self.page_focused(1),
+            KeyCode::PageUp => self.page_focused(-1),
             KeyCode::Char(' ') => self.toggle_selected(),
             KeyCode::Enter => self.open_confirm(),
             _ => {}
@@ -734,6 +741,10 @@ impl App {
             Pane::Checks => {
                 self.checks_scroll = self.checks_scroll.saturating_add_signed(clamp_i16(by));
             }
+            Pane::Comments => {
+                self.comment = self.comment.saturating_add_signed(by);
+                self.comment_scroll = 0;
+            }
             Pane::Description => {
                 self.description_scroll =
                     self.description_scroll.saturating_add_signed(clamp_i16(by));
@@ -741,6 +752,17 @@ impl App {
             Pane::Diff => {
                 self.diff_scroll = self.diff_scroll.saturating_add_signed(clamp_i16(by));
             }
+        }
+    }
+
+    /// PgUp/PgDn: a page in the focused pane. In the comments pane the arrows pick the comment,
+    /// so a page scrolls its preview.
+    fn page_focused(&mut self, direction: isize) {
+        let by = direction * self.page as isize;
+        if self.focus == Pane::Comments {
+            self.comment_scroll = self.comment_scroll.saturating_add_signed(clamp_i16(by));
+        } else {
+            self.move_focused(by);
         }
     }
 
@@ -759,6 +781,8 @@ impl App {
         self.checks_scroll = 0;
         self.description_scroll = 0;
         self.diff_scroll = 0;
+        self.comment = 0;
+        self.comment_scroll = 0;
     }
 }
 
@@ -1373,6 +1397,22 @@ mod tests {
         press(&mut app, "j");
         assert_eq!(app.checks_scroll, 1);
 
+        // In the comments pane the arrows pick the comment, and a page scrolls its preview.
+        key(&mut app, KeyCode::Tab);
+        assert!(app.focus == Pane::Comments);
+        press(&mut app, "jj");
+        assert_eq!(app.comment, 2);
+        key(&mut app, KeyCode::PageDown);
+        assert_eq!((app.comment, app.comment_scroll), (2, 5));
+        key(&mut app, KeyCode::PageUp);
+        key(&mut app, KeyCode::PageUp);
+        assert_eq!(app.comment_scroll, 0);
+        press(&mut app, "jk");
+        assert_eq!(app.comment, 2);
+        key(&mut app, KeyCode::PageDown);
+        press(&mut app, "k");
+        assert_eq!((app.comment, app.comment_scroll), (1, 0));
+
         key(&mut app, KeyCode::Tab);
         assert!(app.focus == Pane::Description);
         press(&mut app, "jj");
@@ -1404,6 +1444,7 @@ mod tests {
         let mut app = app_with_rows(3);
         for (pane, keys) in [
             (Pane::Checks, "j"),
+            (Pane::Comments, "jj"),
             (Pane::Description, "jj"),
             (Pane::Diff, "jjj"),
         ] {
@@ -1416,6 +1457,7 @@ mod tests {
             (app.checks_scroll, app.description_scroll, app.diff_scroll),
             (0, 0, 0)
         );
+        assert_eq!((app.comment, app.comment_scroll), (0, 0));
 
         // A highlight that can't move, at the last row, leaves the scroll alone.
         key(&mut app, KeyCode::Down);

@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
 use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Text};
-use ratatui::widgets::{Block, Clear, Paragraph, Row, Table, TableState, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Row, Table, TableState, Wrap};
 
 use crate::app::{App, Batch, Confirm, Details, Diff, Mode, Pane, Summary};
 use crate::gh::PrState;
@@ -27,8 +27,12 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     .areas(frame.area());
     let [left_area, detail_area] =
         Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).areas(body_area);
-    let [top_area, checks_area] =
-        Layout::vertical([Constraint::Fill(2), Constraint::Fill(1)]).areas(left_area);
+    let [top_area, checks_area, comments_area] = Layout::vertical([
+        Constraint::Fill(2),
+        Constraint::Fill(1),
+        Constraint::Max(10),
+    ])
+    .areas(left_area);
     let [search_area, table_area] =
         Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(top_area);
 
@@ -101,6 +105,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     let [description_area, diff_area] =
         Layout::vertical([Constraint::Fill(1), Constraint::Fill(2)]).areas(detail_area);
     checks(app, frame, checks_area);
+    comments(app, frame, comments_area);
     description(app, frame, description_area);
     diff(app, frame, diff_area);
 
@@ -379,6 +384,65 @@ fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
     let mut state = TableState::default().with_offset(usize::from(scroll));
     frame.render_stateful_widget(table, inner, &mut state);
     app.checks_scroll = scroll;
+}
+
+/// The comments of the highlighted PR: a list of who and when beside a preview of the selected
+/// one.
+fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
+    let block = pane_block("Comments", app.focus == Pane::Comments);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let comments = match app.highlighted().map(|row| app.details.get(&row.pr.number)) {
+        None => return,
+        Some(None | Some(Details::Loading)) => {
+            frame.render_widget(Line::from("Loading…"), inner);
+            return;
+        }
+        Some(Some(Details::Failed(error))) => {
+            let text = Text::from(format!("Failed to load details: {error}")).red();
+            frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), inner);
+            return;
+        }
+        Some(Some(Details::Loaded { details, .. })) => &details.comments,
+    };
+    if comments.is_empty() {
+        frame.render_widget(Line::from("No comments."), inner);
+        return;
+    }
+    let [list_area, preview_area] =
+        Layout::horizontal([Constraint::Percentage(35), Constraint::Fill(1)]).areas(inner);
+    let selected = app.comment.min(comments.len() - 1);
+
+    let now = jiff::Timestamp::now();
+    let rows = comments.iter().map(|comment| {
+        let author = comment
+            .author
+            .as_ref()
+            .map_or("ghost", |a| a.login.as_str());
+        Row::new([format!("@{author}"), model::ago(&comment.created_at, now)])
+    });
+    let list = Table::new(rows, [Constraint::Fill(1), Constraint::Length(14)])
+        .row_highlight_style(Style::new().reversed());
+    let mut state = TableState::default().with_selected(selected);
+    frame.render_stateful_widget(list, list_area, &mut state);
+
+    let preview_block = Block::new().borders(Borders::LEFT);
+    let preview_inner = preview_block.inner(preview_area);
+    let body = model::clean_body(comments[selected].body.as_deref());
+    let preview = Paragraph::new(body).wrap(Wrap { trim: false });
+    let scroll = app.comment_scroll.min(max_scroll(
+        preview.line_count(preview_inner.width),
+        preview_inner.height,
+    ));
+    frame.render_widget(
+        preview.scroll((scroll, 0)).block(preview_block),
+        preview_area,
+    );
+    if app.focus == Pane::Comments {
+        app.page = preview_inner.height.saturating_sub(1).max(1);
+    }
+    app.comment = selected;
+    app.comment_scroll = scroll;
 }
 
 fn diff(app: &mut App, frame: &mut Frame, area: Rect) {

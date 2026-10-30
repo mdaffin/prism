@@ -251,7 +251,6 @@ pub struct Label {
     pub name: String,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Comment {
@@ -260,7 +259,6 @@ pub struct Comment {
     pub body: Option<String>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct Author {
     pub login: String,
