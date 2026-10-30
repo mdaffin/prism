@@ -148,16 +148,14 @@ pub struct Author {
     pub login: String,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "__typename")]
 pub enum Check {
     CheckRun(CheckRun),
     StatusContext(StatusContext),
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckRun {
     pub name: String,
@@ -167,8 +165,7 @@ pub struct CheckRun {
     pub started_at: Option<String>,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusContext {
     pub context: String,
