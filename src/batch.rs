@@ -139,13 +139,9 @@ impl Batch {
             .iter()
             .filter_map(|item| item.merging.as_ref())
             .collect();
-        // Merges that were cancelled before they started weren't tried.
         let merged = self.merge.then(|| {
-            let tried = merges
-                .iter()
-                .filter(|status| ***status != ItemStatus::Cancelled);
-            let ok = tried.clone().filter(|status| status.is_ok()).count();
-            (ok, tried.count())
+            let ok = merges.iter().filter(|status| status.is_ok()).count();
+            (ok, merges.len())
         });
         let cancelled = self
             .items
@@ -180,8 +176,8 @@ impl Batch {
 pub struct Summary {
     pub approved: usize,
     pub total: usize,
-    /// How many were merged or queued for auto-merge, out of how many were tried. `None` when
-    /// the batch didn't merge.
+    /// How many were merged or queued for auto-merge, out of how many were due to merge, which
+    /// includes cancelled and interrupted ones. `None` when the batch didn't merge.
     pub merged: Option<(usize, usize)>,
     /// PR numbers, the step that failed and the error on one line.
     pub failures: Vec<(u64, &'static str, String)>,

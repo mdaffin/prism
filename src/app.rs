@@ -1720,7 +1720,7 @@ mod tests {
         assert_eq!(summary.interrupted, [3, 4]);
         // PRs 1 and 2 were approved but their merges didn't start.
         assert_eq!(summary.cancelled, 2);
-        assert_eq!(summary.merged, Some((0, 0)));
+        assert_eq!(summary.merged, Some((0, 2)));
     }
 
     #[test]
@@ -1740,7 +1740,7 @@ mod tests {
             panic!("the results aren't shown");
         };
         assert_eq!(summary.approved, 4);
-        assert_eq!(summary.merged, Some((1, 2)));
+        assert_eq!(summary.merged, Some((1, 4)));
         assert_eq!(summary.interrupted, [2]);
         assert_eq!(summary.cancelled, 2);
         assert_eq!(app.refreshes_to_run(), [1, 2, 3, 4]);
