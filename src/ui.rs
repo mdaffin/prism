@@ -548,3 +548,86 @@ fn description(app: &mut App, frame: &mut Frame, area: Rect) {
     frame.render_widget(pane.scroll((scroll, 0)).block(block), area);
     app.description_scroll = scroll;
 }
+
+#[cfg(test)]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+
+    use super::*;
+    use crate::app::Msg;
+    use crate::gh::Pr;
+
+    fn pr(number: u64, title: &str, state: &str, review: &str) -> Pr {
+        serde_json::from_value(serde_json::json!({
+            "number": number,
+            "title": title,
+            "state": state,
+            "statusCheckRollup": [],
+            "mergeable": "MERGEABLE",
+            "reviewDecision": review,
+        }))
+        .unwrap()
+    }
+
+    /// An app that has loaded these PRs, in the order given before the table sorts them.
+    fn app_with(prs: Vec<Pr>) -> App {
+        let mut app = App::new("PRs".to_string(), "is:pr".to_string(), false);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(id, Ok(prs)));
+        app
+    }
+
+    /// Draws the app on a screen of this size, as the real terminal would show it.
+    fn draw(app: &mut App, width: u16, height: u16) -> Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| view(app, frame)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    /// The text of each screen row.
+    fn lines(buffer: &Buffer) -> Vec<String> {
+        let width = usize::from(buffer.area.width);
+        buffer
+            .content()
+            .chunks(width)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+            .collect()
+    }
+
+    /// The position of the first cell of the first occurrence of `text`. Read its colours with
+    /// `buffer[position]`.
+    fn find(buffer: &Buffer, text: &str) -> Option<Position> {
+        lines(buffer).iter().enumerate().find_map(|(y, line)| {
+            let column = line.find(text).map(|byte| line[..byte].chars().count())?;
+            Some(Position::new(column as u16, y as u16))
+        })
+    }
+
+    #[test]
+    fn draws_the_table() {
+        let mut app = app_with(vec![
+            pr(7, "Bump example-lib", "OPEN", "APPROVED"),
+            pr(9, "Old change", "MERGED", ""),
+        ]);
+        let buffer = draw(&mut app, 160, 30);
+        let screen = lines(&buffer);
+
+        assert!(screen[0].starts_with("PRs"));
+        let header = screen.iter().find(|line| line.contains("Checks")).unwrap();
+        assert!(header.contains("# ") && header.contains("Review") && header.contains("Title"));
+        let open = screen.iter().find(|line| line.contains("#7")).unwrap();
+        assert!(open.contains("[ ]"));
+        assert!(open.contains("· no checks"));
+        assert!(open.contains("✓ approved"));
+        assert!(open.contains("Bump example-lib"));
+        let merged = screen.iter().find(|line| line.contains("#9")).unwrap();
+        assert!(merged.contains("· merged") && merged.contains("Old change"));
+
+        // The helper finds cells, so a test can read their colours.
+        let position = find(&buffer, "Bump example-lib").unwrap();
+        assert!(screen[usize::from(position.y)].contains("#7"));
+        assert_eq!(buffer[position].symbol(), "B");
+    }
+}
