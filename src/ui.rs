@@ -1,13 +1,13 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
 use ratatui::style::{Style, Stylize};
-use ratatui::text::{Line, Text};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Row, Table, TableState, Wrap};
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap};
 
 use crate::app::{App, Batch, Confirm, ConfirmOpen, Details, Fetch, Mode, Pane, Summary};
 use crate::gh::PrState;
 use crate::keys;
-use crate::model;
+use crate::model::{self, CheckState};
 
 /// The most rows a list fetch error takes above the status bar.
 const MAX_ERROR_ROWS: u16 = 5;
@@ -129,16 +129,18 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
                 };
                 // The checks of a closed or merged PR no longer matter.
                 let checks = match row.pr.state {
-                    PrState::Open => row.checks.state.label(),
-                    PrState::Closed => "· closed",
-                    PrState::Merged => "· merged",
+                    PrState::Open => {
+                        Cell::new(row.checks.state.label()).style(state_style(row.checks.state))
+                    }
+                    PrState::Closed => Cell::new("· closed"),
+                    PrState::Merged => Cell::new("· merged"),
                 };
                 let cells = Row::new([
-                    mark.to_string(),
-                    format!("#{}", row.pr.number),
-                    checks.to_string(),
-                    model::review_label(row.pr.review_decision).to_string(),
-                    row.pr.title.clone(),
+                    Cell::new(mark),
+                    Cell::new(format!("#{}", row.pr.number)),
+                    checks,
+                    Cell::new(model::review_label(row.pr.review_decision)),
+                    Cell::new(row.pr.title.as_str()),
                 ]);
                 if row.pr.state == PrState::Open {
                     cells
@@ -170,12 +172,14 @@ fn confirm_dialog(confirm: &Confirm, dry_run: bool, frame: &mut Frame, area: Rec
         .prs
         .iter()
         .map(|pr| {
-            Line::from(format!(
-                "#{:<6} {:<12} {}",
-                pr.number,
-                pr.checks.label(),
-                pr.title
-            ))
+            Line::from(vec![
+                format!("#{:<6} ", pr.number).into(),
+                Span::styled(
+                    format!("{:<12} ", pr.checks.label()),
+                    state_style(pr.checks),
+                ),
+                pr.title.as_str().into(),
+            ])
         })
         .collect();
     if confirm.prs.is_empty() {
@@ -337,6 +341,15 @@ fn popup(
     frame.render_widget(Paragraph::new(footer), footer_area);
 }
 
+/// Green for passing, yellow for pending or no checks, red for failing or a conflict.
+fn state_style(state: CheckState) -> Style {
+    match state.rank() {
+        0 => Style::new().green(),
+        1 => Style::new().yellow(),
+        _ => Style::new().red(),
+    }
+}
+
 /// The spinner's current frame.
 fn spinner(app: &App) -> &'static str {
     SPINNER[app.spinner % SPINNER.len()]
@@ -411,16 +424,22 @@ fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
     let Some(row) = app.highlighted() else {
         return;
     };
-    if row.checks.results.is_empty() {
+    // A conflict outranks the checks, so it gets a row of its own at the top.
+    let conflict = (row.checks.state == CheckState::Conflict)
+        .then(|| styled_check_row(CheckState::Conflict, "Merge conflict"));
+    let rows: Vec<Row> = conflict
+        .into_iter()
+        .chain(
+            row.checks
+                .worst_first()
+                .into_iter()
+                .map(|result| styled_check_row(result.state, &result.key)),
+        )
+        .collect();
+    if rows.is_empty() {
         frame.render_widget(Line::from("No checks."), inner);
         return;
     }
-    let rows: Vec<Row> = row
-        .checks
-        .worst_first()
-        .into_iter()
-        .map(|result| Row::new([result.state.label(), result.key.as_str()]))
-        .collect();
     // One row of the table is its header.
     let scroll = app
         .checks_scroll
@@ -430,6 +449,14 @@ fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
     let mut state = TableState::default().with_offset(usize::from(scroll));
     frame.render_stateful_widget(table, inner, &mut state);
     app.checks_scroll = scroll;
+}
+
+/// A row of the checks pane, with its status coloured.
+fn styled_check_row<'a>(state: CheckState, name: &'a str) -> Row<'a> {
+    Row::new([
+        Cell::new(state.label()).style(state_style(state)),
+        Cell::new(name),
+    ])
 }
 
 /// The comments of the highlighted PR: a list of who and when beside a preview of the selected
@@ -551,9 +578,11 @@ fn description(app: &mut App, frame: &mut Frame, area: Rect) {
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::KeyCode;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
+    use ratatui::style::Color;
 
     use super::*;
     use crate::app::Msg;
@@ -629,5 +658,122 @@ mod tests {
         let position = find(&buffer, "Bump example-lib").unwrap();
         assert!(screen[usize::from(position.y)].contains("#7"));
         assert_eq!(buffer[position].symbol(), "B");
+    }
+
+    fn run(name: &str, status: &str, conclusion: &str) -> serde_json::Value {
+        serde_json::json!({
+            "__typename": "CheckRun",
+            "name": name,
+            "workflowName": "CI",
+            "status": status,
+            "conclusion": conclusion,
+            "startedAt": "2026-01-02T03:00:00Z",
+        })
+    }
+
+    fn pr_checked(number: u64, mergeable: &str, checks: Vec<serde_json::Value>) -> Pr {
+        serde_json::from_value(serde_json::json!({
+            "number": number,
+            "title": format!("PR {number}"),
+            "state": "OPEN",
+            "statusCheckRollup": checks,
+            "mergeable": mergeable,
+            "reviewDecision": "",
+        }))
+        .unwrap()
+    }
+
+    /// Five open PRs, one in each state. The table puts them in this order: passing first, then
+    /// pending and none, then failing and conflict.
+    fn one_of_each() -> App {
+        app_with(vec![
+            pr_checked(1, "MERGEABLE", vec![run("build", "COMPLETED", "SUCCESS")]),
+            pr_checked(2, "MERGEABLE", vec![run("build", "IN_PROGRESS", "")]),
+            pr_checked(3, "MERGEABLE", vec![]),
+            pr_checked(4, "MERGEABLE", vec![run("build", "COMPLETED", "FAILURE")]),
+            pr_checked(5, "CONFLICTING", vec![run("build", "COMPLETED", "SUCCESS")]),
+        ])
+    }
+
+    fn press(app: &mut App, keys: &str) {
+        for c in keys.chars() {
+            app.update(Msg::Key(KeyCode::Char(c).into()));
+        }
+    }
+
+    #[test]
+    fn colours_the_checks_column() {
+        let mut app = one_of_each();
+        let buffer = draw(&mut app, 160, 30);
+        for (label, colour) in [
+            ("✓ passing", Color::Green),
+            ("… pending", Color::Yellow),
+            ("· no checks", Color::Yellow),
+            ("✗ failing", Color::Red),
+            ("✗ conflict", Color::Red),
+        ] {
+            // The checks pane lists the highlighted PR's state too, so look in the table's rows.
+            let table_row = lines(&buffer)
+                .iter()
+                .position(|line| line.contains(label) && line.contains('#'))
+                .unwrap_or_else(|| panic!("no table row for {label}"));
+            let column = lines(&buffer)[table_row].find(label).unwrap();
+            let position = Position::new(column as u16, table_row as u16);
+            assert_eq!(buffer[position].fg, colour, "{label}");
+        }
+    }
+
+    #[test]
+    fn colours_the_checks_pane_and_shows_a_conflict_first() {
+        let mut app = one_of_each();
+        // The conflicting PR is last.
+        press(&mut app, "jjjj");
+        let buffer = draw(&mut app, 160, 40);
+        let screen = lines(&buffer);
+
+        let conflict = find(&buffer, "Merge conflict").unwrap();
+        let status = Position::new(conflict.x - 11, conflict.y);
+        assert!(screen[usize::from(status.y)].contains("✗ conflict"));
+        assert_eq!(buffer[status].fg, Color::Red);
+        // Above the check that passed, which is the only other row.
+        let build = find(&buffer, "CI/build").unwrap();
+        assert!(build.y > conflict.y);
+        let passed = Position::new(build.x - 11, build.y);
+        assert!(screen[usize::from(passed.y)].contains("✓ passing"));
+        assert_eq!(buffer[passed].fg, Color::Green);
+    }
+
+    #[test]
+    fn a_conflict_with_no_checks_still_shows_the_conflict() {
+        let mut app = app_with(vec![pr_checked(1, "CONFLICTING", vec![])]);
+        let buffer = draw(&mut app, 160, 40);
+        assert!(find(&buffer, "Merge conflict").is_some());
+        assert!(find(&buffer, "No checks.").is_none());
+    }
+
+    #[test]
+    fn colours_the_checks_in_the_confirm_dialog() {
+        let mut app = one_of_each();
+        // Select everything, then open the dialog.
+        press(&mut app, " j j j j ");
+        app.update(Msg::Key(KeyCode::Enter.into()));
+        let buffer = draw(&mut app, 160, 40);
+        for (label, colour) in [
+            ("✓ passing", Color::Green),
+            ("… pending", Color::Yellow),
+            ("✗ failing", Color::Red),
+            ("✗ conflict", Color::Red),
+        ] {
+            // The table's checks column is in the left 30 columns; the centred dialog is to the
+            // right of that.
+            let position = (0..buffer.area.height)
+                .find_map(|y| {
+                    let line: String = lines(&buffer)[usize::from(y)].chars().skip(30).collect();
+                    let x = line.find(label).map(|byte| line[..byte].chars().count())?;
+                    Some(Position::new(30 + x as u16, y))
+                })
+                .unwrap_or_else(|| panic!("no dialog row for {label}"));
+            assert_eq!(buffer[position].fg, colour, "{label}");
+        }
     }
 }
