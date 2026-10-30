@@ -1,4 +1,5 @@
 mod cli;
+mod query;
 
 use std::io::ErrorKind;
 use std::process::{Command, Stdio};
@@ -10,7 +11,8 @@ fn main() -> Result<()> {
     color_eyre::install()?;
     let args = cli::Args::parse();
     check_gh_installed()?;
-    println!("{args:#?}");
+    let query = query::initial(args.author.as_deref(), &args.search);
+    println!("{query}");
     Ok(())
 }
 
