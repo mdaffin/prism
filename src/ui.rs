@@ -55,10 +55,15 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     }
 
     pr_table(app, frame, table_area);
-    let [description_area, diff_area] =
-        Layout::vertical([Constraint::Fill(1), Constraint::Fill(2)]).areas(detail_area);
+    let [pull_request_area, description_area, diff_area] = Layout::vertical([
+        Constraint::Length(4),
+        Constraint::Fill(1),
+        Constraint::Fill(2),
+    ])
+    .areas(detail_area);
     checks(app, frame, checks_area);
     comments(app, frame, comments_area);
+    pull_request(app, frame, pull_request_area);
     description(app, frame, description_area);
     diff(app, frame, diff_area);
 
@@ -660,6 +665,43 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
     app.scroll.diff = scroll;
 }
 
+/// The highlighted PR's title and its summary line: checks, review, size and branch.
+fn pull_request(app: &App, frame: &mut Frame, area: Rect) {
+    let block = Block::bordered().title("Pull request");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let Some(row) = app.highlighted() else {
+        return;
+    };
+    let checks = Span::raw(row.checks_label());
+    // The checks of a closed or merged PR no longer matter, so they aren't coloured.
+    let checks = if row.pr.state == PrState::Open {
+        checks.style(state_style(row.checks.state))
+    } else {
+        checks
+    };
+    let mut summary = vec![
+        checks,
+        Span::raw("  "),
+        Span::raw(model::review_label(row.pr.review_decision)),
+    ];
+    // The size and branch come with the details.
+    match app.details.get(&row.pr.number) {
+        Some(Fetch::Loaded(Details { details, .. })) => summary.extend([
+            Span::raw("  "),
+            Span::styled(format!("+{}", details.additions), Style::new().green()),
+            Span::raw(" "),
+            Span::styled(format!("-{}", details.deletions), Style::new().red()),
+            Span::raw(" lines  "),
+            Span::raw(details.head_ref_name.as_str()),
+        ]),
+        None | Some(Fetch::Loading) => summary.push(Span::raw("  Loading…")),
+        Some(Fetch::Failed(_)) => {}
+    }
+    let title = Line::from(format!("#{} {}", row.pr.number, row.pr.title)).bold();
+    frame.render_widget(Paragraph::new(vec![title, Line::from(summary)]), inner);
+}
+
 fn description(app: &mut App, frame: &mut Frame, area: Rect) {
     let block = pane_block("Description", app.focus == Pane::Description);
     let inner = block.inner(area);
@@ -756,12 +798,18 @@ mod tests {
         assert!(screen[0].starts_with("PRs"));
         let header = screen.iter().find(|line| line.contains("Checks")).unwrap();
         assert!(header.contains("# ") && header.contains("Review") && header.contains("Title"));
-        let open = screen.iter().find(|line| line.contains("#7")).unwrap();
+        let open = screen
+            .iter()
+            .find(|line| line.contains("#7") && line.contains("["))
+            .unwrap();
         assert!(open.contains("[ ]"));
         assert!(open.contains("· no checks"));
         assert!(open.contains("✓ approved"));
         assert!(open.contains("Bump example-lib"));
-        let merged = screen.iter().find(|line| line.contains("#9")).unwrap();
+        let merged = screen
+            .iter()
+            .find(|line| line.contains("#9") && line.contains("["))
+            .unwrap();
         assert!(merged.contains("· merged") && merged.contains("Old change"));
 
         // The helper finds cells, so a test can read their colours.
@@ -923,11 +971,17 @@ mod tests {
         let header = screen.iter().find(|line| line.contains("Checks")).unwrap();
         assert!(header.contains("container") && header.contains("version"));
         assert!(!header.contains("Title"));
-        let bump = screen.iter().find(|line| line.contains("#1")).unwrap();
+        let bump = screen
+            .iter()
+            .find(|line| line.contains("#1") && line.contains("["))
+            .unwrap();
         assert!(bump.contains("alpha") && bump.contains("1.2"));
         assert!(!bump.contains("Bump"));
         // A title that doesn't match gets empty cells; the title is still not shown.
-        let fix = screen.iter().find(|line| line.contains("#2")).unwrap();
+        let fix = screen
+            .iter()
+            .find(|line| line.contains("#2") && line.contains("["))
+            .unwrap();
         assert!(!fix.contains("Fix beta"));
     }
 
@@ -979,6 +1033,44 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("check GitHub: #2, #3, #4"))
         );
+    }
+
+    #[test]
+    fn the_pull_request_box_shows_the_title_and_a_summary() {
+        let mut app = app_with(vec![pr(7, "Bump example-lib", "OPEN", "APPROVED")]);
+        let screen = lines(&draw(&mut app, 160, 30));
+        assert!(screen.iter().any(|line| line.contains("Pull request")));
+        // Until the details load, only what the list knows is shown.
+        let summary = screen
+            .iter()
+            .find(|line| line.contains("✓ approved") && line.contains("no checks"));
+        assert!(summary.unwrap().contains("Loading…"));
+
+        let details = serde_json::from_value(serde_json::json!({
+            "headRefName": "renovate/example-lib",
+            "body": "",
+            "comments": [],
+            "additions": 12,
+            "deletions": 3,
+        }))
+        .unwrap();
+        app.update(Msg::DetailsLoaded(7, Ok(details)));
+        let buffer = draw(&mut app, 160, 30);
+        let screen = lines(&buffer);
+        let title = screen
+            .iter()
+            .find(|line| line.contains("#7 Bump example-lib"))
+            .unwrap();
+        assert!(!title.contains("[ ]"));
+        let summary = screen
+            .iter()
+            .find(|line| line.contains("+12 -3 lines  renovate/example-lib"))
+            .unwrap();
+        assert!(summary.contains("· no checks") && summary.contains("✓ approved"));
+        let added = find(&buffer, "+12").unwrap();
+        assert_eq!(buffer[added].fg, Color::Green);
+        let removed = find(&buffer, "-3 lines").unwrap();
+        assert_eq!(buffer[removed].fg, Color::Red);
     }
 
     #[test]
