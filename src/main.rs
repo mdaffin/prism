@@ -18,6 +18,7 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::time::{Instant, MissedTickBehavior};
 
 use app::{App, Msg};
+use cli::MergeMethod;
 
 /// How often the rows' status is refreshed in the background.
 const REFRESH_EVERY: Duration = Duration::from_secs(30);
@@ -52,58 +53,7 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
         tokio::time::interval_at(Instant::now() + REFRESH_EVERY, REFRESH_EVERY);
     refresh_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
     while !app.should_quit {
-        // Start any work the last update asked for.
-        if let Some((id, query)) = app.list_to_fetch() {
-            let limit = args.limit;
-            spawn(&gh, &tx, async move |gh| {
-                Msg::PrsLoaded(id, gh.list_prs(&query, limit).await)
-            });
-        }
-        for number in app.details_to_fetch() {
-            spawn(&gh, &tx, async move |gh| {
-                Msg::DetailsLoaded(number, gh.pr_details(number).await)
-            });
-        }
-        for number in app.diffs_to_fetch() {
-            spawn(&gh, &tx, async move |gh| {
-                Msg::DiffLoaded(number, gh.pr_diff(number).await)
-            });
-        }
-        for number in app.refreshes_to_run() {
-            spawn(&gh, &tx, async move |gh| {
-                Msg::PrRefreshed(number, gh.pr(number).await)
-            });
-        }
-        if let Some(fetch) = app.status_to_fetch() {
-            let limit = args.limit;
-            spawn(&gh, &tx, async move |gh| {
-                let update = gh
-                    .status_update(&fetch.query, limit, fetch.candidates)
-                    .await;
-                Msg::StatusRefreshed(fetch.id, update)
-            });
-        }
-        let opens = app.opens_to_run();
-        if !opens.is_empty() {
-            // One task, so the tabs open in order.
-            let (gh, tx) = (gh.clone(), tx.clone());
-            tokio::spawn(async move {
-                for number in opens {
-                    let _ = tx.send(Msg::Opened(number, gh.open(number).await));
-                }
-            });
-        }
-        for number in app.approvals_to_run() {
-            spawn(&gh, &tx, async move |gh| {
-                Msg::Approved(number, gh.approve(number).await)
-            });
-        }
-        if let Some((number, auto)) = app.merge_to_run() {
-            let method = args.merge_method;
-            spawn(&gh, &tx, async move |gh| {
-                Msg::Merged(number, gh.merge(number, auto, method).await)
-            });
-        }
+        start_work(&mut app, &gh, &tx, args.limit, args.merge_method);
 
         terminal.draw(|frame| ui::view(&mut app, frame))?;
         let msg = tokio::select! {
@@ -120,6 +70,64 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
         app.update(msg);
     }
     Ok(())
+}
+
+/// Starts the background work that the last update asked for.
+fn start_work(
+    app: &mut App,
+    gh: &gh::Gh,
+    tx: &UnboundedSender<Msg>,
+    limit: u32,
+    method: MergeMethod,
+) {
+    if let Some((id, query)) = app.list_to_fetch() {
+        spawn(gh, tx, async move |gh| {
+            Msg::PrsLoaded(id, gh.list_prs(&query, limit).await)
+        });
+    }
+    for number in app.details_to_fetch() {
+        spawn(gh, tx, async move |gh| {
+            Msg::DetailsLoaded(number, gh.pr_details(number).await)
+        });
+    }
+    for number in app.diffs_to_fetch() {
+        spawn(gh, tx, async move |gh| {
+            Msg::DiffLoaded(number, gh.pr_diff(number).await)
+        });
+    }
+    for number in app.refreshes_to_run() {
+        spawn(gh, tx, async move |gh| {
+            Msg::PrRefreshed(number, gh.pr(number).await)
+        });
+    }
+    if let Some(fetch) = app.status_to_fetch() {
+        spawn(gh, tx, async move |gh| {
+            let update = gh
+                .status_update(&fetch.query, limit, fetch.candidates)
+                .await;
+            Msg::StatusRefreshed(fetch.id, update)
+        });
+    }
+    let opens = app.opens_to_run();
+    if !opens.is_empty() {
+        // One task, so the tabs open in order.
+        let (gh, tx) = (gh.clone(), tx.clone());
+        tokio::spawn(async move {
+            for number in opens {
+                let _ = tx.send(Msg::Opened(number, gh.open(number).await));
+            }
+        });
+    }
+    for number in app.approvals_to_run() {
+        spawn(gh, tx, async move |gh| {
+            Msg::Approved(number, gh.approve(number).await)
+        });
+    }
+    if let Some((number, auto)) = app.merge_to_run() {
+        spawn(gh, tx, async move |gh| {
+            Msg::Merged(number, gh.merge(number, auto, method).await)
+        });
+    }
 }
 
 /// Runs `work` in the background with its own handle to `gh`, and sends the message it returns.

@@ -9,8 +9,8 @@ use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 
 use crate::batch::{
-    Batch, BatchItem, Choice, Confirm, ConfirmPr, ItemStatus, Summary, auto_merge, on_confirm_key,
-    status,
+    Batch, BatchItem, Choice, Confirm, ConfirmPr, ItemStatus, Summary, auto_merge, finished_status,
+    on_confirm_key,
 };
 use crate::gh::{Pr, PrDetails, PrState, StatusUpdate};
 use crate::model::{self, CheckState, Checks};
@@ -24,8 +24,8 @@ const MAX_DIFF_FETCHES: usize = 4;
 /// The most approvals to run at once.
 const MAX_APPROVALS: usize = 4;
 
-/// The most failed row refreshes to list above the status bar.
-const MAX_REFRESH_ERRORS: usize = 3;
+/// The most failed row refreshes, and the most failed opens, to list above the status bar.
+const MAX_LISTED_ERRORS: usize = 3;
 
 /// The most row refreshes to run at once.
 const MAX_REFRESHES: usize = 4;
@@ -152,21 +152,23 @@ impl Errors {
     /// of those are listed, as the space for them is small.
     pub fn text(&self) -> Option<String> {
         let mut lines: Vec<String> = self.search.iter().cloned().collect();
-        lines.extend(self.refreshes.iter().take(MAX_REFRESH_ERRORS).cloned());
-        let more = self.refreshes.len().saturating_sub(MAX_REFRESH_ERRORS);
-        if more > 0 {
-            lines.push(format!("… and {more} more refreshes failed"));
-        }
-        lines.extend(self.opens.iter().take(MAX_REFRESH_ERRORS).cloned());
-        let more = self.opens.len().saturating_sub(MAX_REFRESH_ERRORS);
-        if more > 0 {
-            lines.push(format!("… and {more} more PRs failed to open"));
-        }
+        push_listed(&mut lines, &self.refreshes, "refreshes failed");
+        push_listed(&mut lines, &self.opens, "PRs failed to open");
         (!lines.is_empty()).then(|| lines.join("\n"))
     }
 
     fn clear(&mut self) {
         *self = Self::default();
+    }
+}
+
+/// Adds the first [`MAX_LISTED_ERRORS`] of `errors` to `lines`, then a line counting the rest as
+/// "… and N more `what`".
+fn push_listed(lines: &mut Vec<String>, errors: &[String], what: &str) {
+    lines.extend(errors.iter().take(MAX_LISTED_ERRORS).cloned());
+    let more = errors.len().saturating_sub(MAX_LISTED_ERRORS);
+    if more > 0 {
+        lines.push(format!("… and {more} more {what}"));
     }
 }
 
@@ -550,7 +552,7 @@ impl App {
     }
 
     /// The PR numbers in the order background fetches should take them: the highlighted PR, then
-    /// the rows below it, then those above. A fetch started as a slot frees up so goes to the
+    /// the rows below it, then those above. A fetch that starts when a slot frees up goes to the
     /// rows about to be viewed.
     fn numbers_from_highlight(&self) -> Vec<u64> {
         // Rows the filter hides are fetched too.
@@ -745,7 +747,7 @@ impl App {
             return;
         };
         if let Some(item) = batch.items.iter_mut().find(|item| item.pr.number == number) {
-            item.approval = status(result, ItemStatus::Done);
+            item.approval = finished_status(result, ItemStatus::Done);
         }
         if !batch.items.iter().all(|item| item.approval.is_finished()) {
             return;
@@ -774,7 +776,7 @@ impl App {
             } else {
                 ItemStatus::Done
             };
-            item.merging = Some(status(result, ok));
+            item.merging = Some(finished_status(result, ok));
         }
         let (finished, total) = batch.progress();
         if finished == total {
@@ -810,12 +812,15 @@ impl App {
             key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c');
         if ctrl_c {
             self.should_quit = true;
-        } else if let Mode::Confirm(confirm) = &mut self.mode {
-            if let Some(choice) = on_confirm_key(confirm, key) {
-                self.choose(choice);
+            return;
+        }
+        match &mut self.mode {
+            Mode::Confirm(confirm) => {
+                if let Some(choice) = on_confirm_key(confirm, key) {
+                    self.choose(choice);
+                }
             }
-        } else if let Mode::ConfirmOpen(confirm) = &mut self.mode {
-            match key.code {
+            Mode::ConfirmOpen(confirm) => match key.code {
                 KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => confirm.open = true,
                 KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => confirm.open = false,
                 KeyCode::Enter if confirm.open => {
@@ -824,23 +829,28 @@ impl App {
                 }
                 KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::List,
                 _ => {}
+            },
+            Mode::Help => {
+                if matches!(key.code, KeyCode::Esc | KeyCode::Char('?' | 'q')) {
+                    self.mode = Mode::List;
+                }
             }
-        } else if matches!(self.mode, Mode::Help) {
-            if matches!(key.code, KeyCode::Esc | KeyCode::Char('?' | 'q')) {
-                self.mode = Mode::List;
-            }
-        } else if matches!(self.mode, Mode::Running(_)) {
             // Cancelling a batch comes in M4 step 3.
-        } else if matches!(self.mode, Mode::Results(_)) {
-            if matches!(key.code, KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q')) {
-                self.mode = Mode::List;
+            Mode::Running(_) => {}
+            Mode::Results(_) => {
+                if matches!(key.code, KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q')) {
+                    self.mode = Mode::List;
+                }
             }
-        } else if self.editing {
-            self.on_search_key(key);
-        } else if self.filtering {
-            self.on_filter_key(key);
-        } else {
-            self.on_list_key(key);
+            Mode::Loading | Mode::List => {
+                if self.editing {
+                    self.on_search_key(key);
+                } else if self.filtering {
+                    self.on_filter_key(key);
+                } else {
+                    self.on_list_key(key);
+                }
+            }
         }
     }
 
@@ -908,21 +918,22 @@ impl App {
         }
     }
 
-    /// Opens the selected PRs in the browser, or the highlighted one if none are selected, in
-    /// table order. Asks first when there are more than [`MAX_OPEN_WITHOUT_ASKING`].
-    fn open_in_browser(&mut self) {
-        let numbers: Vec<u64> = if self.selected.is_empty() {
-            self.highlighted()
-                .map(|row| row.pr.number)
-                .into_iter()
-                .collect()
+    /// The selected rows in table order, or the highlighted row if none are selected.
+    fn targets(&self) -> Vec<&Row> {
+        if self.selected.is_empty() {
+            self.highlighted().into_iter().collect()
         } else {
             self.rows
                 .iter()
-                .map(|row| row.pr.number)
-                .filter(|number| self.selected.contains(number))
+                .filter(|row| self.selected.contains(&row.pr.number))
                 .collect()
-        };
+        }
+    }
+
+    /// Opens the selected PRs in the browser, or the highlighted one if none are selected, in
+    /// table order. Asks first when there are more than [`MAX_OPEN_WITHOUT_ASKING`].
+    fn open_in_browser(&mut self) {
+        let numbers: Vec<u64> = self.targets().iter().map(|row| row.pr.number).collect();
         self.errors.opens.clear();
         if numbers.len() > MAX_OPEN_WITHOUT_ASKING {
             self.mode = Mode::ConfirmOpen(ConfirmOpen {
@@ -937,14 +948,7 @@ impl App {
     /// Opens the confirm dialog for the selected PRs, or the highlighted one if none are
     /// selected, in table order.
     fn open_confirm(&mut self) {
-        let rows: Vec<&Row> = if self.selected.is_empty() {
-            self.highlighted().into_iter().collect()
-        } else {
-            self.rows
-                .iter()
-                .filter(|row| self.selected.contains(&row.pr.number))
-                .collect()
-        };
+        let rows = self.targets();
         if rows.is_empty() {
             return;
         }

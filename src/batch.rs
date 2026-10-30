@@ -174,7 +174,7 @@ pub fn auto_merge(checks: CheckState) -> bool {
 }
 
 /// A finished step's status: `ok` on success, or the error on one line.
-pub fn status(result: Result<()>, ok: ItemStatus) -> ItemStatus {
+pub fn finished_status(result: Result<()>, ok: ItemStatus) -> ItemStatus {
     match result {
         Ok(()) => ok,
         Err(e) => ItemStatus::Failed(one_line(&e.to_string())),
