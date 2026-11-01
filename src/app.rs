@@ -219,6 +219,10 @@ const WHEEL_LINES: isize = 3;
 #[derive(Default)]
 pub struct PaneAreas {
     pub table: Rect,
+    /// The table's rows, below its header. Empty while no rows are drawn.
+    pub table_rows: Rect,
+    /// The position in `visible` of the first row drawn.
+    pub table_offset: usize,
     pub checks: Rect,
     pub comments: Rect,
     /// The selected comment's preview, within `comments`. Empty while there is none.
@@ -885,7 +889,17 @@ impl App {
             return;
         };
         match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) => self.focus = pane,
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.focus = pane;
+                if self.areas.table_rows.contains(position) {
+                    let row = usize::from(position.y - self.areas.table_rows.y);
+                    // Below the last row there is nothing to click.
+                    let index = self.areas.table_offset + row;
+                    if index < self.visible.len() {
+                        self.highlight(index);
+                    }
+                }
+            }
             // The wheel acts on the pane under the pointer and leaves the focus where it is.
             MouseEventKind::ScrollDown => self.wheel(pane, position, 1),
             MouseEventKind::ScrollUp => self.wheel(pane, position, -1),
@@ -1173,12 +1187,19 @@ impl App {
 
     fn move_highlight(&mut self, by: isize) {
         if let Some(current) = self.table.selected() {
-            let last = self.visible.len().saturating_sub(1);
-            let new = current.saturating_add_signed(by).min(last);
-            if new != current {
-                self.table.select(Some(new));
-                self.scroll = Scroll::default();
-            }
+            self.highlight(current.saturating_add_signed(by));
+        }
+    }
+
+    /// Highlights the row at this position in `visible`, or the last one if it is past the end.
+    fn highlight(&mut self, position: usize) {
+        let Some(current) = self.table.selected() else {
+            return;
+        };
+        let new = position.min(self.visible.len().saturating_sub(1));
+        if new != current {
+            self.table.select(Some(new));
+            self.scroll = Scroll::default();
         }
     }
 }

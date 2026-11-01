@@ -126,6 +126,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
 fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
     let table_block = pane_block("Pull requests", app.focus == Pane::Table);
     app.areas.table = area;
+    app.areas.table_rows = Rect::default();
     let table_area = table_block.inner(area);
     frame.render_widget(table_block, area);
     if app.focus == Pane::Table {
@@ -213,6 +214,13 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
                 table = table.dim();
             }
             frame.render_stateful_widget(table, table_area, &mut app.table);
+            // The header is one row.
+            app.areas.table_rows = Rect {
+                y: table_area.y + 1,
+                height: table_area.height.saturating_sub(1),
+                ..table_area
+            };
+            app.areas.table_offset = app.table.offset();
         }
     }
 }
@@ -1236,6 +1244,59 @@ mod tests {
         press(&mut app, "?");
         wheel(&mut app, diff, true);
         assert_eq!(app.scroll.diff, 0);
+    }
+
+    #[test]
+    fn a_click_highlights_the_row_under_it_on_a_scrolled_filtered_list() {
+        let prs = (1..=40)
+            .map(|n| {
+                pr(
+                    n,
+                    &format!("Bump {}", if n % 2 == 0 { "even" } else { "odd" }),
+                    "OPEN",
+                    "",
+                )
+            })
+            .collect();
+        let mut app = app_with(prs);
+        // Only the 20 even PRs are shown; the table is too short to show them all.
+        press(&mut app, "feven");
+        app.update(Msg::Key(KeyCode::Enter.into()));
+        draw(&mut app, 160, 40);
+        let rows = app.areas.table_rows;
+        click(&mut app, Position::new(rows.x + 5, rows.y + 2));
+        assert_eq!(app.table.selected(), Some(2));
+        assert_eq!(app.highlighted().unwrap().pr.number, 6);
+
+        // Highlight the last row so the table scrolls, then click the first row drawn.
+        for _ in 0..30 {
+            press(&mut app, "j");
+        }
+        draw(&mut app, 160, 40);
+        let offset = app.areas.table_offset;
+        assert!(offset > 0);
+        let rows = app.areas.table_rows;
+        click(&mut app, Position::new(rows.x + 5, rows.y));
+        assert_eq!(app.table.selected(), Some(offset));
+        assert_eq!(
+            app.highlighted().unwrap().pr.number,
+            2 * (offset as u64 + 1)
+        );
+    }
+
+    #[test]
+    fn a_click_on_the_header_or_below_the_rows_does_nothing() {
+        let mut app = app_with(vec![
+            pr(1, "Bump alpha", "OPEN", ""),
+            pr(2, "Bump beta", "OPEN", ""),
+        ]);
+        draw(&mut app, 160, 30);
+        let rows = app.areas.table_rows;
+        click(&mut app, Position::new(rows.x + 5, rows.y + 1));
+        assert_eq!(app.table.selected(), Some(1));
+        click(&mut app, Position::new(rows.x + 5, rows.y - 1));
+        click(&mut app, Position::new(rows.x + 5, rows.y + 5));
+        assert_eq!(app.table.selected(), Some(1));
     }
 
     #[test]
