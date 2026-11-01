@@ -141,6 +141,18 @@ fn start_work(
             }
         });
     }
+    let pages = app.pages_to_run();
+    if !pages.is_empty() {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            for page in pages {
+                // `open::that` waits for the launcher to exit, so keep it off the UI's runtime.
+                let result = tokio::task::spawn_blocking(move || open::that(page)).await;
+                let result = result.map_err(Into::into).and_then(|r| r.map_err(Into::into));
+                let _ = tx.send(Msg::PageOpened(result));
+            }
+        });
+    }
     let epoch = app.batch_epoch();
     for number in app.approvals_to_run() {
         spawn(gh, tx, async move |gh| {

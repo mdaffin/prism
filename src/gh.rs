@@ -401,6 +401,8 @@ pub struct Comment {
     pub author: Option<Author>,
     pub created_at: String,
     pub body: Option<String>,
+    /// The comment's page in the web UI.
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

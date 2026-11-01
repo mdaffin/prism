@@ -88,6 +88,8 @@ pub struct App {
     pub errors: Errors,
     /// PRs to open in the browser, in order.
     opens_to_run: Vec<u64>,
+    /// Pages (a check's or a comment's) to open in the browser, in order.
+    pages_to_run: Vec<String>,
     /// Details by PR number. An entry is added when its fetch starts, so a PR is fetched once.
     pub details: HashMap<u64, Fetch<Details>>,
     /// Diffs by PR number. An entry is added when its fetch starts, so a PR is fetched once.
@@ -182,7 +184,7 @@ pub struct Errors {
     search: Option<String>,
     /// One line for each row refresh that failed, shown after `search`.
     refreshes: Vec<String>,
-    /// One line for each PR that failed to open in the browser, shown after `refreshes`.
+    /// One line for each PR or page that failed to open in the browser, shown after `refreshes`.
     opens: Vec<String>,
 }
 
@@ -192,7 +194,7 @@ impl Errors {
     pub fn text(&self) -> Option<String> {
         let mut lines: Vec<String> = self.search.iter().cloned().collect();
         push_listed(&mut lines, &self.refreshes, "refreshes failed");
-        push_listed(&mut lines, &self.opens, "PRs failed to open");
+        push_listed(&mut lines, &self.opens, "failed to open");
         (!lines.is_empty()).then(|| lines.join("\n"))
     }
 
@@ -419,6 +421,8 @@ pub enum Msg {
     PrRefreshed(u64, Result<Pr>),
     /// The result of opening this PR in the browser.
     Opened(u64, Result<()>),
+    /// The result of opening a page that isn't a PR's, in the browser.
+    PageOpened(Result<()>),
     /// Time to advance the spinner.
     Tick,
     /// Time for a timed status refresh.
@@ -458,6 +462,7 @@ impl App {
             checks_layout: ChecksLayout::default(),
             errors: Errors::default(),
             opens_to_run: Vec::new(),
+            pages_to_run: Vec::new(),
             selected: HashSet::new(),
             details: HashMap::new(),
             diffs: HashMap::new(),
@@ -514,6 +519,11 @@ impl App {
     /// must start them.
     pub fn opens_to_run(&mut self) -> Vec<u64> {
         std::mem::take(&mut self.opens_to_run)
+    }
+
+    /// The pages to open in the browser now. The caller must open them.
+    pub fn pages_to_run(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pages_to_run)
     }
 
     /// The epoch of the running batch, which the results of its actions carry back.
@@ -749,7 +759,11 @@ impl App {
                 let message = format!("Opening #{number} failed: {e}");
                 self.errors.opens.push(one_line(&message));
             }
-            Msg::Opened(_, Ok(())) => {}
+            Msg::PageOpened(Err(e)) => {
+                let message = format!("Opening the page failed: {e}");
+                self.errors.opens.push(one_line(&message));
+            }
+            Msg::Opened(_, Ok(())) | Msg::PageOpened(Ok(())) => {}
             Msg::PrRefreshed(number, result) => self.row_refreshed(number, result),
             Msg::DetailsLoaded(number, Err(e)) => {
                 self.details.insert(number, Fetch::Failed(e.to_string()));
@@ -1074,6 +1088,7 @@ impl App {
             KeyCode::Char('/') => self.editing = true,
             KeyCode::Char('f') => self.filtering = true,
             KeyCode::Char('?') => self.mode = Mode::Help,
+            KeyCode::Char('o') => self.open_focused(),
             KeyCode::Char('q') => self.should_quit = true,
             // Esc never quits: it is too easy to hit by accident. It clears the filter, then
             // the selection.
@@ -1108,6 +1123,48 @@ impl App {
                 .filter(|row| self.selected.contains(&row.pr.number))
                 .collect()
         }
+    }
+
+    /// `o`: opens what the focused pane is showing. A check or a comment opens its own page; in
+    /// the other panes it is Ctrl-O. A missing page is reported, except that a comment without
+    /// one falls back to its PR.
+    fn open_focused(&mut self) {
+        let page = match self.focus {
+            Pane::Checks => Some(
+                self.highlighted_check_url()
+                    .ok_or("The highlighted check has no page"),
+            ),
+            Pane::Comments => self.highlighted_comment_url().map(Ok),
+            _ => None,
+        };
+        match page {
+            Some(Ok(url)) => {
+                self.errors.opens.clear();
+                self.pages_to_run.push(url);
+            }
+            Some(Err(message)) => {
+                self.errors.opens.clear();
+                self.errors.opens.push(message.to_string());
+            }
+            None => self.open_in_browser(),
+        }
+    }
+
+    /// The page of the highlighted check of the highlighted PR.
+    fn highlighted_check_url(&self) -> Option<String> {
+        let results = self.highlighted()?.checks.worst_first();
+        let last = results.len().checked_sub(1)?;
+        results[self.scroll.check.min(last)].url.clone()
+    }
+
+    /// The page of the highlighted comment of the highlighted PR, once its details have loaded.
+    fn highlighted_comment_url(&self) -> Option<String> {
+        let Some(Fetch::Loaded(loaded)) = self.details.get(&self.highlighted()?.pr.number) else {
+            return None;
+        };
+        let comments = &loaded.details.comments;
+        let last = comments.len().checked_sub(1)?;
+        comments[self.scroll.comment.min(last)].url.clone()
     }
 
     /// Opens the selected PRs in the browser, or the highlighted one if none are selected, in
@@ -1862,6 +1919,116 @@ mod tests {
         );
         app.update(Msg::Opened(1, Ok(())));
         assert_eq!(app.errors.text().unwrap().lines().count(), 1);
+    }
+
+    /// An app whose PR 1 has a failing check with a page, then two passing ones: one with no page
+    /// and a status context with one. The checks pane lists them in that order.
+    fn app_with_check_pages() -> App {
+        let pr: Pr = serde_json::from_value(serde_json::json!({
+            "number": 1,
+            "title": "t",
+            "state": "OPEN",
+            "statusCheckRollup": [
+                {"__typename": "CheckRun", "name": "b", "workflowName": "CI",
+                 "status": "COMPLETED", "conclusion": "FAILURE",
+                 "detailsUrl": "https://example.test/job"},
+                {"__typename": "CheckRun", "name": "c", "workflowName": "CI",
+                 "status": "COMPLETED", "conclusion": "SUCCESS"},
+                {"__typename": "StatusContext", "context": "ci/x", "state": "SUCCESS",
+                 "targetUrl": "https://example.test/build"},
+            ],
+            "mergeable": "MERGEABLE",
+            "reviewDecision": "",
+            "updatedAt": "2026-01-01T00:00:00Z",
+        }))
+        .unwrap();
+        let mut app = App::new(String::new(), "is:pr".to_string(), false);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(id, Ok(vec![pr])));
+        app.checks_layout = ChecksLayout {
+            count: 3,
+            first: 0,
+            viewport: 5,
+        };
+        app
+    }
+
+    #[test]
+    fn o_opens_the_highlighted_checks_page_or_says_it_has_none() {
+        let mut app = app_with_check_pages();
+        focus(&mut app, Pane::Checks);
+        press(&mut app, "o");
+        assert_eq!(app.pages_to_run(), ["https://example.test/job"]);
+        assert!(app.opens_to_run().is_empty());
+
+        // The second check has no page: nothing opens and the error area says so.
+        press(&mut app, "jo");
+        assert!(app.pages_to_run().is_empty());
+        assert_eq!(
+            app.errors.text().as_deref(),
+            Some("The highlighted check has no page")
+        );
+        // The message goes away with the next open.
+        press(&mut app, "jo");
+        assert_eq!(app.pages_to_run(), ["https://example.test/build"]);
+        assert_eq!(app.errors.text(), None);
+    }
+
+    #[test]
+    fn o_opens_the_highlighted_comment_and_falls_back_to_the_pr() {
+        let mut app = app_with_check_pages();
+        let details = serde_json::from_value(serde_json::json!({
+            "headRefName": "branch",
+            "body": "",
+            "comments": [
+                {"createdAt": "2026-01-02T03:00:00Z", "body": "a",
+                 "url": "https://example.test/pull/1#issuecomment-1"},
+                {"createdAt": "2026-01-02T03:00:00Z", "body": "b"},
+            ],
+            "additions": 1,
+            "deletions": 1,
+        }))
+        .unwrap();
+        app.update(Msg::DetailsLoaded(1, Ok(details)));
+        app.comment_layout = CommentLayout {
+            items: vec![(0, 1), (1, 1)],
+            viewport: 5,
+        };
+        focus(&mut app, Pane::Comments);
+        press(&mut app, "o");
+        assert_eq!(app.pages_to_run(), ["https://example.test/pull/1#issuecomment-1"]);
+        // The second comment has no URL, so the PR opens.
+        press(&mut app, "jo");
+        assert!(app.pages_to_run().is_empty());
+        assert_eq!(app.opens_to_run(), [1]);
+    }
+
+    #[test]
+    fn o_opens_the_pr_from_the_table_the_description_and_the_diff() {
+        let mut app = app_with_rows(2);
+        press(&mut app, "j");
+        for pane in [Pane::Table, Pane::Description, Pane::Diff] {
+            focus(&mut app, pane);
+            press(&mut app, "o");
+            assert_eq!(app.opens_to_run(), [2]);
+        }
+        // Like Ctrl-O, it opens the selected PRs when there are some.
+        press(&mut app, " ");
+        focus(&mut app, Pane::Table);
+        press(&mut app, "kk");
+        press(&mut app, "o");
+        assert_eq!(app.opens_to_run(), [2]);
+        assert!(app.pages_to_run().is_empty());
+    }
+
+    #[test]
+    fn a_page_that_fails_to_open_is_shown_with_the_error() {
+        let mut app = app_with_rows(1);
+        app.update(Msg::PageOpened(Err(color_eyre::eyre::eyre!("no browser"))));
+        assert_eq!(
+            app.errors.text().as_deref(),
+            Some("Opening the page failed: no browser")
+        );
     }
 
     #[test]

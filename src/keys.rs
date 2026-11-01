@@ -49,6 +49,11 @@ pub const KEYS: &[KeyHelp] = &[
         Some("Review"),
     ),
     key(
+        "o",
+        "Open what the pane shows: a check's or comment's page, else the PR(s) like Ctrl-O",
+        None,
+    ),
+    key(
         "Ctrl-O",
         "Open the selected or highlighted PRs in the browser",
         None,
