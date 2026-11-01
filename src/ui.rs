@@ -1273,10 +1273,10 @@ mod tests {
         wheel(&mut app, at.diff, false);
         assert_eq!(app.scroll.diff, 3);
 
-        // Over the comments it scrolls lines and leaves the highlight on its comment.
+        // Over the comments it moves the highlight to the next comment, as Down does.
         wheel(&mut app, at.comments, true);
-        assert_eq!(app.scroll.comments, 3);
-        assert_eq!(app.scroll.comment, 0);
+        assert_eq!(app.scroll.comment, 1);
+        assert_eq!(app.scroll.comments, 0);
 
         assert!(app.focus == Pane::Table);
     }

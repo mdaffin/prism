@@ -1071,6 +1071,8 @@ impl App {
             KeyCode::Left | KeyCode::Char('h') => self.scroll_sideways(self.focus, -SIDEWAYS_COLUMNS),
             KeyCode::PageDown => self.page_focused(1),
             KeyCode::PageUp => self.page_focused(-1),
+            KeyCode::Home => self.jump_focused(false),
+            KeyCode::End => self.jump_focused(true),
             KeyCode::Enter | KeyCode::Char(' ') if self.focus == Pane::Comments => {
                 self.toggle_comment()
             }
@@ -1191,10 +1193,12 @@ impl App {
         }
     }
 
-    /// One notch of the wheel: a row in the table, and `WHEEL_LINES` lines elsewhere.
+    /// One notch of the wheel: what one Up/Down press does in the table and the comments pane, and
+    /// `WHEEL_LINES` lines elsewhere.
     fn wheel(&mut self, pane: Pane, direction: isize) {
         match pane {
             Pane::Table => self.move_pane(pane, direction),
+            Pane::Comments => self.step_comments(direction),
             _ => self.move_pane(pane, direction * WHEEL_LINES),
         }
     }
@@ -1212,7 +1216,6 @@ impl App {
             }
             Pane::Comments => {
                 self.scroll.comments = self.scroll.comments.saturating_add_signed(clamp_i16(by));
-                self.keep_comment_on_screen();
             }
             Pane::Description => {
                 self.scroll.description =
@@ -1278,9 +1281,9 @@ impl App {
         }
     }
 
-    /// Moves the highlight to a comment that is on screen if scrolling took it off, so that Space
-    /// toggles what is being read: the topmost one if it went off the top, the bottommost if it
-    /// went off the bottom.
+    /// Moves the highlight to a comment that is on screen if a line of scrolling took it off, so
+    /// that Space toggles what is being read: the topmost one if it went off the top, the
+    /// bottommost if it went off the bottom. A page or a jump doesn't do this.
     fn keep_comment_on_screen(&mut self) {
         let layout = &self.comment_layout;
         let Some(&(last_start, last_height)) = layout.items.last() else {
@@ -1339,6 +1342,27 @@ impl App {
     /// PgUp/PgDn: a page in the focused pane.
     fn page_focused(&mut self, direction: isize) {
         self.move_focused(direction * self.page as isize);
+    }
+
+    /// Home/End: the first or last item of the table or the comments pane, and the top or bottom
+    /// of the other panes. The view clamps the scroll, so `u16::MAX` is the bottom.
+    fn jump_focused(&mut self, end: bool) {
+        match self.focus {
+            Pane::Table => self.highlight(if end { usize::MAX } else { 0 }),
+            Pane::Checks => self.scroll.checks = if end { u16::MAX } else { 0 },
+            Pane::Comments => {
+                let Some(last) = self.comment_layout.items.len().checked_sub(1) else {
+                    return;
+                };
+                let n = if end { last } else { 0 };
+                // The view pulls the scroll back so the pane isn't left past its end.
+                let start = self.comment_layout.items[n].0;
+                self.scroll.comment = n;
+                self.scroll.comments = u16::try_from(start).unwrap_or(u16::MAX);
+            }
+            Pane::Description => self.scroll.description = if end { u16::MAX } else { 0 },
+            Pane::Diff => self.scroll.diff = if end { u16::MAX } else { 0 },
+        }
     }
 
     fn move_highlight(&mut self, by: isize) {
@@ -2446,16 +2470,73 @@ mod tests {
         assert_eq!(state(&app), (1, 0));
         press(&mut app, "k");
         assert_eq!(state(&app), (0, 0));
-        // The wheel and a page keep the highlight on screen too.
+        // A page scrolls the view and leaves the highlight where it was, even off screen.
         app.page = 4;
         app.scroll.comment = 0;
         app.scroll.comments = 0;
         key(&mut app, KeyCode::PageDown);
-        assert_eq!(state(&app), (1, 4));
+        assert_eq!(state(&app), (0, 4));
         app.scroll.comment = 2;
         app.scroll.comments = 7;
         key(&mut app, KeyCode::PageUp);
-        assert_eq!(state(&app), (1, 3));
+        assert_eq!(state(&app), (2, 3));
+        // The next step brings the highlight back to a header on screen.
+        press(&mut app, "k");
+        assert_eq!(state(&app), (1, 2));
+    }
+
+    #[test]
+    fn the_wheel_steps_through_the_comments_like_down_and_up() {
+        let mut app = app_with_rows(1);
+        app.comment_layout = CommentLayout {
+            items: vec![(0, 1), (1, 10), (11, 1)],
+            viewport: 5,
+        };
+        let state = |app: &App| (app.scroll.comment, app.scroll.comments);
+        app.wheel(Pane::Comments, 1);
+        assert_eq!(state(&app), (1, 0));
+        // The next header is off screen, so it scrolls a line at a time, as Down does.
+        app.wheel(Pane::Comments, 1);
+        assert_eq!(state(&app), (1, 1));
+        app.wheel(Pane::Comments, -1);
+        assert_eq!(state(&app), (1, 0));
+        app.wheel(Pane::Comments, -1);
+        assert_eq!(state(&app), (0, 0));
+    }
+
+    #[test]
+    fn home_and_end_jump_to_the_first_and_last_item_or_the_ends_of_a_pane() {
+        let mut app = app_with_rows(3);
+        key(&mut app, KeyCode::End);
+        assert_eq!(app.table.selected(), Some(2));
+        key(&mut app, KeyCode::Home);
+        assert_eq!(app.table.selected(), Some(0));
+
+        // In the comments the highlight goes to the first or last comment, with the view.
+        app.comment_layout = CommentLayout {
+            items: vec![(0, 1), (1, 10), (11, 1)],
+            viewport: 5,
+        };
+        focus(&mut app, Pane::Comments);
+        key(&mut app, KeyCode::End);
+        assert_eq!((app.scroll.comment, app.scroll.comments), (2, 11));
+        key(&mut app, KeyCode::Home);
+        assert_eq!((app.scroll.comment, app.scroll.comments), (0, 0));
+
+        // Elsewhere the scroll goes to the top, and to the bottom once the view clamps it.
+        focus(&mut app, Pane::Description);
+        key(&mut app, KeyCode::End);
+        assert_eq!(app.scroll.description, u16::MAX);
+        key(&mut app, KeyCode::Home);
+        assert_eq!(app.scroll.description, 0);
+        focus(&mut app, Pane::Diff);
+        key(&mut app, KeyCode::End);
+        assert_eq!(app.scroll.diff, u16::MAX);
+        focus(&mut app, Pane::Checks);
+        key(&mut app, KeyCode::End);
+        assert_eq!(app.scroll.checks, u16::MAX);
+        key(&mut app, KeyCode::Home);
+        assert_eq!(app.scroll.checks, 0);
     }
 
     #[test]

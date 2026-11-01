@@ -22,7 +22,16 @@ pub const KEYS: &[KeyHelp] = &[
         "Move the highlight, or scroll the pane",
         None,
     ),
-    key("PgUp/PgDn", "The same, a page at a time", None),
+    key(
+        "PgUp/PgDn",
+        "Scroll the pane a page, or move the table's highlight a page; the comments' highlight stays",
+        None,
+    ),
+    key(
+        "Home/End",
+        "Jump to the first or last item, or the top or bottom of a pane",
+        None,
+    ),
     key(
         "Enter/Space (comments)",
         "Expand or collapse the highlighted comment; Up/Down scroll until the next one is on screen",
