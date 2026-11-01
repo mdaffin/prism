@@ -48,6 +48,8 @@ pub struct CheckResult {
     /// `workflowName/name` for a check run, `context` for a status context.
     pub key: String,
     pub state: CheckState,
+    /// The page to open for it, if `gh` gave one.
+    pub url: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -110,6 +112,7 @@ pub fn classify_checks(mergeable: Mergeable, rollup: &[Check]) -> Checks {
         .map(|(key, check)| CheckResult {
             key,
             state: check_state(check),
+            url: check_url(check),
         })
         .collect();
 
@@ -126,6 +129,16 @@ pub fn classify_checks(mergeable: Mergeable, rollup: &[Check]) -> Checks {
         CheckState::Passing
     };
     Checks { state, results }
+}
+
+/// The page of a check, or `None` if it has none or `gh` left it empty.
+fn check_url(check: &Check) -> Option<String> {
+    let url = match check {
+        Check::CheckRun(run) => &run.details_url,
+        Check::StatusContext(ctx) => &ctx.target_url,
+        Check::Unknown => &None,
+    };
+    url.clone().filter(|url| !url.is_empty())
 }
 
 fn started_at_of(check: &Check) -> &Option<String> {
@@ -417,11 +430,13 @@ mod tests {
             vec![
                 CheckResult {
                     key: "CI/build".to_string(),
-                    state: CheckState::Passing
+                    state: CheckState::Passing,
+                    url: None,
                 },
                 CheckResult {
                     key: "ci/legacy".to_string(),
-                    state: CheckState::Passing
+                    state: CheckState::Passing,
+                    url: None,
                 },
             ]
         );

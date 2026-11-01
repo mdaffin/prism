@@ -427,6 +427,8 @@ pub struct CheckRun {
     pub status: RunStatus,
     pub conclusion: Conclusion,
     pub started_at: Option<String>,
+    /// The job's page.
+    pub details_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -435,6 +437,8 @@ pub struct StatusContext {
     pub context: String,
     pub state: ContextState,
     pub started_at: Option<String>,
+    /// The page of the build, which can be on another system, such as TeamCity.
+    pub target_url: Option<String>,
 }
 
 #[cfg(test)]

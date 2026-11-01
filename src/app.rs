@@ -81,6 +81,7 @@ pub struct App {
     /// Where the view drew each pane, set as it draws, for the mouse.
     pub areas: PaneAreas,
     pub comment_layout: CommentLayout,
+    pub checks_layout: ChecksLayout,
     /// The numbers of the PRs marked with Space.
     pub selected: HashSet<u64>,
     /// What to show above the status bar.
@@ -144,6 +145,8 @@ pub struct Scroll {
     pub comment_x: u16,
     pub diff: u16,
     pub comments: u16,
+    /// The highlighted check of the highlighted PR. The view clamps it to the checks there are.
+    pub check: usize,
     /// The highlighted comment of the highlighted PR. The view clamps it to the comments there are.
     pub comment: usize,
     /// The comments of the highlighted PR that are expanded. All start collapsed.
@@ -157,6 +160,18 @@ pub struct CommentLayout {
     /// The first line and the height of each comment, its header included.
     pub items: Vec<(usize, usize)>,
     /// The lines the pane shows at once.
+    pub viewport: usize,
+}
+
+/// What the view drew in the checks pane, so that `update` can keep the highlighted check on
+/// screen.
+#[derive(Default)]
+pub struct ChecksLayout {
+    /// The checks, not counting the conflict row.
+    pub count: usize,
+    /// The rows above the first check: 1 if there is a conflict row, else 0.
+    pub first: usize,
+    /// The rows the pane shows at once, without the header.
     pub viewport: usize,
 }
 
@@ -440,6 +455,7 @@ impl App {
             page: 1,
             areas: PaneAreas::default(),
             comment_layout: CommentLayout::default(),
+            checks_layout: ChecksLayout::default(),
             errors: Errors::default(),
             opens_to_run: Vec::new(),
             selected: HashSet::new(),
@@ -1199,6 +1215,7 @@ impl App {
         match pane {
             Pane::Table => self.move_pane(pane, direction),
             Pane::Comments => self.step_comments(direction),
+            Pane::Checks => self.step_checks(direction),
             _ => self.move_pane(pane, direction * WHEEL_LINES),
         }
     }
@@ -1239,11 +1256,41 @@ impl App {
 
     /// Up/Down: like `move_focused`, except that the comments pane goes comment by comment.
     fn step_focused(&mut self, by: isize) {
-        if self.focus == Pane::Comments {
-            self.step_comments(by);
-        } else {
-            self.move_focused(by);
+        match self.focus {
+            Pane::Comments => self.step_comments(by),
+            Pane::Checks => self.step_checks(by),
+            _ => self.move_focused(by),
         }
+    }
+
+    /// Up/Down in the checks pane: moves the highlight to another check and scrolls the view to
+    /// keep it on screen.
+    fn step_checks(&mut self, by: isize) {
+        let count = self.checks_layout.count;
+        let Some(last) = count.checked_sub(1) else {
+            return;
+        };
+        let current = self.scroll.check.min(last);
+        self.pick_check(current.saturating_add_signed(by).min(last));
+    }
+
+    /// Highlights check `n`, and scrolls the view if it is off screen. The first check also shows
+    /// the conflict row above it.
+    fn pick_check(&mut self, n: usize) {
+        let layout = &self.checks_layout;
+        self.scroll.check = n;
+        let row = n + layout.first;
+        let top = usize::from(self.scroll.checks);
+        let first = if n == 0 {
+            0
+        } else if row < top {
+            row
+        } else if row >= top + layout.viewport {
+            (row + 1).saturating_sub(layout.viewport)
+        } else {
+            return;
+        };
+        self.scroll.checks = u16::try_from(first).unwrap_or(u16::MAX);
     }
 
     /// Up/Down in the comments pane. It moves the highlight to the next comment once that
@@ -1349,7 +1396,11 @@ impl App {
     fn jump_focused(&mut self, end: bool) {
         match self.focus {
             Pane::Table => self.highlight(if end { usize::MAX } else { 0 }),
-            Pane::Checks => self.scroll.checks = if end { u16::MAX } else { 0 },
+            Pane::Checks => {
+                if let Some(last) = self.checks_layout.count.checked_sub(1) {
+                    self.pick_check(if end { last } else { 0 });
+                }
+            }
             Pane::Comments => {
                 let Some(last) = self.comment_layout.items.len().checked_sub(1) else {
                     return;
@@ -2393,8 +2444,15 @@ mod tests {
 
         key(&mut app, KeyCode::Tab);
         assert!(app.focus == Pane::Checks);
-        press(&mut app, "j");
-        assert_eq!(app.scroll.checks, 1);
+        app.checks_layout = ChecksLayout {
+            count: 4,
+            first: 0,
+            viewport: 2,
+        };
+        press(&mut app, "jjj");
+        assert_eq!((app.scroll.check, app.scroll.checks), (3, 2));
+        key(&mut app, KeyCode::PageUp);
+        assert_eq!((app.scroll.check, app.scroll.checks), (3, 0));
 
         // In the comments pane the arrows go comment by comment, and a page scrolls.
         key(&mut app, KeyCode::Tab);
@@ -2423,7 +2481,7 @@ mod tests {
         assert_eq!(app.scroll.description, 1);
         // The highlight stayed where it was, and the other panes didn't scroll.
         assert_eq!(app.table.selected(), Some(2));
-        assert_eq!((app.scroll.checks, app.scroll.diff), (1, 0));
+        assert_eq!((app.scroll.checks, app.scroll.diff), (0, 0));
         key(&mut app, KeyCode::PageUp);
         assert_eq!(app.scroll.description, 0);
 
@@ -2532,11 +2590,48 @@ mod tests {
         focus(&mut app, Pane::Diff);
         key(&mut app, KeyCode::End);
         assert_eq!(app.scroll.diff, u16::MAX);
+        // In the checks too, and the view follows the highlight.
+        app.checks_layout = ChecksLayout {
+            count: 5,
+            first: 0,
+            viewport: 3,
+        };
         focus(&mut app, Pane::Checks);
         key(&mut app, KeyCode::End);
-        assert_eq!(app.scroll.checks, u16::MAX);
+        assert_eq!((app.scroll.check, app.scroll.checks), (4, 2));
         key(&mut app, KeyCode::Home);
-        assert_eq!(app.scroll.checks, 0);
+        assert_eq!((app.scroll.check, app.scroll.checks), (0, 0));
+    }
+
+    #[test]
+    fn up_and_down_move_the_checks_highlight_and_keep_it_on_screen() {
+        let mut app = app_with_rows(1);
+        // A conflict row above five checks, three rows high.
+        app.checks_layout = ChecksLayout {
+            count: 5,
+            first: 1,
+            viewport: 3,
+        };
+        focus(&mut app, Pane::Checks);
+        let state = |app: &App| (app.scroll.check, app.scroll.checks);
+        press(&mut app, "j");
+        assert_eq!(state(&app), (1, 0));
+        // Check 2 is at row 3, just below the pane: the view scrolls one row.
+        press(&mut app, "j");
+        assert_eq!(state(&app), (2, 1));
+        press(&mut app, "jjjj");
+        assert_eq!(state(&app), (4, 3));
+        // Back up: the highlight leaves the view's edge only when it has to.
+        press(&mut app, "kk");
+        assert_eq!(state(&app), (2, 3));
+        press(&mut app, "k");
+        assert_eq!(state(&app), (1, 2));
+        // The first check also shows the conflict row above it.
+        press(&mut app, "k");
+        assert_eq!(state(&app), (0, 0));
+        // The wheel steps like Down.
+        app.wheel(Pane::Checks, 1);
+        assert_eq!(state(&app), (1, 0));
     }
 
     #[test]

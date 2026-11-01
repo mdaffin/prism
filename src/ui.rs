@@ -4,7 +4,7 @@ use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Cell, Clear, Paragraph, Row, Table, TableState, Wrap};
 
-use crate::app::{App, CommentLayout, ConfirmOpen, Details, Fetch, Mode, Pane};
+use crate::app::{App, ChecksLayout, CommentLayout, ConfirmOpen, Details, Fetch, Mode, Pane};
 use crate::batch::{Batch, Confirm, ItemStatus, Summary};
 use crate::gh::PrState;
 use crate::keys;
@@ -544,6 +544,7 @@ fn max_scroll(content_rows: usize, area_rows: u16) -> u16 {
 
 fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
     app.areas.checks = area;
+    app.checks_layout = ChecksLayout::default();
     let block = pane_block("Checks", app.focus == Pane::Checks);
     let inner = block.inner(area);
     if app.focus == Pane::Checks {
@@ -556,15 +557,17 @@ fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
     // A conflict outranks the checks, so it gets a row of its own at the top.
     let conflict = (row.checks.state == CheckState::Conflict)
         .then(|| styled_check_row(CheckState::Conflict, "Merge conflict"));
+    let first = usize::from(conflict.is_some());
+    let results = row.checks.worst_first();
+    let selected = app.scroll.check.min(results.len().saturating_sub(1));
     let rows: Vec<Row> = conflict
         .into_iter()
-        .chain(
-            row.checks
-                .worst_first()
-                .into_iter()
-                .map(|result| styled_check_row(result.state, &result.key)),
-        )
+        .chain(results.iter().enumerate().map(|(i, result)| {
+            let row = styled_check_row(result.state, &result.key);
+            if i == selected { row.reversed() } else { row }
+        }))
         .collect();
+    let count = results.len();
     if rows.is_empty() {
         frame.render_widget(Line::from("No checks."), inner);
         return;
@@ -578,6 +581,12 @@ fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
         .header(Row::new(["Status", "Check"]).bold());
     let mut state = TableState::default().with_offset(usize::from(scroll));
     frame.render_stateful_widget(table, inner, &mut state);
+    app.checks_layout = ChecksLayout {
+        count,
+        first,
+        viewport: usize::from(inner.height.saturating_sub(1)),
+    };
+    app.scroll.check = selected;
     app.scroll.checks = scroll;
 }
 
@@ -1264,7 +1273,7 @@ mod tests {
         assert_eq!(app.table.selected(), Some(0));
 
         wheel(&mut app, at.checks, true);
-        assert_eq!(app.scroll.checks, 3);
+        assert_eq!(app.scroll.check, 1);
         wheel(&mut app, at.description, true);
         assert_eq!(app.scroll.description, 3);
         wheel(&mut app, at.diff, true);
@@ -1279,6 +1288,31 @@ mod tests {
         assert_eq!(app.scroll.comments, 0);
 
         assert!(app.focus == Pane::Table);
+    }
+
+    #[test]
+    fn the_highlighted_check_is_drawn_and_goes_back_to_the_first_with_the_pr() {
+        let mut app = app_with_long_panes();
+        app.focus = Pane::Checks;
+        press(&mut app, "jj");
+        let buffer = draw(&mut app, 160, 40);
+        assert_eq!(app.scroll.check, 2);
+        // The first row under the header is check 0; the highlight is on the third.
+        let checks = app.areas.checks;
+        let reversed = |row: u16| {
+            buffer[(checks.x + 2, checks.y + 2 + row)]
+                .modifier
+                .contains(Modifier::REVERSED)
+        };
+        assert!(!reversed(0) && !reversed(1) && reversed(2));
+
+        // It stays through redraws, and goes back to the first when the PR changes.
+        draw(&mut app, 160, 40);
+        assert_eq!(app.scroll.check, 2);
+        app.focus = Pane::Table;
+        press(&mut app, "j");
+        draw(&mut app, 160, 40);
+        assert_eq!(app.scroll.check, 0);
     }
 
     #[test]
