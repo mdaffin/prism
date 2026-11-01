@@ -212,12 +212,17 @@ impl Pane {
     }
 }
 
+/// The lines that a notch of the wheel scrolls a pane.
+const WHEEL_LINES: isize = 3;
+
 /// The screen area of each pane, including its border.
 #[derive(Default)]
 pub struct PaneAreas {
     pub table: Rect,
     pub checks: Rect,
     pub comments: Rect,
+    /// The selected comment's preview, within `comments`. Empty while there is none.
+    pub comment_preview: Rect,
     pub description: Rect,
     pub diff: Rect,
 }
@@ -875,11 +880,16 @@ impl App {
         if !matches!(self.mode, Mode::Loading | Mode::List) || self.editing || self.filtering {
             return;
         }
-        if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
-            let position = Position::new(mouse.column, mouse.row);
-            if let Some(pane) = self.areas.at(position) {
-                self.focus = pane;
-            }
+        let position = Position::new(mouse.column, mouse.row);
+        let Some(pane) = self.areas.at(position) else {
+            return;
+        };
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => self.focus = pane,
+            // The wheel acts on the pane under the pointer and leaves the focus where it is.
+            MouseEventKind::ScrollDown => self.wheel(pane, position, 1),
+            MouseEventKind::ScrollUp => self.wheel(pane, position, -1),
+            _ => {}
         }
     }
 
@@ -1105,9 +1115,30 @@ impl App {
         }
     }
 
+    /// One notch of the wheel: a row in the table, a comment in the comments list, and
+    /// `WHEEL_LINES` lines elsewhere.
+    fn wheel(&mut self, pane: Pane, position: Position, direction: isize) {
+        match pane {
+            Pane::Table | Pane::Comments if !self.areas.comment_preview.contains(position) => {
+                self.move_pane(pane, direction)
+            }
+            _ if pane == Pane::Comments => {
+                self.scroll.comment_scroll = self
+                    .scroll
+                    .comment_scroll
+                    .saturating_add_signed(clamp_i16(direction * WHEEL_LINES));
+            }
+            _ => self.move_pane(pane, direction * WHEEL_LINES),
+        }
+    }
+
     /// Moves the table's highlight, or scrolls the focused pane, by `by` rows.
     fn move_focused(&mut self, by: isize) {
-        match self.focus {
+        self.move_pane(self.focus, by)
+    }
+
+    fn move_pane(&mut self, pane: Pane, by: isize) {
+        match pane {
             Pane::Table => self.move_highlight(by),
             Pane::Checks => {
                 self.scroll.checks = self.scroll.checks.saturating_add_signed(clamp_i16(by));

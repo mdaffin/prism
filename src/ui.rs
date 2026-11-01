@@ -577,6 +577,7 @@ fn styled_check_row<'a>(state: CheckState, name: &'a str) -> Row<'a> {
 /// one.
 fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     app.areas.comments = area;
+    app.areas.comment_preview = Rect::default();
     let block = pane_block("Comments", app.focus == Pane::Comments);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -615,6 +616,7 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     frame.render_stateful_widget(list, list_area, &mut state);
 
     let preview_block = Block::new().borders(Borders::LEFT);
+    app.areas.comment_preview = preview_area;
     let preview_inner = preview_block.inner(preview_area);
     let body = model::clean_body(comments[selected].body.as_deref());
     let preview = Paragraph::new(body).wrap(Wrap { trim: false });
@@ -1129,6 +1131,111 @@ mod tests {
         app.focus = Pane::Diff;
         click(&mut app, Position::new(0, 0));
         assert!(app.focus == Pane::Diff);
+    }
+
+    fn wheel(app: &mut App, position: Position, down: bool) {
+        use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+        app.update(Msg::Mouse(MouseEvent {
+            kind: if down {
+                MouseEventKind::ScrollDown
+            } else {
+                MouseEventKind::ScrollUp
+            },
+            column: position.x,
+            row: position.y,
+            modifiers: KeyModifiers::NONE,
+        }));
+    }
+
+    /// An app whose highlighted PR has enough checks, comments, description and diff to scroll.
+    fn app_with_long_panes() -> App {
+        let checks = (0..40)
+            .map(|i| run(&format!("check {i}"), "COMPLETED", "SUCCESS"))
+            .collect();
+        let mut app = app_with(vec![
+            pr_checked(1, "MERGEABLE", checks),
+            pr_checked(2, "MERGEABLE", vec![]),
+            pr_checked(3, "MERGEABLE", vec![]),
+        ]);
+        let long = vec!["a line"; 100].join("\n\n");
+        let comment = serde_json::json!({
+            "author": {"login": "someone"},
+            "createdAt": "2026-01-02T03:00:00Z",
+            "body": long,
+        });
+        let details = serde_json::from_value(serde_json::json!({
+            "headRefName": "branch",
+            "body": long,
+            "comments": [comment, comment, comment],
+            "additions": 1,
+            "deletions": 1,
+        }))
+        .unwrap();
+        app.update(Msg::DetailsLoaded(1, Ok(details)));
+        app.update(Msg::DiffLoaded(1, Ok(vec!["+added"; 200].join("\n"))));
+        draw(&mut app, 160, 40);
+        app
+    }
+
+    /// A point inside each pane.
+    struct Points {
+        table: Position,
+        checks: Position,
+        description: Position,
+        diff: Position,
+        list: Position,
+        preview: Position,
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_pane_under_the_pointer_without_moving_focus() {
+        let mut app = app_with_long_panes();
+        let inside = |area: Rect| Position::new(area.x + 2, area.y + 1);
+        let areas = &app.areas;
+        let at = Points {
+            table: inside(areas.table),
+            checks: inside(areas.checks),
+            description: inside(areas.description),
+            diff: inside(areas.diff),
+            list: inside(areas.comments),
+            preview: inside(areas.comment_preview),
+        };
+
+        wheel(&mut app, at.table, true);
+        assert_eq!(app.table.selected(), Some(1));
+        wheel(&mut app, at.table, false);
+        assert_eq!(app.table.selected(), Some(0));
+
+        wheel(&mut app, at.checks, true);
+        assert_eq!(app.scroll.checks, 3);
+        wheel(&mut app, at.description, true);
+        assert_eq!(app.scroll.description, 3);
+        wheel(&mut app, at.diff, true);
+        wheel(&mut app, at.diff, true);
+        assert_eq!(app.scroll.diff, 6);
+        wheel(&mut app, at.diff, false);
+        assert_eq!(app.scroll.diff, 3);
+
+        // Over the comments list it picks a comment; over the preview it scrolls that.
+        let list = at.list;
+        assert!(!app.areas.comment_preview.contains(list));
+        wheel(&mut app, list, true);
+        assert_eq!(app.scroll.comment, 1);
+        let preview = at.preview;
+        wheel(&mut app, preview, true);
+        assert_eq!(app.scroll.comment, 1);
+        assert_eq!(app.scroll.comment_scroll, 3);
+
+        assert!(app.focus == Pane::Table);
+    }
+
+    #[test]
+    fn the_wheel_is_ignored_in_a_dialog() {
+        let mut app = app_with_long_panes();
+        let diff = Position::new(app.areas.diff.x + 2, app.areas.diff.y + 1);
+        press(&mut app, "?");
+        wheel(&mut app, diff, true);
+        assert_eq!(app.scroll.diff, 0);
     }
 
     #[test]
