@@ -24,6 +24,11 @@ pub const KEYS: &[KeyHelp] = &[
     ),
     key("PgUp/PgDn", "The same, a page at a time", None),
     key(
+        "Enter/Space (comments)",
+        "Expand or collapse the highlighted comment; Up/Down scroll until the next one is on screen",
+        None,
+    ),
+    key(
         "Left/Right, h/l",
         "Scroll the tables of the description or a comment sideways (also Shift-wheel)",
         None,

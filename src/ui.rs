@@ -2,9 +2,9 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap};
+use ratatui::widgets::{Block, Cell, Clear, Paragraph, Row, Table, TableState, Wrap};
 
-use crate::app::{App, ConfirmOpen, Details, Fetch, Mode, Pane};
+use crate::app::{App, CommentLayout, ConfirmOpen, Details, Fetch, Mode, Pane};
 use crate::batch::{Batch, Confirm, ItemStatus, Summary};
 use crate::gh::PrState;
 use crate::keys;
@@ -589,11 +589,11 @@ fn styled_check_row<'a>(state: CheckState, name: &'a str) -> Row<'a> {
     ])
 }
 
-/// The comments of the highlighted PR: a list of who and when beside a preview of the selected
-/// one.
+/// The comments of the highlighted PR, as one scrolling document of headers that expand to show
+/// the comment under them.
 fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     app.areas.comments = area;
-    app.areas.comment_preview = Rect::default();
+    app.comment_layout = CommentLayout::default();
     let block = pane_block("Comments", app.focus == Pane::Comments);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -618,45 +618,64 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
         frame.render_widget(Line::from("No comments."), inner);
         return;
     }
-    let [list_area, preview_area] =
-        Layout::horizontal([Constraint::Percentage(35), Constraint::Fill(1)]).areas(inner);
     let selected = app.scroll.comment.min(comments.len() - 1);
+    let width = usize::from(inner.width);
+    let widest = (0..comments.len())
+        .filter(|i| app.scroll.comments_open.contains(i))
+        .map(|i| model::widest_table(&bodies[i]))
+        .max()
+        .unwrap_or(0);
+    let x = usize::from(app.scroll.comment_x).min(widest.saturating_sub(width));
 
+    // One document: a header per comment, and the body under it when it is open. Each comment's
+    // height is counted as wrapped, as the layout is what `update` steps through.
     let now = jiff::Timestamp::now();
-    let rows = comments.iter().map(|comment| {
+    let mut document: Vec<Line> = Vec::new();
+    let mut items = Vec::with_capacity(comments.len());
+    let mut total = 0;
+    for (i, comment) in comments.iter().enumerate() {
+        let open = app.scroll.comments_open.contains(&i);
         let author = comment
             .author
             .as_ref()
             .map_or("ghost", |a| a.login.as_str());
-        Row::new([format!("@{author}"), model::ago(&comment.created_at, now)])
-    });
-    let list = Table::new(rows, [Constraint::Fill(1), Constraint::Length(14)])
-        .row_highlight_style(Style::new().reversed());
-    let mut state = TableState::default().with_selected(selected);
-    frame.render_stateful_widget(list, list_area, &mut state);
-
-    let preview_block = Block::new().borders(Borders::LEFT);
-    app.areas.comment_preview = preview_area;
-    let preview_inner = preview_block.inner(preview_area);
-    let width = usize::from(preview_inner.width);
-    let body = &bodies[selected];
-    let widest = model::widest_table(body);
-    let x = usize::from(app.scroll.comment_x).min(widest.saturating_sub(width));
-    app.scroll.comment_x = u16::try_from(x).unwrap_or(u16::MAX);
-    let preview = Paragraph::new(model::crop_tables(body, width, x)).wrap(Wrap { trim: false });
-    let scroll = app.scroll.comment_scroll.min(max_scroll(
-        preview.line_count(preview_inner.width),
-        preview_inner.height,
-    ));
-    frame.render_widget(
-        preview.scroll((scroll, 0)).block(preview_block),
-        preview_area,
-    );
-    if app.focus == Pane::Comments {
-        app.page = preview_inner.height.saturating_sub(1).max(1);
+        let marker = if open { '▼' } else { '▶' };
+        let mut header = Line::from(format!(
+            "{marker} @{author} · {}",
+            model::ago(&comment.created_at, now)
+        ));
+        if i == selected {
+            header = header.reversed();
+        }
+        let mut lines = vec![header];
+        if open {
+            lines.extend(model::crop_tables(&bodies[i], width, x).lines);
+            lines.push(Line::default());
+        }
+        let height = Paragraph::new(Text::from(lines.clone()))
+            .wrap(Wrap { trim: false })
+            .line_count(inner.width);
+        items.push((total, height));
+        total += height;
+        document.extend(lines);
     }
+    let pane = Paragraph::new(Text::from(document)).wrap(Wrap { trim: false });
+    let scroll = app
+        .scroll
+        .comments
+        .min(max_scroll(total, inner.height));
+    frame.render_widget(pane.scroll((scroll, 0)), inner);
+
+    if app.focus == Pane::Comments {
+        app.page = inner.height.saturating_sub(1).max(1);
+    }
+    app.comment_layout = CommentLayout {
+        items,
+        viewport: usize::from(inner.height),
+    };
     app.scroll.comment = selected;
-    app.scroll.comment_scroll = scroll;
+    app.scroll.comment_x = u16::try_from(x).unwrap_or(u16::MAX);
+    app.scroll.comments = scroll;
 }
 
 fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -1223,8 +1242,7 @@ mod tests {
         checks: Position,
         description: Position,
         diff: Position,
-        list: Position,
-        preview: Position,
+        comments: Position,
     }
 
     #[test]
@@ -1237,8 +1255,7 @@ mod tests {
             checks: inside(areas.checks),
             description: inside(areas.description),
             diff: inside(areas.diff),
-            list: inside(areas.comments),
-            preview: inside(areas.comment_preview),
+            comments: inside(areas.comments),
         };
 
         wheel(&mut app, at.table, true);
@@ -1256,15 +1273,10 @@ mod tests {
         wheel(&mut app, at.diff, false);
         assert_eq!(app.scroll.diff, 3);
 
-        // Over the comments list it picks a comment; over the preview it scrolls that.
-        let list = at.list;
-        assert!(!app.areas.comment_preview.contains(list));
-        wheel(&mut app, list, true);
-        assert_eq!(app.scroll.comment, 1);
-        let preview = at.preview;
-        wheel(&mut app, preview, true);
-        assert_eq!(app.scroll.comment, 1);
-        assert_eq!(app.scroll.comment_scroll, 3);
+        // Over the comments it scrolls lines and leaves the highlight on its comment.
+        wheel(&mut app, at.comments, true);
+        assert_eq!(app.scroll.comments, 3);
+        assert_eq!(app.scroll.comment, 0);
 
         assert!(app.focus == Pane::Table);
     }
@@ -1305,7 +1317,7 @@ mod tests {
     }
 
     #[test]
-    fn a_comment_is_rendered_as_markdown_and_its_table_scrolls_sideways() {
+    fn an_open_comment_is_rendered_as_markdown_and_its_table_scrolls_sideways() {
         let mut app = app_with(vec![pr_checked(1, "MERGEABLE", vec![])]);
         let wide = "x".repeat(120);
         let comment = |body: String| {
@@ -1328,8 +1340,14 @@ mod tests {
         .unwrap();
         app.update(Msg::DetailsLoaded(1, Ok(details)));
         app.focus = Pane::Comments;
-        press(&mut app, "j");
+        // Collapsed, there are only the headers.
         let screen = lines(&draw(&mut app, 160, 40));
+        assert!(screen.iter().any(|line| line.contains("▶ @someone")));
+        assert!(!screen.iter().any(|line| line.contains("Some bold prose")));
+
+        press(&mut app, "j ");
+        let screen = lines(&draw(&mut app, 160, 40));
+        assert!(screen.iter().any(|line| line.contains("▼ @someone")));
         assert!(screen.iter().any(|line| line.contains("Some bold prose")));
         assert!(!screen.iter().any(|line| line.contains("END")));
 
@@ -1339,10 +1357,10 @@ mod tests {
         let screen = lines(&draw(&mut app, 160, 40));
         assert!(screen.iter().any(|line| line.contains("END")));
 
-        // Picking another comment starts at the left again.
-        press(&mut app, "k");
-        draw(&mut app, 160, 40);
-        assert_eq!(app.scroll.comment_x, 0);
+        // Collapsing hides it again.
+        press(&mut app, " ");
+        let screen = lines(&draw(&mut app, 160, 40));
+        assert!(!screen.iter().any(|line| line.contains("Some bold prose")));
     }
 
     #[test]

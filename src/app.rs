@@ -80,6 +80,7 @@ pub struct App {
     pub page: u16,
     /// Where the view drew each pane, set as it draws, for the mouse.
     pub areas: PaneAreas,
+    pub comment_layout: CommentLayout,
     /// The numbers of the PRs marked with Space.
     pub selected: HashSet<u64>,
     /// What to show above the status bar.
@@ -131,21 +132,32 @@ pub struct StatusRefresh {
     pub failure: Option<String>,
 }
 
-/// Rows scrolled off the top of the checks, description and diff panes. They go back to the top
-/// when the highlight moves. The view clamps them to the content it draws.
+/// Rows scrolled off the top of the checks, description, comments and diff panes. They go back to
+/// the top when the highlight moves. The view clamps them to the content it draws.
 #[derive(Default)]
 pub struct Scroll {
     pub checks: u16,
     pub description: u16,
     /// Columns the description's tables are scrolled sideways. The view clamps it.
     pub description_x: u16,
-    /// The same for the selected comment's preview.
+    /// The same for the open comments, which share it.
     pub comment_x: u16,
     pub diff: u16,
-    /// The selected comment of the highlighted PR. The view clamps it to the comments there are.
+    pub comments: u16,
+    /// The highlighted comment of the highlighted PR. The view clamps it to the comments there are.
     pub comment: usize,
-    /// Rows scrolled off the top of the selected comment's preview.
-    pub comment_scroll: u16,
+    /// The comments of the highlighted PR that are expanded. All start collapsed.
+    pub comments_open: HashSet<usize>,
+}
+
+/// Where the view drew each comment, in lines from the top of the comments pane's document, so
+/// that `update` can tell whether a comment's header is on screen.
+#[derive(Default)]
+pub struct CommentLayout {
+    /// The first line and the height of each comment, its header included.
+    pub items: Vec<(usize, usize)>,
+    /// The lines the pane shows at once.
+    pub viewport: usize,
 }
 
 /// The errors shown above the status bar.
@@ -234,8 +246,6 @@ pub struct PaneAreas {
     pub table_offset: usize,
     pub checks: Rect,
     pub comments: Rect,
-    /// The selected comment's preview, within `comments`. Empty while there is none.
-    pub comment_preview: Rect,
     pub description: Rect,
     pub diff: Rect,
 }
@@ -429,6 +439,7 @@ impl App {
             scroll: Scroll::default(),
             page: 1,
             areas: PaneAreas::default(),
+            comment_layout: CommentLayout::default(),
             errors: Errors::default(),
             opens_to_run: Vec::new(),
             selected: HashSet::new(),
@@ -940,8 +951,8 @@ impl App {
             }
             MouseEventKind::ScrollRight => self.scroll_sideways(pane, SIDEWAYS_COLUMNS),
             MouseEventKind::ScrollLeft => self.scroll_sideways(pane, -SIDEWAYS_COLUMNS),
-            MouseEventKind::ScrollDown => self.wheel(pane, position, 1),
-            MouseEventKind::ScrollUp => self.wheel(pane, position, -1),
+            MouseEventKind::ScrollDown => self.wheel(pane, 1),
+            MouseEventKind::ScrollUp => self.wheel(pane, -1),
             _ => {}
         }
     }
@@ -1051,12 +1062,15 @@ impl App {
             KeyCode::Esc => self.selected.clear(),
             KeyCode::Tab => self.focus = self.focus.next(),
             KeyCode::BackTab => self.focus = self.focus.previous(),
-            KeyCode::Down | KeyCode::Char('j') => self.move_focused(1),
-            KeyCode::Up | KeyCode::Char('k') => self.move_focused(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.step_focused(1),
+            KeyCode::Up | KeyCode::Char('k') => self.step_focused(-1),
             KeyCode::Right | KeyCode::Char('l') => self.scroll_sideways(self.focus, SIDEWAYS_COLUMNS),
             KeyCode::Left | KeyCode::Char('h') => self.scroll_sideways(self.focus, -SIDEWAYS_COLUMNS),
             KeyCode::PageDown => self.page_focused(1),
             KeyCode::PageUp => self.page_focused(-1),
+            KeyCode::Enter | KeyCode::Char(' ') if self.focus == Pane::Comments => {
+                self.toggle_comment()
+            }
             KeyCode::Char(' ') => self.toggle_selected(),
             KeyCode::Enter => self.open_confirm(),
             _ => {}
@@ -1174,19 +1188,10 @@ impl App {
         }
     }
 
-    /// One notch of the wheel: a row in the table, a comment in the comments list, and
-    /// `WHEEL_LINES` lines elsewhere.
-    fn wheel(&mut self, pane: Pane, position: Position, direction: isize) {
+    /// One notch of the wheel: a row in the table, and `WHEEL_LINES` lines elsewhere.
+    fn wheel(&mut self, pane: Pane, direction: isize) {
         match pane {
-            Pane::Table | Pane::Comments if !self.areas.comment_preview.contains(position) => {
-                self.move_pane(pane, direction)
-            }
-            _ if pane == Pane::Comments => {
-                self.scroll.comment_scroll = self
-                    .scroll
-                    .comment_scroll
-                    .saturating_add_signed(clamp_i16(direction * WHEEL_LINES));
-            }
+            Pane::Table => self.move_pane(pane, direction),
             _ => self.move_pane(pane, direction * WHEEL_LINES),
         }
     }
@@ -1203,9 +1208,8 @@ impl App {
                 self.scroll.checks = self.scroll.checks.saturating_add_signed(clamp_i16(by));
             }
             Pane::Comments => {
-                self.scroll.comment = self.scroll.comment.saturating_add_signed(by);
-                self.scroll.comment_scroll = 0;
-                self.scroll.comment_x = 0;
+                self.scroll.comments = self.scroll.comments.saturating_add_signed(clamp_i16(by));
+                self.keep_comment_on_screen();
             }
             Pane::Description => {
                 self.scroll.description =
@@ -1227,18 +1231,91 @@ impl App {
         *x = x.saturating_add_signed(clamp_i16(by));
     }
 
-    /// PgUp/PgDn: a page in the focused pane. In the comments pane the arrows pick the comment,
-    /// so a page scrolls its preview.
-    fn page_focused(&mut self, direction: isize) {
-        let by = direction * self.page as isize;
+    /// Up/Down: like `move_focused`, except that the comments pane goes comment by comment.
+    fn step_focused(&mut self, by: isize) {
         if self.focus == Pane::Comments {
-            self.scroll.comment_scroll = self
-                .scroll
-                .comment_scroll
-                .saturating_add_signed(clamp_i16(by));
+            self.step_comments(by);
         } else {
             self.move_focused(by);
         }
+    }
+
+    /// Up/Down in the comments pane. It moves the highlight to the next comment once that
+    /// comment's header is on screen, and scrolls a line at a time until then, so a comment
+    /// taller than the pane is read in full before moving on.
+    fn step_comments(&mut self, by: isize) {
+        let layout = &self.comment_layout;
+        if layout.items.is_empty() {
+            return;
+        }
+        let top = usize::from(self.scroll.comments);
+        let bottom = top + layout.viewport;
+        let current = self.scroll.comment.min(layout.items.len() - 1);
+        let next = current.checked_add_signed(by).filter(|&n| n < layout.items.len());
+        // A header the wheel has scrolled past counts as reached, so the highlight can catch up.
+        let reached = |n: usize| {
+            let start = layout.items[n].0;
+            if by > 0 { start < bottom } else { start >= top }
+        };
+        match next {
+            Some(n) if reached(n) => {
+                let start = layout.items[n].0;
+                self.scroll.comment = n;
+                if start < top {
+                    self.scroll.comments = u16::try_from(start).unwrap_or(u16::MAX);
+                } else if start >= bottom {
+                    let first = (start + 1).saturating_sub(layout.viewport);
+                    self.scroll.comments = u16::try_from(first).unwrap_or(u16::MAX);
+                }
+            }
+            _ => {
+                self.scroll.comments = self.scroll.comments.saturating_add_signed(clamp_i16(by));
+                self.keep_comment_on_screen();
+            }
+        }
+    }
+
+    /// Moves the highlight to a comment that is on screen if scrolling took it off, so that Space
+    /// toggles what is being read: the topmost one if it went off the top, the bottommost if it
+    /// went off the bottom.
+    fn keep_comment_on_screen(&mut self) {
+        let layout = &self.comment_layout;
+        let Some(&(last_start, last_height)) = layout.items.last() else {
+            return;
+        };
+        // The view clamps the scroll when it draws; do the same here to see what it will show.
+        let max_top = (last_start + last_height).saturating_sub(layout.viewport);
+        let top = usize::from(self.scroll.comments).min(max_top);
+        let bottom = top + layout.viewport;
+        let on_screen = |&(start, height): &(usize, usize)| start < bottom && start + height > top;
+        let current = self.scroll.comment.min(layout.items.len() - 1);
+        if on_screen(&layout.items[current]) {
+            return;
+        }
+        let found = if layout.items[current].0 >= bottom {
+            layout.items.iter().rposition(on_screen)
+        } else {
+            layout.items.iter().position(on_screen)
+        };
+        if let Some(n) = found {
+            self.scroll.comment = n;
+        }
+    }
+
+    /// Expands or collapses the highlighted comment.
+    fn toggle_comment(&mut self) {
+        let Some(last) = self.comment_layout.items.len().checked_sub(1) else {
+            return;
+        };
+        let current = self.scroll.comment.min(last);
+        if !self.scroll.comments_open.remove(&current) {
+            self.scroll.comments_open.insert(current);
+        }
+    }
+
+    /// PgUp/PgDn: a page in the focused pane.
+    fn page_focused(&mut self, direction: isize) {
+        self.move_focused(direction * self.page as isize);
     }
 
     fn move_highlight(&mut self, by: isize) {
@@ -2272,21 +2349,22 @@ mod tests {
         press(&mut app, "j");
         assert_eq!(app.scroll.checks, 1);
 
-        // In the comments pane the arrows pick the comment, and a page scrolls its preview.
+        // In the comments pane the arrows go comment by comment, and a page scrolls.
         key(&mut app, KeyCode::Tab);
         assert!(app.focus == Pane::Comments);
+        app.comment_layout = CommentLayout {
+            items: vec![(0, 1), (1, 1), (2, 1)],
+            viewport: 5,
+        };
         press(&mut app, "jj");
         assert_eq!(app.scroll.comment, 2);
         key(&mut app, KeyCode::PageDown);
-        assert_eq!((app.scroll.comment, app.scroll.comment_scroll), (2, 5));
+        assert_eq!((app.scroll.comment, app.scroll.comments), (2, 5));
         key(&mut app, KeyCode::PageUp);
         key(&mut app, KeyCode::PageUp);
-        assert_eq!(app.scroll.comment_scroll, 0);
-        press(&mut app, "jk");
-        assert_eq!(app.scroll.comment, 2);
-        key(&mut app, KeyCode::PageDown);
+        assert_eq!(app.scroll.comments, 0);
         press(&mut app, "k");
-        assert_eq!((app.scroll.comment, app.scroll.comment_scroll), (1, 0));
+        assert_eq!((app.scroll.comment, app.scroll.comments), (1, 0));
 
         key(&mut app, KeyCode::Tab);
         assert!(app.focus == Pane::Description);
@@ -2315,6 +2393,66 @@ mod tests {
     }
 
     #[test]
+    fn down_and_up_scroll_a_tall_comment_before_moving_to_the_next() {
+        let mut app = app_with_rows(1);
+        // A one line comment, an open one ten lines tall, and another one line comment.
+        app.comment_layout = CommentLayout {
+            items: vec![(0, 1), (1, 10), (11, 1)],
+            viewport: 5,
+        };
+        focus(&mut app, Pane::Comments);
+        let state = |app: &App| (app.scroll.comment, app.scroll.comments);
+
+        // The tall comment's header is on screen, so the first step moves to it.
+        press(&mut app, "j");
+        assert_eq!(state(&app), (1, 0));
+        // The last comment's header is at line 11, so it takes seven lines of scrolling before
+        // the header is on screen, and one more step to move to it.
+        press(&mut app, "jjjjjjj");
+        assert_eq!(state(&app), (1, 7));
+        press(&mut app, "j");
+        assert_eq!(state(&app), (2, 7));
+
+        // Back up: as soon as the last header is off the bottom the tall comment, which is the
+        // one on screen, is highlighted. Its predecessor's header is at line 0, so scroll up to it.
+        press(&mut app, "k");
+        assert_eq!(state(&app), (1, 6));
+        press(&mut app, "kkkkk");
+        assert_eq!(state(&app), (1, 1));
+        press(&mut app, "k");
+        assert_eq!(state(&app), (1, 0));
+        press(&mut app, "k");
+        assert_eq!(state(&app), (0, 0));
+        // The wheel and a page keep the highlight on screen too.
+        app.page = 4;
+        app.scroll.comment = 0;
+        app.scroll.comments = 0;
+        key(&mut app, KeyCode::PageDown);
+        assert_eq!(state(&app), (1, 4));
+        app.scroll.comment = 2;
+        app.scroll.comments = 7;
+        key(&mut app, KeyCode::PageUp);
+        assert_eq!(state(&app), (1, 3));
+    }
+
+    #[test]
+    fn enter_and_space_expand_the_highlighted_comment_instead_of_reviewing() {
+        let mut app = app_with_rows(2);
+        app.comment_layout = CommentLayout {
+            items: vec![(0, 1), (1, 1)],
+            viewport: 5,
+        };
+        focus(&mut app, Pane::Comments);
+        press(&mut app, "j");
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::List));
+        assert!(app.scroll.comments_open.contains(&1));
+        press(&mut app, " ");
+        assert!(app.scroll.comments_open.is_empty());
+        assert!(app.selected.is_empty());
+    }
+
+    #[test]
     fn scroll_goes_back_to_the_top_when_the_highlight_moves() {
         let mut app = app_with_rows(3);
         for (pane, keys) in [
@@ -2332,7 +2470,7 @@ mod tests {
             (app.scroll.checks, app.scroll.description, app.scroll.diff),
             (0, 0, 0)
         );
-        assert_eq!((app.scroll.comment, app.scroll.comment_scroll), (0, 0));
+        assert_eq!((app.scroll.comment, app.scroll.comments), (0, 0));
 
         // A highlight that can't move, at the last row, leaves the scroll alone.
         key(&mut app, KeyCode::Down);
