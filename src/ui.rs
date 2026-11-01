@@ -122,11 +122,15 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     );
 }
 
+/// The width of the table's first column, which holds `[ ]` or `[x]`.
+const CHECKBOX_WIDTH: u16 = 3;
+
 /// The table of PRs in a bordered pane, or a message in its place while there are none.
 fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
     let table_block = pane_block("Pull requests", app.focus == Pane::Table);
     app.areas.table = area;
     app.areas.table_rows = Rect::default();
+    app.areas.table_checkboxes = Rect::default();
     let table_area = table_block.inner(area);
     frame.render_widget(table_block, area);
     if app.focus == Pane::Table {
@@ -194,7 +198,7 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
                 None => vec!["Title".to_string()],
             };
             let widths = [
-                Constraint::Length(3),
+                Constraint::Length(CHECKBOX_WIDTH),
                 Constraint::Length(7),
                 Constraint::Length(12),
                 Constraint::Length(11),
@@ -219,6 +223,10 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
                 y: table_area.y + 1,
                 height: table_area.height.saturating_sub(1),
                 ..table_area
+            };
+            app.areas.table_checkboxes = Rect {
+                width: CHECKBOX_WIDTH,
+                ..app.areas.table_rows
             };
             app.areas.table_offset = app.table.offset();
         }
@@ -744,6 +752,8 @@ fn description(app: &mut App, frame: &mut Frame, area: Rect) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use crossterm::event::KeyCode;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -1282,6 +1292,38 @@ mod tests {
             app.highlighted().unwrap().pr.number,
             2 * (offset as u64 + 1)
         );
+    }
+
+    #[test]
+    fn a_click_on_a_checkbox_toggles_it_and_highlights_the_row() {
+        let mut app = app_with(vec![
+            pr(1, "Bump alpha", "OPEN", ""),
+            pr(2, "Bump beta", "OPEN", ""),
+        ]);
+        draw(&mut app, 160, 30);
+        let rows = app.areas.table_rows;
+        // The checkbox of the second row, while the first is highlighted.
+        click(&mut app, Position::new(rows.x + 1, rows.y + 1));
+        assert_eq!(app.selected, HashSet::from([2]));
+        assert_eq!(app.table.selected(), Some(1));
+        let buffer = draw(&mut app, 160, 30);
+        assert!(
+            lines(&buffer)
+                .iter()
+                .any(|l| l.contains("[x]") && l.contains("#2"))
+        );
+        click(&mut app, Position::new(rows.x + 1, rows.y + 1));
+        assert!(app.selected.is_empty());
+
+        // Just beside the checkbox is the row itself: it highlights and selects nothing.
+        click(&mut app, Position::new(rows.x + 3, rows.y));
+        assert!(app.selected.is_empty());
+        assert_eq!(app.table.selected(), Some(0));
+
+        // Space acts on the same selection, and a checkbox click adds to it.
+        press(&mut app, " ");
+        click(&mut app, Position::new(rows.x + 1, rows.y + 1));
+        assert_eq!(app.selected, HashSet::from([1, 2]));
     }
 
     #[test]

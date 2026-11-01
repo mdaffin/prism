@@ -221,6 +221,8 @@ pub struct PaneAreas {
     pub table: Rect,
     /// The table's rows, below its header. Empty while no rows are drawn.
     pub table_rows: Rect,
+    /// The checkbox column of `table_rows`.
+    pub table_checkboxes: Rect,
     /// The position in `visible` of the first row drawn.
     pub table_offset: usize,
     pub checks: Rect,
@@ -895,8 +897,13 @@ impl App {
                     let row = usize::from(position.y - self.areas.table_rows.y);
                     // Below the last row there is nothing to click.
                     let index = self.areas.table_offset + row;
-                    if index < self.visible.len() {
+                    if let Some(&row) = self.visible.get(index) {
+                        // A click on the checkbox highlights the row too, so its diff can be
+                        // read before moving on to the next.
                         self.highlight(index);
+                        if self.areas.table_checkboxes.contains(position) {
+                            self.toggle(self.rows[row].pr.number);
+                        }
                     }
                 }
             }
@@ -1122,9 +1129,13 @@ impl App {
     }
 
     fn toggle_selected(&mut self) {
-        if let Some(number) = self.highlighted().map(|row| row.pr.number)
-            && !self.selected.remove(&number)
-        {
+        if let Some(number) = self.highlighted().map(|row| row.pr.number) {
+            self.toggle(number);
+        }
+    }
+
+    fn toggle(&mut self, number: u64) {
+        if !self.selected.remove(&number) {
             self.selected.insert(number);
         }
     }
