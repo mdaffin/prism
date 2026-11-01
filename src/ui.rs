@@ -1441,6 +1441,24 @@ mod tests {
     }
 
     #[test]
+    fn a_click_on_a_check_highlights_it_in_a_scrolled_pane() {
+        let mut app = app_with_long_panes();
+        let checks = app.areas.checks;
+        // The first row under the header, then after scrolling the same row is a later check.
+        click(&mut app, Position::new(checks.x + 2, checks.y + 3));
+        assert_eq!(app.scroll.check, 1);
+        app.scroll.checks = 5;
+        draw(&mut app, 160, 40);
+        click(&mut app, Position::new(checks.x + 2, checks.y + 2));
+        assert_eq!(app.scroll.check, 5);
+        // The border and the header highlight nothing.
+        click(&mut app, Position::new(checks.x + 2, checks.y));
+        click(&mut app, Position::new(checks.x + 2, checks.y + 1));
+        assert_eq!(app.scroll.check, 5);
+        assert!(app.focus == Pane::Checks);
+    }
+
+    #[test]
     fn the_wheel_is_ignored_in_a_dialog() {
         let mut app = app_with_long_panes();
         let diff = Position::new(app.areas.diff.x + 2, app.areas.diff.y + 1);

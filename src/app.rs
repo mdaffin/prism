@@ -957,8 +957,10 @@ impl App {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 self.focus = pane;
-                if pane == Pane::Comments {
-                    self.click_comment(position);
+                match pane {
+                    Pane::Comments => self.click_comment(position),
+                    Pane::Checks => self.click_check(position),
+                    _ => {}
                 }
                 if self.areas.table_rows.contains(position) {
                     let row = usize::from(position.y - self.areas.table_rows.y);
@@ -1409,6 +1411,25 @@ impl App {
         };
         if let Some(n) = found {
             self.scroll.comment = n;
+        }
+    }
+
+    /// A click on a check's row highlights it. A click on the header, the conflict row or below
+    /// the last check does nothing more than focus the pane.
+    fn click_check(&mut self, position: Position) {
+        let area = self.areas.checks;
+        // The pane's border is the first row and the table's header the second.
+        let Some(row) = position.y.checked_sub(area.y + 2) else {
+            return;
+        };
+        let layout = &self.checks_layout;
+        let row = usize::from(row);
+        if row >= layout.viewport {
+            return;
+        }
+        let index = (row + usize::from(self.scroll.checks)).checked_sub(layout.first);
+        if let Some(n) = index.filter(|&n| n < layout.count) {
+            self.scroll.check = n;
         }
     }
 
