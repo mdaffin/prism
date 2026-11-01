@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
+use ratatui::text::{Line, Span, Text};
 use regex::Regex;
+use unicode_width::UnicodeWidthChar;
 
 use crate::gh::{Check, Conclusion, ContextState, Mergeable, ReviewDecision, RunStatus};
 
@@ -175,6 +177,83 @@ pub fn clean_body(body: Option<&str>) -> String {
     let body = HTML_COMMENT.replace_all(&body, "");
     let body = BLANK_LINES.replace_all(&body, "\n\n");
     body.trim().to_string()
+}
+
+/// Renders a cleaned body as markdown. The text is copied so it can be kept in the details cache.
+pub fn render_markdown(body: &str) -> Text<'static> {
+    let text = tui_markdown::from_str(body);
+    Text::from(
+        text.lines
+            .into_iter()
+            .map(|line| {
+                let spans: Vec<Span<'static>> = line
+                    .spans
+                    .into_iter()
+                    .map(|span| Span::styled(span.content.into_owned(), span.style))
+                    .collect();
+                Line {
+                    spans,
+                    ..line
+                }
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// Whether `tui-markdown` drew this line as part of a table.
+fn is_table_line(line: &Line) -> bool {
+    line.spans
+        .iter()
+        .flat_map(|span| span.content.chars())
+        .find(|c| !c.is_whitespace())
+        .is_some_and(|c| matches!(c, '┌' | '│' | '├' | '└'))
+}
+
+/// The width of the widest table line, which is as far as a body can be scrolled sideways.
+pub fn widest_table(text: &Text) -> usize {
+    text.lines
+        .iter()
+        .filter(|line| is_table_line(line))
+        .map(Line::width)
+        .max()
+        .unwrap_or(0)
+}
+
+/// Shows `width` columns of each table line, starting `x` columns in. Other lines are left to
+/// wrap, so a table can be scrolled sideways while the text around it stays put.
+pub fn crop_tables(text: &Text<'static>, width: usize, x: usize) -> Text<'static> {
+    let lines: Vec<Line<'static>> = text
+        .lines
+        .iter()
+        .map(|line| {
+            if !is_table_line(line) {
+                return line.clone();
+            }
+            let mut column = 0;
+            let mut spans = Vec::new();
+            for span in &line.spans {
+                let mut kept = String::new();
+                for c in span.content.chars() {
+                    let w = c.width().unwrap_or(0);
+                    if column >= x && column + w <= x + width {
+                        kept.push(c);
+                    }
+                    column += w;
+                }
+                if !kept.is_empty() {
+                    spans.push(Span::styled(kept, span.style));
+                }
+            }
+            Line {
+                spans,
+                ..line.clone()
+            }
+        })
+        .collect();
+    Text {
+        lines,
+        ..text.clone()
+    }
 }
 
 /// Names the title columns can't use, as other parts of a PR already have them.
@@ -442,6 +521,31 @@ mod tests {
         );
         assert_eq!(clean_body(Some("one\r\n\r\n\r\n\r\ntwo")), "one\n\ntwo");
         assert_eq!(clean_body(Some("keep\n\nthis")), "keep\n\nthis");
+    }
+
+    #[test]
+    fn cropping_moves_only_table_lines() {
+        let text = render_markdown("A paragraph of prose.\n\n| Name | Value |\n|---|---|\n| alpha | 123456789 |");
+        let widest = widest_table(&text);
+        assert!(widest > 10);
+        let plain = |text: &Text| text.lines.iter().map(Line::to_string).collect::<Vec<_>>();
+        let before = plain(&text);
+        let cropped = plain(&crop_tables(&text, 10, 2));
+        for (before, cropped) in before.iter().zip(&cropped) {
+            if before.starts_with(['┌', '│', '├', '└']) {
+                assert_eq!(cropped, &before.chars().skip(2).take(10).collect::<String>());
+            } else {
+                assert_eq!(cropped, before);
+            }
+        }
+    }
+
+    #[test]
+    fn markdown_keeps_details_tags_and_shows_image_alt_text() {
+        let text = render_markdown("<details>\n<summary>Notes</summary>\n\n![badge](https://example.com/b.svg)\n\n</details>");
+        let plain: Vec<String> = text.lines.iter().map(Line::to_string).collect();
+        assert!(plain.contains(&"<summary>Notes</summary>".to_string()), "{plain:?}");
+        assert!(plain.iter().any(|l| l.contains("badge") && !l.contains("example.com")), "{plain:?}");
     }
 
     const BUMP: &str = r"Bump (?<container>.+?)(?: from \S+)? to (?<version>\S+)$";

@@ -137,6 +137,8 @@ pub struct StatusRefresh {
 pub struct Scroll {
     pub checks: u16,
     pub description: u16,
+    /// Columns the description's tables are scrolled sideways. The view clamps it.
+    pub description_x: u16,
     pub diff: u16,
     /// The selected comment of the highlighted PR. The view clamps it to the comments there are.
     pub comment: usize,
@@ -211,6 +213,9 @@ impl Pane {
         }
     }
 }
+
+/// The columns that a key press or a notch of the wheel scrolls a pane sideways.
+const SIDEWAYS_COLUMNS: isize = 8;
 
 /// The lines that a notch of the wheel scrolls a pane.
 const WHEEL_LINES: isize = 3;
@@ -320,8 +325,9 @@ pub enum Fetch<T> {
 /// A PR's details, fetched in the background.
 pub struct Details {
     pub details: PrDetails,
-    /// The body with HTML comments and extra blank lines removed.
-    pub body: String,
+    /// The body with HTML comments and extra blank lines removed, rendered as markdown once here
+    /// rather than on every draw.
+    pub body: Text<'static>,
 }
 
 /// A PR's diff with gh's colours.
@@ -718,7 +724,7 @@ impl App {
                 self.details.insert(number, Fetch::Failed(e.to_string()));
             }
             Msg::DetailsLoaded(number, Ok(details)) => {
-                let body = model::clean_body(details.body.as_deref());
+                let body = model::render_markdown(&model::clean_body(details.body.as_deref()));
                 self.details
                     .insert(number, Fetch::Loaded(Details { details, body }));
             }
@@ -908,6 +914,15 @@ impl App {
                 }
             }
             // The wheel acts on the pane under the pointer and leaves the focus where it is.
+            // Shift with the wheel scrolls sideways in terminals that don't send ScrollLeft.
+            MouseEventKind::ScrollDown if mouse.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.scroll_sideways(pane, SIDEWAYS_COLUMNS)
+            }
+            MouseEventKind::ScrollUp if mouse.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.scroll_sideways(pane, -SIDEWAYS_COLUMNS)
+            }
+            MouseEventKind::ScrollRight => self.scroll_sideways(pane, SIDEWAYS_COLUMNS),
+            MouseEventKind::ScrollLeft => self.scroll_sideways(pane, -SIDEWAYS_COLUMNS),
             MouseEventKind::ScrollDown => self.wheel(pane, position, 1),
             MouseEventKind::ScrollUp => self.wheel(pane, position, -1),
             _ => {}
@@ -1021,6 +1036,8 @@ impl App {
             KeyCode::BackTab => self.focus = self.focus.previous(),
             KeyCode::Down | KeyCode::Char('j') => self.move_focused(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_focused(-1),
+            KeyCode::Right | KeyCode::Char('l') => self.scroll_sideways(self.focus, SIDEWAYS_COLUMNS),
+            KeyCode::Left | KeyCode::Char('h') => self.scroll_sideways(self.focus, -SIDEWAYS_COLUMNS),
             KeyCode::PageDown => self.page_focused(1),
             KeyCode::PageUp => self.page_focused(-1),
             KeyCode::Char(' ') => self.toggle_selected(),
@@ -1179,6 +1196,16 @@ impl App {
             Pane::Diff => {
                 self.scroll.diff = self.scroll.diff.saturating_add_signed(clamp_i16(by));
             }
+        }
+    }
+
+    /// Scrolls a pane's tables sideways. Only the description has any so far.
+    fn scroll_sideways(&mut self, pane: Pane, by: isize) {
+        if pane == Pane::Description {
+            self.scroll.description_x = self
+                .scroll
+                .description_x
+                .saturating_add_signed(clamp_i16(by));
         }
     }
 

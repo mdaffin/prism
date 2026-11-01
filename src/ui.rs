@@ -726,21 +726,35 @@ fn pull_request(app: &App, frame: &mut Frame, area: Rect) {
 
 fn description(app: &mut App, frame: &mut Frame, area: Rect) {
     app.areas.description = area;
-    let block = pane_block("Description", app.focus == Pane::Description);
-    let inner = block.inner(area);
+    // The block's inner area doesn't depend on its title.
+    let inner = pane_block("", false).inner(area);
     if app.focus == Pane::Description {
         app.page = inner.height.saturating_sub(1).max(1);
     }
+    let width = usize::from(inner.width);
+    let mut widest = 0;
+    let mut x = 0;
     let text = match app.highlighted() {
         None => Text::default(),
         Some(row) => match app.details.get(&row.pr.number) {
             None | Some(Fetch::Loading) => Text::from("Loading…"),
-            Some(Fetch::Loaded(Details { body, .. })) => Text::from(body.as_str()),
+            Some(Fetch::Loaded(Details { body, .. })) => {
+                widest = model::widest_table(body);
+                x = usize::from(app.scroll.description_x).min(widest.saturating_sub(width));
+                model::crop_tables(body, width, x)
+            }
             Some(Fetch::Failed(error)) => {
                 Text::from(format!("Failed to load details: {error}")).red()
             }
         },
     };
+    app.scroll.description_x = u16::try_from(x).unwrap_or(u16::MAX);
+    let title = if widest > width {
+        "Description (←/→ scroll tables)"
+    } else {
+        "Description"
+    };
+    let block = pane_block(title, app.focus == Pane::Description);
     let pane = Paragraph::new(text).wrap(Wrap { trim: false });
     let scroll = app
         .scroll
@@ -1245,6 +1259,41 @@ mod tests {
         assert_eq!(app.scroll.comment_scroll, 3);
 
         assert!(app.focus == Pane::Table);
+    }
+
+    #[test]
+    fn a_wide_table_in_the_description_scrolls_sideways() {
+        let mut app = app_with(vec![pr_checked(1, "MERGEABLE", vec![])]);
+        let wide = "x".repeat(120);
+        let details = serde_json::from_value(serde_json::json!({
+            "headRefName": "branch",
+            "body": format!("Some prose\n\n| Name | Value |\n|---|---|\n| first | {wide}END |"),
+            "comments": [],
+            "additions": 1,
+            "deletions": 1,
+        }))
+        .unwrap();
+        app.update(Msg::DetailsLoaded(1, Ok(details)));
+        let screen = lines(&draw(&mut app, 160, 40));
+        assert!(screen.iter().any(|line| line.contains("scroll tables")));
+        assert!(!screen.iter().any(|line| line.contains("END")));
+
+        app.focus = Pane::Description;
+        for _ in 0..20 {
+            press(&mut app, "l");
+        }
+        let screen = lines(&draw(&mut app, 160, 40));
+        assert!(screen.iter().any(|line| line.contains("END")));
+        // The prose stays where it was, and the scroll stops at the table's end.
+        assert!(screen.iter().any(|line| line.contains("Some prose")));
+        let at_end = app.scroll.description_x;
+        press(&mut app, "l");
+        draw(&mut app, 160, 40);
+        assert_eq!(app.scroll.description_x, at_end);
+
+        // And it scrolls back.
+        press(&mut app, "h");
+        assert!(app.scroll.description_x < at_end);
     }
 
     #[test]

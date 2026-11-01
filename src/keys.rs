@@ -23,6 +23,11 @@ pub const KEYS: &[KeyHelp] = &[
         None,
     ),
     key("PgUp/PgDn", "The same, a page at a time", None),
+    key(
+        "Left/Right, h/l",
+        "Scroll the description's tables sideways (also Shift-wheel)",
+        None,
+    ),
     key("Space", "Toggle selection", None),
     key(
         "Enter",
