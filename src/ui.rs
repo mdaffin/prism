@@ -1364,6 +1364,49 @@ mod tests {
     }
 
     #[test]
+    fn a_click_on_a_comment_header_highlights_and_toggles_it() {
+        let mut app = app_with_long_panes();
+        let comments = app.areas.comments;
+        let header = |row: u16| Position::new(comments.x + 2, comments.y + 1 + row);
+
+        // All collapsed: the headers are on consecutive rows.
+        click(&mut app, header(1));
+        assert_eq!(app.scroll.comment, 1);
+        assert!(app.scroll.comments_open.contains(&1));
+        assert!(app.focus == Pane::Comments);
+        draw(&mut app, 160, 40);
+        // The body is under the header now, and a click on it does nothing more.
+        click(&mut app, header(2));
+        assert_eq!(app.scroll.comment, 1);
+        assert!(app.scroll.comments_open.contains(&1));
+        // The border and the space below the last comment do nothing either.
+        click(&mut app, Position::new(comments.x + 2, comments.y));
+        assert!(app.scroll.comments_open.contains(&1));
+        // A second click collapses it.
+        click(&mut app, header(1));
+        assert!(app.scroll.comments_open.is_empty());
+    }
+
+    #[test]
+    fn a_click_on_a_header_in_a_scrolled_pane_finds_the_right_comment() {
+        let mut app = app_with_long_panes();
+        let comments = app.areas.comments;
+        click(&mut app, Position::new(comments.x + 2, comments.y + 1));
+        assert!(app.scroll.comments_open.contains(&0));
+        draw(&mut app, 160, 40);
+        // Scroll to the end, where the pane's scroll has been clamped, so the second comment's
+        // header is some way down the pane.
+        let second = app.comment_layout.items[1].0;
+        app.scroll.comments = u16::MAX;
+        draw(&mut app, 160, 40);
+        let row = u16::try_from(second).unwrap() - app.scroll.comments;
+        assert!(row > 0);
+        click(&mut app, Position::new(comments.x + 2, comments.y + 1 + row));
+        assert_eq!(app.scroll.comment, 1);
+        assert!(app.scroll.comments_open.contains(&1));
+    }
+
+    #[test]
     fn the_wheel_is_ignored_in_a_dialog() {
         let mut app = app_with_long_panes();
         let diff = Position::new(app.areas.diff.x + 2, app.areas.diff.y + 1);

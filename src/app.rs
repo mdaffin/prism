@@ -927,6 +927,9 @@ impl App {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 self.focus = pane;
+                if pane == Pane::Comments {
+                    self.click_comment(position);
+                }
                 if self.areas.table_rows.contains(position) {
                     let row = usize::from(position.y - self.areas.table_rows.y);
                     // Below the last row there is nothing to click.
@@ -1299,6 +1302,26 @@ impl App {
         };
         if let Some(n) = found {
             self.scroll.comment = n;
+        }
+    }
+
+    /// A click on a comment's header highlights it and expands or collapses it. A click on a
+    /// body, or below the last comment, does nothing more than focus the pane.
+    fn click_comment(&mut self, position: Position) {
+        let area = self.areas.comments;
+        // The pane's border is the first row, and the rows below it are the document.
+        let Some(row) = position.y.checked_sub(area.y + 1) else {
+            return;
+        };
+        let row = usize::from(row);
+        let layout = &self.comment_layout;
+        if row >= layout.viewport {
+            return;
+        }
+        let line = row + usize::from(self.scroll.comments);
+        if let Some(index) = layout.items.iter().position(|&(start, _)| start == line) {
+            self.scroll.comment = index;
+            self.toggle_comment();
         }
     }
 
