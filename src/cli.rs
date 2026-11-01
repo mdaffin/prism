@@ -32,6 +32,10 @@ pub struct Args {
     #[arg(long, value_enum, default_value_t = MergeMethod::Squash)]
     pub merge_method: MergeMethod,
 
+    /// Don't capture the mouse, so the terminal's own text selection works.
+    #[arg(long)]
+    pub no_mouse: bool,
+
     /// Walk through the flow without approving or merging anything.
     #[arg(long)]
     pub dry_run: bool,

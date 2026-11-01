@@ -125,6 +125,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
 /// The table of PRs in a bordered pane, or a message in its place while there are none.
 fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
     let table_block = pane_block("Pull requests", app.focus == Pane::Table);
+    app.areas.table = area;
     let table_area = table_block.inner(area);
     frame.render_widget(table_block, area);
     if app.focus == Pane::Table {
@@ -526,6 +527,7 @@ fn max_scroll(content_rows: usize, area_rows: u16) -> u16 {
 }
 
 fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
+    app.areas.checks = area;
     let block = pane_block("Checks", app.focus == Pane::Checks);
     let inner = block.inner(area);
     if app.focus == Pane::Checks {
@@ -574,6 +576,7 @@ fn styled_check_row<'a>(state: CheckState, name: &'a str) -> Row<'a> {
 /// The comments of the highlighted PR: a list of who and when beside a preview of the selected
 /// one.
 fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
+    app.areas.comments = area;
     let block = pane_block("Comments", app.focus == Pane::Comments);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -631,6 +634,7 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
 }
 
 fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
+    app.areas.diff = area;
     let block = pane_block("Diff", app.focus == Pane::Diff);
     let inner = block.inner(area);
     if app.focus == Pane::Diff {
@@ -703,6 +707,7 @@ fn pull_request(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn description(app: &mut App, frame: &mut Frame, area: Rect) {
+    app.areas.description = area;
     let block = pane_block("Description", app.focus == Pane::Description);
     let inner = block.inner(area);
     if app.focus == Pane::Description {
@@ -1088,6 +1093,56 @@ mod tests {
         let inside = Position::new(popup.x + 2, popup.y + 1);
         assert!(!buffer[popup].modifier.contains(Modifier::DIM));
         assert!(!buffer[inside].modifier.contains(Modifier::DIM));
+    }
+
+    fn click(app: &mut App, position: Position) {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        app.update(Msg::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: position.x,
+            row: position.y,
+            modifiers: KeyModifiers::NONE,
+        }));
+    }
+
+    #[test]
+    fn a_click_focuses_the_pane_under_it() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        draw(&mut app, 160, 40);
+        let panes = [
+            (Pane::Checks, app.areas.checks),
+            (Pane::Comments, app.areas.comments),
+            (Pane::Description, app.areas.description),
+            (Pane::Diff, app.areas.diff),
+            (Pane::Table, app.areas.table),
+        ];
+        for (pane, area) in panes {
+            // The border counts as part of the pane, so click on it and inside it.
+            click(&mut app, Position::new(area.x, area.y));
+            assert!(app.focus == pane);
+            app.focus = Pane::Table;
+            click(&mut app, Position::new(area.x + 2, area.y + 1));
+            assert!(app.focus == pane);
+            app.focus = Pane::Table;
+        }
+        // The search box and the title are in no pane.
+        app.focus = Pane::Diff;
+        click(&mut app, Position::new(0, 0));
+        assert!(app.focus == Pane::Diff);
+    }
+
+    #[test]
+    fn the_mouse_is_ignored_in_a_dialog_or_a_box() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        draw(&mut app, 160, 40);
+        let diff = Position::new(app.areas.diff.x + 2, app.areas.diff.y + 1);
+        press(&mut app, "?");
+        click(&mut app, diff);
+        assert!(app.focus == Pane::Table);
+        press(&mut app, "q");
+        press(&mut app, "f");
+        click(&mut app, diff);
+        assert!(app.focus == Pane::Table);
     }
 
     #[test]

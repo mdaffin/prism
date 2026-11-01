@@ -2,7 +2,10 @@ use std::collections::{HashMap, HashSet};
 
 use ansi_to_tui::IntoText;
 use color_eyre::eyre::Result;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
+use ratatui::layout::{Position, Rect};
 use ratatui::text::Text;
 use ratatui::widgets::TableState;
 use regex::Regex;
@@ -75,6 +78,8 @@ pub struct App {
     pub scroll: Scroll,
     /// The rows a PgUp/PgDn moves in the focused pane, set by the view as it draws.
     pub page: u16,
+    /// Where the view drew each pane, set as it draws, for the mouse.
+    pub areas: PaneAreas,
     /// The numbers of the PRs marked with Space.
     pub selected: HashSet<u64>,
     /// What to show above the status bar.
@@ -207,6 +212,31 @@ impl Pane {
     }
 }
 
+/// The screen area of each pane, including its border.
+#[derive(Default)]
+pub struct PaneAreas {
+    pub table: Rect,
+    pub checks: Rect,
+    pub comments: Rect,
+    pub description: Rect,
+    pub diff: Rect,
+}
+
+impl PaneAreas {
+    fn at(&self, position: Position) -> Option<Pane> {
+        [
+            (Pane::Table, self.table),
+            (Pane::Checks, self.checks),
+            (Pane::Comments, self.comments),
+            (Pane::Description, self.description),
+            (Pane::Diff, self.diff),
+        ]
+        .into_iter()
+        .find(|(_, area)| area.contains(position))
+        .map(|(pane, _)| pane)
+    }
+}
+
 pub enum Mode {
     /// No list has been fetched yet.
     Loading,
@@ -329,6 +359,7 @@ pub struct StatusFetch {
 
 pub enum Msg {
     Key(KeyEvent),
+    Mouse(MouseEvent),
     /// The result of the list fetch with this id.
     PrsLoaded(u64, Result<Vec<Pr>>),
     DetailsLoaded(u64, Result<PrDetails>),
@@ -376,6 +407,7 @@ impl App {
             focus: Pane::Table,
             scroll: Scroll::default(),
             page: 1,
+            areas: PaneAreas::default(),
             errors: Errors::default(),
             opens_to_run: Vec::new(),
             selected: HashSet::new(),
@@ -648,6 +680,7 @@ impl App {
     pub fn update(&mut self, msg: Msg) {
         match msg {
             Msg::Key(key) => self.on_key(key),
+            Msg::Mouse(mouse) => self.on_mouse(mouse),
             Msg::Tick => self.spinner = self.spinner.wrapping_add(1),
             Msg::RefreshDue => self.status.requested = self.can_refresh(),
             Msg::StatusRefreshed(id, update) => {
@@ -834,6 +867,19 @@ impl App {
     fn loaded(&mut self) {
         if matches!(self.mode, Mode::Loading) {
             self.mode = Mode::List;
+        }
+    }
+
+    /// The mouse is ignored while a dialog is open or a box is being edited.
+    fn on_mouse(&mut self, mouse: MouseEvent) {
+        if !matches!(self.mode, Mode::Loading | Mode::List) || self.editing || self.filtering {
+            return;
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+            let position = Position::new(mouse.column, mouse.row);
+            if let Some(pane) = self.areas.at(position) {
+                self.focus = pane;
+            }
         }
     }
 

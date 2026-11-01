@@ -11,7 +11,10 @@ use std::time::Duration;
 
 use clap::Parser;
 use color_eyre::eyre::Result;
-use crossterm::event::{Event, EventStream, KeyEventKind};
+use crossterm::event::{
+    DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyEventKind, MouseEventKind,
+};
+use crossterm::execute;
 use futures::StreamExt;
 use ratatui::DefaultTerminal;
 use tokio::sync::mpsc::{self, UnboundedSender};
@@ -31,7 +34,20 @@ async fn main() -> Result<()> {
     gh::check_installed()?;
 
     let terminal = ratatui::init();
+    let mouse = !args.no_mouse;
+    if mouse {
+        execute!(std::io::stdout(), EnableMouseCapture)?;
+        // ratatui's panic hook doesn't know about the mouse.
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = execute!(std::io::stdout(), DisableMouseCapture);
+            hook(info)
+        }));
+    }
     let result = run(terminal, args).await;
+    if mouse {
+        let _ = execute!(std::io::stdout(), DisableMouseCapture);
+    }
     ratatui::restore();
     result
 }
@@ -46,7 +62,11 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let gh = gh::Gh::new(args.repo, args.dry_run);
 
-    let mut events = EventStream::new();
+    // Mouse capture reports every pointer move, and each event redraws, so drop those.
+    let mut events = EventStream::new().filter(|event| {
+        let moved = matches!(event, Ok(Event::Mouse(m)) if m.kind == MouseEventKind::Moved);
+        std::future::ready(!moved)
+    });
     let mut ticker = tokio::time::interval(Duration::from_millis(100));
     // The ticker is only polled while animating; don't catch up on the ticks missed between.
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -61,6 +81,7 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
         let msg = tokio::select! {
             Some(event) = events.next() => match event? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => Msg::Key(key),
+                Event::Mouse(mouse) => Msg::Mouse(mouse),
                 // Anything else, such as a resize, only needs a redraw.
                 _ => continue,
             },
