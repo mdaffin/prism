@@ -25,7 +25,7 @@ pub const KEYS: &[KeyHelp] = &[
     key("PgUp/PgDn", "The same, a page at a time", None),
     key(
         "Left/Right, h/l",
-        "Scroll the description's tables sideways (also Shift-wheel)",
+        "Scroll the tables of the description or a comment sideways (also Shift-wheel)",
         None,
     ),
     key("Space", "Toggle selection", None),

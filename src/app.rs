@@ -139,6 +139,8 @@ pub struct Scroll {
     pub description: u16,
     /// Columns the description's tables are scrolled sideways. The view clamps it.
     pub description_x: u16,
+    /// The same for the selected comment's preview.
+    pub comment_x: u16,
     pub diff: u16,
     /// The selected comment of the highlighted PR. The view clamps it to the comments there are.
     pub comment: usize,
@@ -328,6 +330,8 @@ pub struct Details {
     /// The body with HTML comments and extra blank lines removed, rendered as markdown once here
     /// rather than on every draw.
     pub body: Text<'static>,
+    /// Each comment's body, rendered the same way and in the same order as `details.comments`.
+    pub comment_bodies: Vec<Text<'static>>,
 }
 
 /// A PR's diff with gh's colours.
@@ -725,8 +729,21 @@ impl App {
             }
             Msg::DetailsLoaded(number, Ok(details)) => {
                 let body = model::render_markdown(&model::clean_body(details.body.as_deref()));
-                self.details
-                    .insert(number, Fetch::Loaded(Details { details, body }));
+                let comment_bodies = details
+                    .comments
+                    .iter()
+                    .map(|comment| {
+                        model::render_markdown(&model::clean_body(comment.body.as_deref()))
+                    })
+                    .collect();
+                self.details.insert(
+                    number,
+                    Fetch::Loaded(Details {
+                        details,
+                        body,
+                        comment_bodies,
+                    }),
+                );
             }
             Msg::DiffLoaded(number, Err(e)) => {
                 self.diffs.insert(number, Fetch::Failed(e.to_string()));
@@ -1188,6 +1205,7 @@ impl App {
             Pane::Comments => {
                 self.scroll.comment = self.scroll.comment.saturating_add_signed(by);
                 self.scroll.comment_scroll = 0;
+                self.scroll.comment_x = 0;
             }
             Pane::Description => {
                 self.scroll.description =
@@ -1199,14 +1217,14 @@ impl App {
         }
     }
 
-    /// Scrolls a pane's tables sideways. Only the description has any so far.
+    /// Scrolls the tables of the description or the comment preview sideways.
     fn scroll_sideways(&mut self, pane: Pane, by: isize) {
-        if pane == Pane::Description {
-            self.scroll.description_x = self
-                .scroll
-                .description_x
-                .saturating_add_signed(clamp_i16(by));
-        }
+        let x = match pane {
+            Pane::Description => &mut self.scroll.description_x,
+            Pane::Comments => &mut self.scroll.comment_x,
+            _ => return,
+        };
+        *x = x.saturating_add_signed(clamp_i16(by));
     }
 
     /// PgUp/PgDn: a page in the focused pane. In the comments pane the arrows pick the comment,

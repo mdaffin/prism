@@ -597,7 +597,7 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     let block = pane_block("Comments", app.focus == Pane::Comments);
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let comments = match app.highlighted().map(|row| app.details.get(&row.pr.number)) {
+    let (comments, bodies) = match app.highlighted().map(|row| app.details.get(&row.pr.number)) {
         None => return,
         Some(None | Some(Fetch::Loading)) => {
             frame.render_widget(Line::from("Loading…"), inner);
@@ -608,7 +608,11 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
             frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), inner);
             return;
         }
-        Some(Some(Fetch::Loaded(Details { details, .. }))) => &details.comments,
+        Some(Some(Fetch::Loaded(Details {
+            details,
+            comment_bodies,
+            ..
+        }))) => (&details.comments, comment_bodies),
     };
     if comments.is_empty() {
         frame.render_widget(Line::from("No comments."), inner);
@@ -634,8 +638,12 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     let preview_block = Block::new().borders(Borders::LEFT);
     app.areas.comment_preview = preview_area;
     let preview_inner = preview_block.inner(preview_area);
-    let body = model::clean_body(comments[selected].body.as_deref());
-    let preview = Paragraph::new(body).wrap(Wrap { trim: false });
+    let width = usize::from(preview_inner.width);
+    let body = &bodies[selected];
+    let widest = model::widest_table(body);
+    let x = usize::from(app.scroll.comment_x).min(widest.saturating_sub(width));
+    app.scroll.comment_x = u16::try_from(x).unwrap_or(u16::MAX);
+    let preview = Paragraph::new(model::crop_tables(body, width, x)).wrap(Wrap { trim: false });
     let scroll = app.scroll.comment_scroll.min(max_scroll(
         preview.line_count(preview_inner.width),
         preview_inner.height,
@@ -1294,6 +1302,47 @@ mod tests {
         // And it scrolls back.
         press(&mut app, "h");
         assert!(app.scroll.description_x < at_end);
+    }
+
+    #[test]
+    fn a_comment_is_rendered_as_markdown_and_its_table_scrolls_sideways() {
+        let mut app = app_with(vec![pr_checked(1, "MERGEABLE", vec![])]);
+        let wide = "x".repeat(120);
+        let comment = |body: String| {
+            serde_json::json!({
+                "author": {"login": "someone"},
+                "createdAt": "2026-01-02T03:00:00Z",
+                "body": body,
+            })
+        };
+        let details = serde_json::from_value(serde_json::json!({
+            "headRefName": "branch",
+            "body": "",
+            "comments": [
+                comment("first".to_string()),
+                comment(format!("Some **bold** prose\n\n| Name | Value |\n|---|---|\n| a | {wide}END |")),
+            ],
+            "additions": 1,
+            "deletions": 1,
+        }))
+        .unwrap();
+        app.update(Msg::DetailsLoaded(1, Ok(details)));
+        app.focus = Pane::Comments;
+        press(&mut app, "j");
+        let screen = lines(&draw(&mut app, 160, 40));
+        assert!(screen.iter().any(|line| line.contains("Some bold prose")));
+        assert!(!screen.iter().any(|line| line.contains("END")));
+
+        for _ in 0..20 {
+            press(&mut app, "l");
+        }
+        let screen = lines(&draw(&mut app, 160, 40));
+        assert!(screen.iter().any(|line| line.contains("END")));
+
+        // Picking another comment starts at the left again.
+        press(&mut app, "k");
+        draw(&mut app, 160, 40);
+        assert_eq!(app.scroll.comment_x, 0);
     }
 
     #[test]
