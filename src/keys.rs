@@ -11,7 +11,7 @@ pub const HELP_HINTS: &str = "Esc ? q: Close";
 pub const RUNNING_HINTS: &str = "q: Cancel | Ctrl-C: Quit";
 pub const RESULTS_HINTS: &str = "Enter/Esc: Close";
 /// Editing the search box.
-pub const SEARCH_HINTS: &str = "Enter: Search | Esc: Cancel";
+pub const SEARCH_HINTS: &str = "Enter: Search | Up/Down: History | Esc: Cancel";
 /// Editing the filter box.
 pub const FILTER_HINTS: &str = "Enter: Keep filter | Esc: Clear filter";
 

@@ -12,6 +12,7 @@ use crate::batch::{
     Batch, BatchItem, Choice, Confirm, ConfirmPr, ItemStatus, Summary, auto_merge, finished_status,
 };
 use crate::gh::{GhError, Pr, PrDetails, PrState, PrStatus, StatusUpdate};
+use crate::history::History;
 use crate::model::{self, CheckState, Checks, one_line};
 
 mod input;
@@ -44,6 +45,8 @@ pub struct App {
     pub query: Input,
     /// The query to restore when an edit is cancelled.
     submitted_query: String,
+    /// The queries submitted before, walked with Up and Down in the search box.
+    history: History,
     /// Which box, if any, is taking the keys.
     pub typing: Typing,
     /// Fetching the list.
@@ -353,6 +356,7 @@ impl App {
             mode: Mode::Loading,
             query: Input::new(query.clone()),
             submitted_query: query.clone(),
+            history: History::load(None, crate::history::DEFAULT_LIMIT),
             typing: Typing::Nothing,
             list: ListFetch {
                 query_to_fetch: Some(query),
@@ -388,6 +392,17 @@ impl App {
     pub fn with_limit(mut self, limit: u32) -> Self {
         self.limit = limit as usize;
         self
+    }
+
+    /// Walks and adds to `history` in the search box.
+    pub fn with_history(mut self, history: History) -> Self {
+        self.history = history;
+        self
+    }
+
+    /// Writes the search history, for when the app ends.
+    pub fn save_history(&self) {
+        self.history.save();
     }
 
     /// Shows a column for each named group of `columns` in place of the title.

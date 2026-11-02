@@ -54,7 +54,12 @@ pub struct Diff {
 
 impl Diff {
     pub fn new(text: Text<'static>) -> Self {
-        let widest = text.lines.iter().map(|line| line.width()).max().unwrap_or(0);
+        let widest = text
+            .lines
+            .iter()
+            .map(|line| line.width())
+            .max()
+            .unwrap_or(0);
         Self { text, widest }
     }
 }

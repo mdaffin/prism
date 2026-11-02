@@ -86,6 +86,25 @@ fn esc_restores_the_submitted_query() {
 }
 
 #[test]
+fn up_and_down_in_the_search_box_walk_the_submitted_queries() {
+    let mut app = app_with_rows(3);
+    for query in ["x", "y"] {
+        press(&mut app, &format!("/{query}"));
+        key(&mut app, KeyCode::Enter);
+    }
+    press(&mut app, "/ half");
+    key(&mut app, KeyCode::Up);
+    assert_eq!(app.query.value(), "is:prxy");
+    key(&mut app, KeyCode::Up);
+    assert_eq!(app.query.value(), "is:prx");
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    // What was half typed comes back.
+    assert_eq!(app.query.value(), "is:prxy half");
+    assert!(app.typing == Typing::Search);
+}
+
+#[test]
 fn enter_fetches_the_new_query_and_resets_the_highlight() {
     let mut app = app_with_rows(3);
     app.table.select(Some(2));

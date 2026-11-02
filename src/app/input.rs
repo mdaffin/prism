@@ -192,6 +192,7 @@ impl App {
             KeyCode::Enter => {
                 self.typing = Typing::Nothing;
                 self.submitted_query = self.query.value().to_string();
+                self.history.record(&self.submitted_query);
                 self.list.query_to_fetch = Some(self.submitted_query.clone());
                 self.list.refresh_requested = false;
                 self.errors.clear();
@@ -199,6 +200,16 @@ impl App {
             KeyCode::Esc => {
                 self.typing = Typing::Nothing;
                 self.query = Input::new(self.submitted_query.clone());
+            }
+            KeyCode::Up | KeyCode::Down => {
+                let current = self.query.value();
+                let recalled = match key.code {
+                    KeyCode::Up => self.history.previous(current),
+                    _ => self.history.next(current),
+                };
+                if let Some(recalled) = recalled {
+                    self.query = Input::new(recalled.to_string());
+                }
             }
             _ => {
                 self.query.handle_event(&Event::Key(key));

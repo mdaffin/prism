@@ -3,6 +3,7 @@ mod batch;
 mod cli;
 mod clipboard;
 mod gh;
+mod history;
 mod keys;
 mod model;
 mod query;
@@ -69,7 +70,11 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
     let query = query::initial(args.author.as_deref(), &args.search);
     let mut app = App::new(title, query, args.dry_run)
         .with_limit(args.limit)
-        .with_columns(args.column_regex);
+        .with_columns(args.column_regex)
+        .with_history(history::History::load(
+            history::default_path(),
+            history::DEFAULT_LIMIT,
+        ));
     // Background work reports back through this channel.
     let (tx, mut rx) = mpsc::unbounded_channel();
     let gh = gh::Gh::new(args.repo, args.dry_run);
@@ -106,6 +111,7 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
         };
         app.update(msg);
     }
+    app.save_history();
     Ok(())
 }
 
