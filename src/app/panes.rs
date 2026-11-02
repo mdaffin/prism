@@ -60,24 +60,28 @@ pub enum Pane {
 }
 
 impl Pane {
+    /// Every pane, in the order Tab cycles through them.
+    const ORDER: [Pane; 5] = [
+        Pane::Table,
+        Pane::Checks,
+        Pane::Comments,
+        Pane::Description,
+        Pane::Diff,
+    ];
+
+    fn position(self) -> usize {
+        Self::ORDER
+            .iter()
+            .position(|&pane| pane == self)
+            .expect("every pane is in ORDER")
+    }
+
     pub(super) fn next(self) -> Self {
-        match self {
-            Pane::Table => Pane::Checks,
-            Pane::Checks => Pane::Comments,
-            Pane::Comments => Pane::Description,
-            Pane::Description => Pane::Diff,
-            Pane::Diff => Pane::Table,
-        }
+        Self::ORDER[(self.position() + 1) % Self::ORDER.len()]
     }
 
     pub(super) fn previous(self) -> Self {
-        match self {
-            Pane::Table => Pane::Diff,
-            Pane::Checks => Pane::Table,
-            Pane::Comments => Pane::Checks,
-            Pane::Description => Pane::Comments,
-            Pane::Diff => Pane::Description,
-        }
+        Self::ORDER[(self.position() + Self::ORDER.len() - 1) % Self::ORDER.len()]
     }
 }
 
@@ -123,17 +127,20 @@ pub struct PaneAreas {
 }
 
 impl PaneAreas {
+    fn of(&self, pane: Pane) -> Rect {
+        match pane {
+            Pane::Table => self.table,
+            Pane::Checks => self.checks,
+            Pane::Comments => self.comments,
+            Pane::Description => self.description,
+            Pane::Diff => self.diff,
+        }
+    }
+
     pub(super) fn at(&self, position: Position) -> Option<Pane> {
-        [
-            (Pane::Table, self.table),
-            (Pane::Checks, self.checks),
-            (Pane::Comments, self.comments),
-            (Pane::Description, self.description),
-            (Pane::Diff, self.diff),
-        ]
-        .into_iter()
-        .find(|(_, area)| area.contains(position))
-        .map(|(pane, _)| pane)
+        Pane::ORDER
+            .into_iter()
+            .find(|&pane| self.of(pane).contains(position))
     }
 }
 
