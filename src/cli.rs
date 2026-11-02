@@ -12,16 +12,16 @@ pub struct Args {
     pub repo: Option<String>,
 
     /// Only list PRs by this GitHub author, e.g. app/renovate (default: any author).
-    #[arg(long, env = "GH_PRUI_AUTHOR")]
+    #[arg(long, env = "PRISM_AUTHOR")]
     pub author: Option<String>,
 
     /// Extra GitHub search terms, e.g. 'label:non-prod -label:major'.
     #[arg(long, default_value = "")]
     pub search: String,
 
-    /// Regex whose named groups become columns (default: $GH_PRUI_COLUMN_REGEX), e.g.
+    /// Regex whose named groups become columns (default: $PRISM_COLUMN_REGEX), e.g.
     /// 'Bump (?<container>.+?)(?: from \S+)? to \S+$'.
-    #[arg(long, env = "GH_PRUI_COLUMN_REGEX", value_parser = model::parse_column_regex)]
+    #[arg(long, env = "PRISM_COLUMN_REGEX", value_parser = model::parse_column_regex)]
     pub column_regex: Option<Regex>,
 
     /// Most PRs to fetch at once. GitHub times out on large repos if this is too high.
