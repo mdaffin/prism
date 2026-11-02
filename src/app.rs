@@ -62,6 +62,9 @@ pub struct App {
     pub filter: Input,
     /// The highlighted row, as a position in `visible`.
     pub table: TableState,
+    /// Columns the table is scrolled sideways, past its first columns. The view clamps it. Unlike
+    /// `scroll` it stays when the highlight moves to another PR.
+    pub list_x: u16,
     /// The pane that Up/Down and PgUp/PgDn act on.
     pub focus: Pane,
     /// How far the panes are scrolled, and the comment picked.
@@ -361,6 +364,7 @@ impl App {
             visible: Vec::new(),
             filter: Input::default(),
             table: TableState::default(),
+            list_x: 0,
             focus: Pane::Table,
             scroll: Scroll::default(),
             drawn: Drawn::default(),
@@ -593,7 +597,7 @@ impl App {
                 // A tab would be drawn as a single cell. Parsing here rather than when drawing
                 // means each diff is parsed once.
                 let diff = match diff.replace('\t', "    ").into_text() {
-                    Ok(text) => Fetch::Loaded(text),
+                    Ok(text) => Fetch::Loaded(Diff::new(text)),
                     Err(e) => Fetch::Failed(format!("couldn't read the colours: {e}")),
                 };
                 self.diffs.insert(number, diff);

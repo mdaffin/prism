@@ -44,7 +44,19 @@ pub struct Details {
 }
 
 /// A PR's diff with gh's colours.
-pub type Diff = Text<'static>;
+pub struct Diff {
+    pub text: Text<'static>,
+    /// The columns of its widest line, worked out once when it loads, as a diff can be very long
+    /// and the view needs it to scroll sideways.
+    pub widest: usize,
+}
+
+impl Diff {
+    pub fn new(text: Text<'static>) -> Self {
+        let widest = text.lines.iter().map(|line| line.width()).max().unwrap_or(0);
+        Self { text, widest }
+    }
+}
 
 /// Marks the PRs in `order` that have no entry in `fetches` as loading, and returns them with
 /// their fetch ids, as many as there are free slots out of `max`. The caller must start their

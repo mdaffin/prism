@@ -12,12 +12,16 @@ use super::{App, toggle};
 #[derive(Default)]
 pub struct Scroll {
     pub checks: u16,
+    /// Columns the checks' names are scrolled sideways. The view clamps it.
+    pub checks_x: u16,
     pub description: u16,
     /// Columns the description's tables are scrolled sideways. The view clamps it.
     pub description_x: u16,
     /// The same for the open comments, which share it.
     pub comment_x: u16,
     pub diff: u16,
+    /// Columns the diff is scrolled sideways. The view clamps it.
+    pub diff_x: u16,
     pub comments: u16,
     /// The highlighted check of the highlighted PR. The view clamps it to the checks there are.
     pub check: usize,
@@ -187,12 +191,15 @@ impl App {
         }
     }
 
-    /// Scrolls the tables of the description or the comment preview sideways.
+    /// Scrolls a pane sideways: the table's columns, the checks' names, the diff, or the tables of
+    /// the description or the open comments.
     pub(super) fn scroll_sideways(&mut self, pane: Pane, by: isize) {
         let x = match pane {
+            Pane::Table => &mut self.list_x,
+            Pane::Checks => &mut self.scroll.checks_x,
             Pane::Description => &mut self.scroll.description_x,
             Pane::Comments => &mut self.scroll.comment_x,
-            _ => return,
+            Pane::Diff => &mut self.scroll.diff_x,
         };
         *x = scrolled(*x, by);
     }

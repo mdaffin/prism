@@ -1,14 +1,16 @@
 use std::collections::HashSet;
 
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Flex, Layout, Margin, Position, Rect};
 use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
-    Block, Cell, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
-    TableState, Wrap,
+    Block, Cell, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    StatefulWidget, Table, TableState, Wrap,
 };
 use regex::Regex;
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::{
     self, App, ChecksLayout, CommentLayout, ConfirmOpen, Details, Fetch, Mode, Page, Pane, Typing,
@@ -51,6 +53,19 @@ const CHECKS_WIDTH: u16 = 12;
 const REVIEW_WIDTH: u16 = 11;
 /// Fits `app/renovate` and a typical login; a longer one is cut.
 const AUTHOR_WIDTH: u16 = 16;
+
+/// The characters of a horizontal scrollbar. The track is the border's own, so only the thumb
+/// shows.
+const HORIZONTAL_THUMB: &str = "▬";
+const HORIZONTAL_TRACK: &str = "─";
+
+/// The columns of the table that stay in view when it scrolls sideways: the checkbox and the
+/// number, and the gap after each.
+const FROZEN_WIDTH: u16 = CHECKBOX_WIDTH + 1 + NUMBER_WIDTH + 1;
+
+/// The most columns a title column gets when the table scrolls, so one huge title can't make the
+/// table enormous.
+const MAX_TITLE_COLUMN_WIDTH: usize = 300;
 
 /// The columns between two buttons.
 const BUTTON_GAP: u16 = 2;
@@ -346,16 +361,27 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
         | Mode::Running(_)
         | Mode::Results(_) => {
             let author = app.shows_author();
-            // Borrowing the fields rather than calling `visible_rows` leaves `app.table` free.
-            let rows = app.visible.iter().map(|&i| &app.rows[i]).map(|row| {
-                let selected = app.selected.contains(&row.pr.number);
-                pr_row(row, selected, author, app.columns.as_ref())
-            });
             // The groups of the column regex share the space the title had.
             let titles = match &app.columns {
                 Some(regex) => model::column_names(regex),
                 None => vec!["Title".to_string()],
             };
+            // With more than fits, the title columns take the width of their longest cell and the
+            // table scrolls sideways; otherwise they share what is left.
+            let title_widths = title_column_widths(app, &titles);
+            let fixed = CHECKBOX_WIDTH
+                + NUMBER_WIDTH
+                + CHECKS_WIDTH
+                + REVIEW_WIDTH
+                + if author { AUTHOR_WIDTH } else { 0 };
+            let gaps = (4 + usize::from(author) + titles.len() - 1) as u16;
+            let total = fixed + title_widths.iter().sum::<u16>() + gaps;
+            let scrolling = total > table_area.width;
+            // Borrowing the fields rather than calling `visible_rows` leaves `app.table` free.
+            let rows = app.visible.iter().map(|&i| &app.rows[i]).map(|row| {
+                let selected = app.selected.contains(&row.pr.number);
+                pr_row(row, selected, author, app.columns.as_ref())
+            });
             let widths = [
                 Constraint::Length(CHECKBOX_WIDTH),
                 Constraint::Length(NUMBER_WIDTH),
@@ -364,7 +390,13 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
             ]
             .into_iter()
             .chain(author.then_some(Constraint::Length(AUTHOR_WIDTH)))
-            .chain(titles.iter().map(|_| Constraint::Fill(1)))
+            .chain(title_widths.iter().map(|&width| {
+                if scrolling {
+                    Constraint::Length(width)
+                } else {
+                    Constraint::Fill(1)
+                }
+            }))
             .collect::<Vec<_>>();
             let header = ["", "#", "Checks", "Review"]
                 .map(str::to_string)
@@ -378,7 +410,26 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
             if app.list.searching {
                 table = table.dim();
             }
-            frame.render_stateful_widget(table, table_area, &mut app.table);
+            if scrolling {
+                // Drawn at its full width, then the part in view is copied over, keeping the
+                // first columns in place.
+                let full = Rect::new(0, 0, total, table_area.height);
+                let mut buffer = Buffer::empty(full);
+                StatefulWidget::render(table, full, &mut buffer, &mut app.table);
+                let x = app.list_x.min(total - table_area.width);
+                app.list_x = x;
+                copy_scrolled(&buffer, frame.buffer_mut(), table_area, FROZEN_WIDTH, x);
+                hscrollbar(
+                    frame,
+                    area,
+                    usize::from(total),
+                    usize::from(table_area.width),
+                    usize::from(x),
+                );
+            } else {
+                app.list_x = 0;
+                frame.render_stateful_widget(table, table_area, &mut app.table);
+            }
             // One row of the table is its header.
             scrollbar(
                 frame,
@@ -398,6 +449,31 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
                 ..app.drawn.areas.table_rows
             };
             app.drawn.areas.table_offset = app.table.offset();
+        }
+    }
+}
+
+/// The widest cell of each title column, the header included, as far as is worth showing.
+fn title_column_widths(app: &App, titles: &[String]) -> Vec<u16> {
+    let mut widths: Vec<usize> = titles.iter().map(|title| title.width()).collect();
+    for row in app.visible_rows() {
+        for (width, cell) in widths.iter_mut().zip(row.title_cells(app.columns.as_ref())) {
+            *width = (*width).max(cell.width());
+        }
+    }
+    widths
+        .into_iter()
+        .map(|width| to_u16(width.min(MAX_TITLE_COLUMN_WIDTH)))
+        .collect()
+}
+
+/// Copies `source`, which was drawn at its full width from the top left, into `area` of `target`,
+/// scrolled `x` columns past its first `frozen` columns, which stay.
+fn copy_scrolled(source: &Buffer, target: &mut Buffer, area: Rect, frozen: u16, x: u16) {
+    for dy in 0..area.height {
+        for dx in 0..area.width {
+            let from = if dx < frozen { dx } else { dx + x };
+            target[(area.x + dx, area.y + dy)] = source[(from, dy)].clone();
         }
     }
 }
@@ -841,18 +917,51 @@ fn set_page(app: &mut App, pane: Pane, height: u16, kept: u16) {
 /// A scrollbar down the right border of `area`, drawn only while the pane's `content` rows don't
 /// all fit in its `viewport`. `offset` is the first row shown.
 fn scrollbar(frame: &mut Frame, area: Rect, content: usize, viewport: usize, offset: usize) {
+    let margin = Margin::new(0, 1);
+    render_scrollbar(
+        frame,
+        area.inner(margin),
+        ScrollbarOrientation::VerticalRight,
+        (content, viewport, offset),
+    );
+}
+
+/// A scrollbar along the bottom border of `area`, drawn only while the pane's `content` columns
+/// don't all fit in its `viewport`. `offset` is the first column shown.
+fn hscrollbar(frame: &mut Frame, area: Rect, content: usize, viewport: usize, offset: usize) {
+    let margin = Margin::new(1, 0);
+    render_scrollbar(
+        frame,
+        area.inner(margin),
+        ScrollbarOrientation::HorizontalBottom,
+        (content, viewport, offset),
+    );
+}
+
+/// Draws a scrollbar on the edge of `area`, which is already inside the corners of the border,
+/// for the `(content, viewport, offset)` lengths along its axis.
+fn render_scrollbar(
+    frame: &mut Frame,
+    area: Rect,
+    orientation: ScrollbarOrientation,
+    (content, viewport, offset): (usize, usize, usize),
+) {
     if content <= viewport {
         return;
     }
-    // The position runs from 0 to the last offset, which is when the thumb reaches the bottom.
+    // The position runs from 0 to the last offset, which is when the thumb reaches the end.
     let mut state = ScrollbarState::new(content - viewport + 1)
         .viewport_content_length(viewport)
         .position(offset);
-    let bar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+    let horizontal = orientation == ScrollbarOrientation::HorizontalBottom;
+    let mut bar = Scrollbar::new(orientation)
         .begin_symbol(None)
         .end_symbol(None);
-    // Inside the corners.
-    let area = area.inner(Margin::new(0, 1));
+    if horizontal {
+        bar = bar
+            .thumb_symbol(HORIZONTAL_THUMB)
+            .track_symbol(Some(HORIZONTAL_TRACK));
+    }
     frame.render_stateful_widget(bar, area, &mut state);
 }
 
@@ -872,15 +981,25 @@ fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
         return;
     };
     // A conflict outranks the checks, so it gets a row of its own at the top.
-    let conflict = (row.checks.state == CheckState::Conflict)
-        .then(|| styled_check_row(CheckState::Conflict, "Merge conflict"));
+    let conflict = (row.checks.state == CheckState::Conflict).then_some("Merge conflict");
     let first = usize::from(conflict.is_some());
     let results = row.checks.worst_first();
     let selected = app.scroll.check.min(results.len().saturating_sub(1));
+    // The names scroll sideways and the status stays. The gap between the columns is one.
+    let names_width = inner.width.saturating_sub(CHECK_STATUS_WIDTH + 1);
+    let widest = results
+        .iter()
+        .map(|result| result.key.width())
+        .chain(conflict.map(|name| name.width()))
+        .max()
+        .unwrap_or(0);
+    let x = usize::from(app.scroll.checks_x).min(widest.saturating_sub(usize::from(names_width)));
+    let name = |name: &str| model::skip_columns(name, x);
+    let conflict = conflict.map(|text| styled_check_row(CheckState::Conflict, name(text)));
     let rows: Vec<Row> = conflict
         .into_iter()
         .chain(results.iter().enumerate().map(|(i, result)| {
-            let row = styled_check_row(result.state, &result.key);
+            let row = styled_check_row(result.state, name(&result.key));
             if i == selected { row.reversed() } else { row }
         }))
         .collect();
@@ -904,6 +1023,7 @@ fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
     frame.render_stateful_widget(table, inner, &mut state);
     let viewport = usize::from(inner.height.saturating_sub(1));
     scrollbar(frame, area, rows_count, viewport, usize::from(scroll));
+    hscrollbar(frame, area, widest, usize::from(names_width), x);
     app.drawn.checks_layout = ChecksLayout {
         count,
         first,
@@ -911,10 +1031,11 @@ fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
     };
     app.scroll.check = selected;
     app.scroll.checks = scroll;
+    app.scroll.checks_x = to_u16(x);
 }
 
 /// A row of the checks pane, with its status coloured.
-fn styled_check_row<'a>(state: CheckState, name: &'a str) -> Row<'a> {
+fn styled_check_row<'a>(state: CheckState, name: String) -> Row<'a> {
     Row::new([
         Cell::new(state.label()).style(state_style(state)),
         Cell::new(name),
@@ -1043,6 +1164,8 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
         .highlighted()
         .and_then(|row| app.diffs.get(&row.pr.number));
     let mut scroll = 0;
+    let mut x = 0;
+    let mut widest = 0;
     let mut lines = 0;
     // A failure is a message, so it wraps; a diff is cut off at the pane's edge.
     let mut wrap = false;
@@ -1051,14 +1174,17 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
         // A PR waiting for a free fetch slot has no entry yet.
         None | Some(Fetch::Loading(_)) => Text::from("Loading…"),
         Some(Fetch::Loaded(diff)) => {
-            lines = diff.lines.len();
+            lines = diff.text.lines.len();
+            widest = diff.widest;
             scroll = app
                 .scroll
                 .diff
-                .min(max_scroll(diff.lines.len(), inner.height));
+                .min(max_scroll(diff.text.lines.len(), inner.height));
+            x = app.scroll.diff_x.min(max_scroll(diff.widest, inner.width));
             // Only the rows that fit are copied, as a diff can be very long.
             Text::from(
-                diff.lines
+                diff.text
+                    .lines
                     .iter()
                     .skip(usize::from(scroll))
                     .take(usize::from(inner.height))
@@ -1072,7 +1198,7 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
             Text::from(format!("Failed to load diff: {error}")).red()
         }
     };
-    let mut pane = Paragraph::new(text).block(block);
+    let mut pane = Paragraph::new(text).scroll((0, x)).block(block);
     if wrap {
         pane = pane.wrap(Wrap { trim: false });
     }
@@ -1084,7 +1210,15 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
         usize::from(inner.height),
         usize::from(scroll),
     );
+    hscrollbar(
+        frame,
+        area,
+        widest,
+        usize::from(inner.width),
+        usize::from(x),
+    );
     app.scroll.diff = scroll;
+    app.scroll.diff_x = x;
 }
 
 /// The highlighted PR's title and its summary line: checks, review, size and branch.
@@ -2402,6 +2536,242 @@ mod tests {
             click(&mut app, Position::new(area.x + 1, area.y + 1));
             assert!(app.focus == pane, "{pane:?}");
         }
+    }
+
+    /// The text of row `row` (counted from the first inside the border) of the pane at `area`.
+    fn pane_row(buffer: &Buffer, area: Rect, row: u16) -> String {
+        (area.x + 1..area.right() - 1)
+            .map(|x| buffer[(x, area.y + 1 + row)].symbol())
+            .collect()
+    }
+
+    fn focus(app: &mut App, pane: Pane) {
+        while app.focus != pane {
+            key(app, KeyCode::Tab);
+        }
+    }
+
+    #[test]
+    fn the_diff_scrolls_sideways_to_the_end_of_its_longest_line() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        app.diff_loaded(1, Ok(format!("+{}END\n ctx", "x".repeat(300))));
+        let buffer = draw(&mut app, 120, 40);
+        let diff = app.drawn.areas.diff;
+        assert!(pane_row(&buffer, diff, 0).starts_with("+xxx"));
+        assert!(!pane_row(&buffer, diff, 0).contains("END"));
+
+        focus(&mut app, Pane::Diff);
+        for _ in 0..60 {
+            key(&mut app, KeyCode::Right);
+        }
+        let buffer = draw(&mut app, 120, 40);
+        // Stopped at the end of the line, not scrolled on into blank space.
+        assert!(pane_row(&buffer, diff, 0).trim_end().ends_with("xxxEND"));
+        assert!(pane_row(&buffer, diff, 0).starts_with("xxx"));
+        assert_eq!(pane_row(&buffer, diff, 0).chars().last(), Some('D'));
+
+        for _ in 0..60 {
+            key(&mut app, KeyCode::Left);
+        }
+        let buffer = draw(&mut app, 120, 40);
+        assert!(pane_row(&buffer, diff, 0).starts_with("+xxx"));
+    }
+
+    #[test]
+    fn the_checks_scroll_their_names_sideways_and_keep_the_status() {
+        let name = format!("{}END", "n".repeat(120));
+        let mut app = app_with(vec![pr_checked(
+            1,
+            "MERGEABLE",
+            vec![run(&name, "COMPLETED", "SUCCESS")],
+        )]);
+        draw(&mut app, 120, 40);
+        focus(&mut app, Pane::Checks);
+        let buffer = draw(&mut app, 120, 40);
+        let checks = app.drawn.areas.checks;
+        assert!(pane_row(&buffer, checks, 1).contains("passing"));
+        assert!(!pane_row(&buffer, checks, 1).contains("END"));
+
+        for _ in 0..30 {
+            key(&mut app, KeyCode::Right);
+        }
+        let buffer = draw(&mut app, 120, 40);
+        let row = pane_row(&buffer, checks, 1);
+        assert!(row.contains("passing"), "the status stays: {row}");
+        assert!(row.trim_end().ends_with("END"), "{row}");
+        assert!(!row.contains("CI/"), "{row}");
+    }
+
+    fn app_with_a_long_title() -> App {
+        let title = format!("{}END", "long ".repeat(40));
+        app_with(vec![by("alice", 1, &title), by("bob", 2, "Short")])
+    }
+
+    #[test]
+    fn the_list_scrolls_sideways_keeping_the_checkbox_and_number() {
+        let mut app = app_with_a_long_title();
+        let buffer = draw(&mut app, 100, 40);
+        let table = app.drawn.areas.table;
+        assert!(!pane_row(&buffer, table, 1).contains("END"));
+
+        for _ in 0..40 {
+            key(&mut app, KeyCode::Right);
+        }
+        let buffer = draw(&mut app, 100, 40);
+        let row = pane_row(&buffer, table, 1);
+        assert!(row.starts_with("[ ] #1 "), "the first columns stay: {row}");
+        assert!(row.trim_end().ends_with("END"), "{row}");
+        assert!(!row.contains("alice"), "the author scrolled away: {row}");
+        // The header scrolls with the rows, and keeps the number's.
+        assert!(pane_row(&buffer, table, 0).trim_start().starts_with('#'));
+        assert!(!pane_row(&buffer, table, 0).contains("Author"));
+        // The second PR's row is still there under its number.
+        assert!(pane_row(&buffer, table, 2).starts_with("[ ] #2 "));
+
+        for _ in 0..40 {
+            key(&mut app, KeyCode::Left);
+        }
+        let buffer = draw(&mut app, 100, 40);
+        assert!(pane_row(&buffer, table, 1).contains("alice"));
+    }
+
+    #[test]
+    fn the_lists_scroll_stays_when_the_highlight_moves() {
+        let mut app = app_with_a_long_title();
+        draw(&mut app, 100, 40);
+        for _ in 0..3 {
+            key(&mut app, KeyCode::Right);
+        }
+        let x = app.list_x;
+        assert!(x > 0);
+        press(&mut app, "j");
+        draw(&mut app, 100, 40);
+        assert_eq!(app.list_x, x);
+    }
+
+    #[test]
+    fn a_list_that_fits_does_not_scroll_sideways() {
+        let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
+        for _ in 0..5 {
+            key(&mut app, KeyCode::Right);
+        }
+        let buffer = draw(&mut app, 100, 40);
+        assert_eq!(app.list_x, 0);
+        assert!(pane_row(&buffer, app.drawn.areas.table, 1).contains("alice"));
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_list_and_the_diff_sideways() {
+        use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+        let mut app = app_with_a_long_title();
+        app.diff_loaded(1, Ok(format!("+{}END", "x".repeat(300))));
+        draw(&mut app, 100, 40);
+        let table = app.drawn.areas.table;
+        let diff = app.drawn.areas.diff;
+        let scroll = |app: &mut App, kind, modifiers, area: Rect| {
+            app.update(Msg::Mouse(MouseEvent {
+                kind,
+                column: area.x + 2,
+                row: area.y + 2,
+                modifiers,
+            }));
+        };
+        scroll(
+            &mut app,
+            MouseEventKind::ScrollRight,
+            KeyModifiers::NONE,
+            table,
+        );
+        assert!(app.list_x > 0);
+        scroll(
+            &mut app,
+            MouseEventKind::ScrollDown,
+            KeyModifiers::SHIFT,
+            diff,
+        );
+        assert!(app.scroll.diff_x > 0);
+        // The focus stays where it was.
+        assert!(app.focus == Pane::Table);
+    }
+
+    /// The columns of the thumb of the scrollbar on `area`'s bottom border. Its track is the
+    /// border itself, so a pane has a scrollbar when it has a thumb.
+    fn horizontal_thumb(buffer: &Buffer, area: Rect) -> Vec<u16> {
+        (area.x + 1..area.right() - 1)
+            .filter(|&x| buffer[(x, area.bottom() - 1)].symbol() == HORIZONTAL_THUMB)
+            .collect()
+    }
+
+    fn has_horizontal_scrollbar(buffer: &Buffer, area: Rect) -> bool {
+        !horizontal_thumb(buffer, area).is_empty()
+    }
+
+    #[test]
+    fn the_list_checks_and_diff_have_a_horizontal_scrollbar_only_when_cut_off() {
+        let title = "long ".repeat(40);
+        let mut app = app_with(vec![by("alice", 1, &title), by("bob", 2, "Short")]);
+        app.diff_loaded(1, Ok(format!("+{}", "x".repeat(300))));
+        app.diff_loaded(2, Ok("+short".to_string()));
+        let buffer = draw(&mut app, 100, 40);
+        let areas = &app.drawn.areas;
+        assert!(has_horizontal_scrollbar(&buffer, areas.table));
+        assert!(has_horizontal_scrollbar(&buffer, areas.diff));
+        // Its checks are all short.
+        assert!(!has_horizontal_scrollbar(&buffer, areas.checks));
+
+        // The second PR's diff fits; the list still has the first PR's long title.
+        press(&mut app, "j");
+        let buffer = draw(&mut app, 100, 40);
+        assert!(!has_horizontal_scrollbar(&buffer, app.drawn.areas.diff));
+        assert!(has_horizontal_scrollbar(&buffer, app.drawn.areas.table));
+    }
+
+    #[test]
+    fn a_long_check_name_gives_the_checks_a_horizontal_scrollbar() {
+        let name = "n".repeat(150);
+        let mut app = app_with(vec![pr_checked(
+            1,
+            "MERGEABLE",
+            vec![run(&name, "COMPLETED", "SUCCESS")],
+        )]);
+        let buffer = draw(&mut app, 100, 40);
+        assert!(has_horizontal_scrollbar(&buffer, app.drawn.areas.checks));
+    }
+
+    #[test]
+    fn no_pane_has_a_horizontal_scrollbar_when_its_text_fits() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        app.diff_loaded(1, Ok("+added".to_string()));
+        let buffer = draw(&mut app, 100, 40);
+        let areas = &app.drawn.areas;
+        for (name, area) in [
+            ("table", areas.table),
+            ("checks", areas.checks),
+            ("description", areas.description),
+            ("diff", areas.diff),
+        ] {
+            assert!(!has_horizontal_scrollbar(&buffer, area), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_horizontal_thumb_moves_from_the_left_end_to_the_right_end() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        app.diff_loaded(1, Ok(format!("+{}", "x".repeat(300))));
+        let buffer = draw(&mut app, 100, 40);
+        let diff = app.drawn.areas.diff;
+        let at_start = horizontal_thumb(&buffer, diff);
+        assert_eq!(at_start.first(), Some(&(diff.x + 1)));
+        assert!(at_start.last() < Some(&(diff.right() - 2)));
+
+        focus(&mut app, Pane::Diff);
+        for _ in 0..60 {
+            key(&mut app, KeyCode::Right);
+        }
+        let buffer = draw(&mut app, 100, 40);
+        let at_end = horizontal_thumb(&buffer, diff);
+        assert_eq!(at_end.last(), Some(&(diff.right() - 2)));
+        assert!(at_end.first() > Some(&(diff.x + 1)));
     }
     #[test]
     fn the_wheel_is_ignored_while_a_box_is_edited() {

@@ -281,6 +281,18 @@ pub fn crop_tables(text: &Text<'static>, width: usize, x: usize) -> Text<'static
     }
 }
 
+/// `text` without its first `x` display columns, for scrolling a line sideways.
+pub fn skip_columns(text: &str, x: usize) -> String {
+    let mut column = 0;
+    text.chars()
+        .filter(|c| {
+            let keep = column >= x;
+            column += c.width().unwrap_or(0);
+            keep
+        })
+        .collect()
+}
+
 /// Names the title columns can't use, as other parts of a PR already have them.
 const RESERVED_COLUMNS: [&str; 13] = [
     "number", "title", "branch", "url", "changes", "body", "comments", "diff", "state", "checks",
@@ -380,6 +392,15 @@ mod tests {
     fn passes(filter: &str, columns: &[&str]) -> bool {
         let columns: Vec<String> = columns.iter().map(|c| c.to_string()).collect();
         Filter::new(filter).matches(&columns)
+    }
+
+    #[test]
+    fn skipping_columns_drops_the_start_of_a_line() {
+        assert_eq!(skip_columns("CI / build", 0), "CI / build");
+        assert_eq!(skip_columns("CI / build", 5), "build");
+        assert_eq!(skip_columns("CI / build", 99), "");
+        // A wide character is two columns.
+        assert_eq!(skip_columns("日本語", 2), "本語");
     }
 
     #[test]

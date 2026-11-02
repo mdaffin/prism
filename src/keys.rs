@@ -58,12 +58,13 @@ const fn pane_key(
 
 /// The groups of the `?` popup, in order: the keys of every pane, then those of each pane that
 /// has any, under the pane's title.
-pub const GROUPS: [(Option<Pane>, &str); 5] = [
+pub const GROUPS: [(Option<Pane>, &str); 6] = [
     (None, "Everywhere"),
     (Some(Pane::Table), "Pull requests"),
     (Some(Pane::Checks), "Checks"),
     (Some(Pane::Comments), "Comments"),
     (Some(Pane::Description), "Description"),
+    (Some(Pane::Diff), "Diff"),
 ];
 
 pub const KEYS: &[KeyHelp] = &[
@@ -165,6 +166,24 @@ pub const KEYS: &[KeyHelp] = &[
         Pane::Comments,
         "Left/Right, h/l",
         "Scroll the open comments' tables sideways (also Shift-wheel)",
+        None,
+    ),
+    pane_key(
+        Pane::Table,
+        "Left/Right, h/l",
+        "Scroll the list sideways, keeping the number in view (also Shift-wheel)",
+        None,
+    ),
+    pane_key(
+        Pane::Checks,
+        "Left/Right, h/l",
+        "Scroll the check names sideways (also Shift-wheel)",
+        None,
+    ),
+    pane_key(
+        Pane::Diff,
+        "Left/Right, h/l",
+        "Scroll the diff sideways (also Shift-wheel)",
         None,
     ),
     pane_key(

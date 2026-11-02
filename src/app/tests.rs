@@ -1222,7 +1222,7 @@ fn prefetches_diffs_from_the_highlight_within_the_limit() {
     // Freed slots go to the highlighted row and those below it, then wrap to the top.
     app.table.select(Some(5));
     app.diff_loaded(1, Ok("diff\t".to_string()));
-    assert!(matches!(&app.diffs[&1], Fetch::Loaded(d) if d.to_string() == "diff    "));
+    assert!(matches!(&app.diffs[&1], Fetch::Loaded(d) if d.text.to_string() == "diff    "));
     assert_eq!(started(app.diffs_to_fetch()), [6]);
     for number in [2, 3] {
         app.diff_loaded(number, Ok(String::new()));
@@ -1242,12 +1242,14 @@ fn prefetches_diffs_from_the_highlight_within_the_limit() {
 fn diff_colours_become_styles() {
     let mut app = app_with_rows(1);
     app.diff_loaded(1, Ok("\x1b[32m+added\x1b[m\n ctx".to_string()));
-    let Fetch::Loaded(text) = &app.diffs[&1] else {
+    let Fetch::Loaded(diff) = &app.diffs[&1] else {
         panic!("diff should be loaded");
     };
-    assert_eq!(text.to_string(), "+added\n ctx");
+    assert_eq!(diff.text.to_string(), "+added\n ctx");
+    // The widest line is worked out when it loads.
+    assert_eq!(diff.widest, 6);
     assert_eq!(
-        text.lines[0].spans[0].style.fg,
+        diff.text.lines[0].spans[0].style.fg,
         Some(ratatui::style::Color::Green)
     );
 }
