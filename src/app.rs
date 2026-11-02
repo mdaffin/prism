@@ -3,7 +3,7 @@ use std::hash::Hash;
 
 use ansi_to_tui::IntoText;
 use color_eyre::eyre::Result;
-use crossterm::event::{KeyEvent, MouseEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::widgets::TableState;
 use regex::Regex;
 use tui_input::Input;
@@ -189,6 +189,21 @@ pub struct ConfirmOpen {
     pub numbers: Vec<u64>,
     /// Whether Open, rather than Cancel, is highlighted.
     pub open: bool,
+}
+
+impl ConfirmOpen {
+    /// Moves between Open and Cancel. Returns `Some(true)` to open the PRs and `Some(false)` to
+    /// close the dialog without opening them.
+    fn on_key(&mut self, key: KeyEvent) -> Option<bool> {
+        match key.code {
+            KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => self.open = true,
+            KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => self.open = false,
+            KeyCode::Enter => return Some(self.open),
+            KeyCode::Esc | KeyCode::Char('q') => return Some(false),
+            _ => {}
+        }
+        None
+    }
 }
 
 pub struct Row {

@@ -74,15 +74,13 @@ impl App {
                     self.choose(choice);
                 }
             }
-            Mode::ConfirmOpen(confirm) => match key.code {
-                KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => confirm.open = true,
-                KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => confirm.open = false,
-                KeyCode::Enter if confirm.open => {
+            Mode::ConfirmOpen(confirm) => match confirm.on_key(key) {
+                Some(true) => {
                     self.prs_to_open = std::mem::take(&mut confirm.numbers);
                     self.mode = Mode::List;
                 }
-                KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::List,
-                _ => {}
+                Some(false) => self.mode = Mode::List,
+                None => {}
             },
             Mode::Help => {
                 if matches!(key.code, KeyCode::Esc | KeyCode::Char('?' | 'q')) {

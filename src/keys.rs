@@ -1,5 +1,16 @@
 //! The keys of the list, in one table that the help popup and the status bar are both built
-//! from, so they can't drift apart.
+//! from, so they can't drift apart. The hints for the other modes, which the status bar shows
+//! in place of the list's, are here too.
+
+/// Choosing in the confirm dialogs.
+pub const CHOOSE_HINTS: &str = "←/→ Tab: Choose | Enter: Confirm | Esc: Cancel";
+pub const HELP_HINTS: &str = "Esc ? q: Close";
+pub const RUNNING_HINTS: &str = "q: Cancel | Ctrl-C: Quit";
+pub const RESULTS_HINTS: &str = "Enter/Esc: Close";
+/// Editing the search box.
+pub const SEARCH_HINTS: &str = "Enter: Search | Esc: Cancel";
+/// Editing the filter box.
+pub const FILTER_HINTS: &str = "Enter: Keep filter | Esc: Clear filter";
 
 pub struct KeyHelp {
     pub keys: &'static str,

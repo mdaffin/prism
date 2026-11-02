@@ -99,13 +99,13 @@ fn draw_dialog(app: &App, frame: &mut Frame, area: Rect) {
 /// The keys that do something now, for the end of the status line.
 fn hints(app: &App) -> String {
     let hints = match &app.mode {
-        Mode::Confirm(_) | Mode::ConfirmOpen(_) => "←/→ Tab: Choose | Enter: Confirm | Esc: Cancel",
-        Mode::Help => "Esc ? q: Close",
-        Mode::Running(_) => "q: Cancel | Ctrl-C: Quit",
-        Mode::Results(_) => "Enter/Esc: Close",
+        Mode::Confirm(_) | Mode::ConfirmOpen(_) => keys::CHOOSE_HINTS,
+        Mode::Help => keys::HELP_HINTS,
+        Mode::Running(_) => keys::RUNNING_HINTS,
+        Mode::Results(_) => keys::RESULTS_HINTS,
         Mode::Loading | Mode::List => match app.typing {
-            Typing::Search => "Enter: Search | Esc: Cancel",
-            Typing::Filter => "Enter: Keep filter | Esc: Clear filter",
+            Typing::Search => keys::SEARCH_HINTS,
+            Typing::Filter => keys::FILTER_HINTS,
             Typing::Nothing => return keys::bar(),
         },
     };
