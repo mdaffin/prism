@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use color_eyre::eyre::{Result, bail, eyre};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use tokio::process::Command;
 
 use crate::cli::MergeMethod;
@@ -53,11 +54,7 @@ impl Gh {
         candidates: Vec<u64>,
     ) -> StatusUpdate {
         let mut update = StatusUpdate::default();
-        let listed = match self.list_json(query, limit, STATUS_FIELDS).await {
-            Ok(stdout) => serde_json::from_slice::<Vec<PrStatus>>(&stdout).map_err(Into::into),
-            Err(e) => Err(e),
-        };
-        match listed {
+        match self.list_statuses(query, limit).await {
             Ok(statuses) => update.statuses = statuses,
             Err(e) => {
                 update.failure = Some(e.to_string());
@@ -84,10 +81,21 @@ impl Gh {
         update
     }
 
+    async fn list_statuses(&self, query: &str, limit: u32) -> Result<Vec<PrStatus>> {
+        let stdout = self.list_json(query, limit, STATUS_FIELDS).await?;
+        Ok(serde_json::from_slice(&stdout)?)
+    }
+
     async fn pr_status(&self, number: u64) -> Result<PrStatus> {
+        self.view_json(number, STATUS_FIELDS).await
+    }
+
+    /// `gh pr view` for one PR with these `--json` fields.
+    async fn view_json<T: DeserializeOwned>(&self, number: u64, fields: &str) -> Result<T> {
         let number = number.to_string();
-        let args = ["pr", "view", &number, "--json", STATUS_FIELDS];
-        let stdout = self.run(&args).await?;
+        let stdout = self
+            .run(&["pr", "view", &number, "--json", fields])
+            .await?;
         Ok(serde_json::from_slice(&stdout)?)
     }
 
@@ -107,10 +115,7 @@ impl Gh {
 
     /// One PR with the same fields as the list, to refresh its row.
     pub async fn pr(&self, number: u64) -> Result<Pr> {
-        let number = number.to_string();
-        let args = ["pr", "view", &number, "--json", LIST_FIELDS];
-        let stdout = self.run(&args).await?;
-        Ok(serde_json::from_slice(&stdout)?)
+        self.view_json(number, LIST_FIELDS).await
     }
 
     /// Opens the PR in the browser. It only reads, so it also runs under `--dry-run`.
@@ -130,27 +135,13 @@ impl Gh {
     /// now and its branch deleted. The empty body keeps a squash commit's message body empty.
     pub async fn merge(&self, number: u64, auto: bool, method: MergeMethod) -> Result<()> {
         let number = number.to_string();
-        let args = if auto {
-            [
-                "pr",
-                "merge",
-                &number,
-                "--auto",
-                method.flag(),
-                "--body",
-                "",
-            ]
+        let mut args = vec!["pr", "merge", &number];
+        if auto {
+            args.extend(["--auto", method.flag()]);
         } else {
-            [
-                "pr",
-                "merge",
-                &number,
-                method.flag(),
-                "--delete-branch",
-                "--body",
-                "",
-            ]
-        };
+            args.extend([method.flag(), "--delete-branch"]);
+        }
+        args.extend(["--body", ""]);
         self.run_action(&args).await
     }
 
@@ -172,10 +163,7 @@ impl Gh {
     }
 
     pub async fn pr_details(&self, number: u64) -> Result<PrDetails> {
-        let number = number.to_string();
-        let args = ["pr", "view", &number, "--json", DETAIL_FIELDS];
-        let stdout = self.run(&args).await?;
-        Ok(serde_json::from_slice(&stdout)?)
+        self.view_json(number, DETAIL_FIELDS).await
     }
 
     /// The PR's diff, with the ANSI colour codes gh adds. Without `--color=always` gh leaves
