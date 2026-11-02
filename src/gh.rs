@@ -364,7 +364,6 @@ pub enum ContextState {
 }
 
 /// The rest of a PR, fetched only when it is highlighted.
-// Some fields are first read by later steps (the Pull request box, M4 step 5).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrDetails {
@@ -375,7 +374,7 @@ pub struct PrDetails {
     pub deletions: u64,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum PrState {
     Open,
