@@ -10,7 +10,7 @@ use tui_input::Input;
 use crate::batch::{
     Batch, BatchItem, Choice, Confirm, ConfirmPr, ItemStatus, Summary, auto_merge, finished_status,
 };
-use crate::gh::{Pr, PrDetails, PrState, StatusUpdate};
+use crate::gh::{Pr, PrDetails, PrState, PrStatus, StatusUpdate};
 use crate::model::{self, CheckState, Checks};
 
 mod input;
@@ -191,6 +191,23 @@ pub struct Row {
 }
 
 impl Row {
+    pub fn new(pr: Pr) -> Self {
+        let checks = model::classify_checks(pr.mergeable, &pr.status_check_rollup);
+        Self { pr, checks }
+    }
+
+    /// Swaps in a freshly fetched PR, and works out its checks again.
+    fn replace(&mut self, pr: Pr) {
+        *self = Self::new(pr);
+    }
+
+    /// Takes what a timed refresh brings, and works out the checks again. The title stays.
+    fn apply(&mut self, status: PrStatus) {
+        let checks = model::classify_checks(status.mergeable, &status.status_check_rollup);
+        self.pr.update(status);
+        self.checks = checks;
+    }
+
     /// The checks column as drawn: the checks of a closed or merged PR no longer matter.
     pub fn checks_label(&self) -> &'static str {
         match self.pr.state {
@@ -366,8 +383,7 @@ impl App {
                 self.details.remove(&number);
                 self.diffs.remove(&number);
             }
-            row.checks = model::classify_checks(status.mergeable, &status.status_check_rollup);
-            row.pr.update(status);
+            row.apply(status);
         }
         self.status.failure = update.failure.map(|failure| one_line(&failure));
     }
@@ -507,13 +523,7 @@ impl App {
         // GitHub was asked for one more than the limit, to tell whether it was reached.
         self.truncated = prs.len() > self.limit;
         prs.truncate(self.limit);
-        let mut rows: Vec<Row> = prs
-            .into_iter()
-            .map(|pr| {
-                let checks = model::classify_checks(pr.mergeable, &pr.status_check_rollup);
-                Row { pr, checks }
-            })
-            .collect();
+        let mut rows: Vec<Row> = prs.into_iter().map(Row::new).collect();
         // Open PRs first, passing first; closed and merged PRs can't be acted on.
         rows.sort_by_key(|row| (row.pr.state != PrState::Open, row.checks.state.rank()));
         let before = self.highlighted().map(|row| row.pr.number);
@@ -558,8 +568,7 @@ impl App {
         match result {
             Ok(pr) => {
                 if let Some(row) = self.rows.iter_mut().find(|row| row.pr.number == number) {
-                    row.checks = model::classify_checks(pr.mergeable, &pr.status_check_rollup);
-                    row.pr = pr;
+                    row.replace(pr);
                 }
             }
             // The row keeps its old state, so say why it didn't change.
