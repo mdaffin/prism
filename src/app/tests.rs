@@ -80,7 +80,7 @@ fn help_opens_with_question_mark_and_closes_again() {
 fn search_box_takes_every_key_while_editing() {
     let mut app = app_with_rows(3);
     press(&mut app, "/");
-    assert!(app.editing);
+    assert!(app.typing == Typing::Search);
     press(&mut app, " q/jk");
     assert!(!app.should_quit);
     assert_eq!(app.query.value(), "is:pr q/jk");
@@ -92,7 +92,7 @@ fn esc_restores_the_submitted_query() {
     let mut app = app_with_rows(3);
     press(&mut app, "/ x");
     app.update(Msg::Key(KeyEvent::from(KeyCode::Esc)));
-    assert!(!app.editing);
+    assert!(app.typing != Typing::Search);
     assert_eq!(app.query.value(), "is:pr");
     assert_eq!(app.list_to_fetch(), None);
 }
@@ -103,7 +103,7 @@ fn enter_fetches_the_new_query_and_resets_the_highlight() {
     app.table.select(Some(2));
     press(&mut app, "/ is:closed");
     app.update(Msg::Key(KeyEvent::from(KeyCode::Enter)));
-    assert!(!app.editing);
+    assert!(app.typing != Typing::Search);
     let (id, query) = app.list_to_fetch().unwrap();
     assert_eq!(query, "is:pr is:closed");
     assert!(app.list.searching);
@@ -216,7 +216,7 @@ fn enter_keeps_the_filter_and_esc_clears_it_before_the_selection() {
     let mut app = app_with_titles();
     press(&mut app, " fgamma");
     key(&mut app, KeyCode::Enter);
-    assert!(!app.filtering);
+    assert!(app.typing != Typing::Filter);
     assert_eq!(visible_numbers(&app), [3]);
     // Esc in the list clears the filter first and leaves the selection.
     key(&mut app, KeyCode::Esc);
@@ -231,7 +231,7 @@ fn esc_in_the_box_clears_the_filter() {
     let mut app = app_with_titles();
     press(&mut app, "fgamma");
     key(&mut app, KeyCode::Esc);
-    assert!(!app.filtering);
+    assert!(app.typing != Typing::Filter);
     assert_eq!(app.filter.value(), "");
     assert_eq!(visible_numbers(&app), [1, 2, 3]);
 }
@@ -241,7 +241,7 @@ fn the_filter_box_takes_every_key_while_editing() {
     let mut app = app_with_titles();
     press(&mut app, "fq j/");
     assert!(!app.should_quit);
-    assert!(!app.editing);
+    assert!(app.typing != Typing::Search);
     assert_eq!(app.filter.value(), "q j/");
 }
 

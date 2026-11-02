@@ -4,7 +4,9 @@ use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Cell, Clear, Paragraph, Row, Table, TableState, Wrap};
 
-use crate::app::{App, ChecksLayout, CommentLayout, ConfirmOpen, Details, Fetch, Mode, Pane};
+use crate::app::{
+    App, ChecksLayout, CommentLayout, ConfirmOpen, Details, Fetch, Mode, Pane, Typing,
+};
 use crate::batch::{Batch, Confirm, ItemStatus, Summary};
 use crate::gh::PrState;
 use crate::keys;
@@ -36,7 +38,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     ])
     .areas(left_area);
     // The filter box is only there while it is being edited or has text in it.
-    let filter_rows = if app.filtering || !app.filter.value().is_empty() {
+    let filter_rows = if app.typing == Typing::Filter || !app.filter.value().is_empty() {
         3
     } else {
         0
@@ -92,8 +94,8 @@ pub fn view(app: &mut App, frame: &mut Frame) {
             results_popup(summary, app.dry_run, frame, body_area);
             "Enter/Esc: Close"
         }
-        _ if app.editing => "Enter: Search | Esc: Cancel",
-        _ if app.filtering => "Enter: Keep filter | Esc: Clear filter",
+        _ if app.typing == Typing::Search => "Enter: Search | Esc: Cancel",
+        _ if app.typing == Typing::Filter => "Enter: Keep filter | Esc: Clear filter",
         _ => &keys::bar(),
     };
     let mut parts = Vec::new();
@@ -489,14 +491,14 @@ fn filter(app: &App, frame: &mut Frame, area: Rect) {
     let width = area.width.saturating_sub(2);
     let scroll = app.filter.visual_scroll(usize::from(width));
     let mut block = Block::bordered().title("Filter");
-    if app.filtering {
+    if app.typing == Typing::Filter {
         block = block.cyan();
     }
     let input = Paragraph::new(app.filter.value())
         .scroll((0, scroll as u16))
         .block(block);
     frame.render_widget(input, area);
-    if app.filtering {
+    if app.typing == Typing::Filter {
         let x = app.filter.visual_cursor().saturating_sub(scroll) as u16;
         frame.set_cursor_position(Position::new(area.x + 1 + x, area.y + 1));
     }
@@ -510,14 +512,14 @@ fn search(app: &App, frame: &mut Frame, area: Rect) {
         title.push_span(format!(" · {} searching", spinner(app)).yellow().bold());
     }
     let mut block = Block::bordered().title(title);
-    if app.editing {
+    if app.typing == Typing::Search {
         block = block.cyan();
     }
     let input = Paragraph::new(app.query.value())
         .scroll((0, scroll as u16))
         .block(block);
     frame.render_widget(input, area);
-    if app.editing {
+    if app.typing == Typing::Search {
         let x = app.query.visual_cursor().saturating_sub(scroll) as u16;
         frame.set_cursor_position(Position::new(area.x + 1 + x, area.y + 1));
     }

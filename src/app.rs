@@ -43,7 +43,8 @@ pub struct App {
     pub query: Input,
     /// The query to restore when an edit is cancelled.
     submitted_query: String,
-    pub editing: bool,
+    /// Which box, if any, is taking the keys.
+    pub typing: Typing,
     /// Fetching the list.
     pub list: ListFetch,
     /// The timed status refresh.
@@ -58,8 +59,6 @@ pub struct App {
     pub visible: Vec<usize>,
     /// The local filter box.
     pub filter: Input,
-    /// Whether the filter box is being edited.
-    pub filtering: bool,
     /// The highlighted row, as a position in `visible`.
     pub table: TableState,
     /// The pane that Up/Down and PgUp/PgDn act on.
@@ -159,6 +158,16 @@ fn push_listed(lines: &mut Vec<String>, errors: &[String], what: &str) {
     if more > 0 {
         lines.push(format!("… and {more} more {what}"));
     }
+}
+
+/// The box that is taking the keys, if any.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Typing {
+    Nothing,
+    /// The search box.
+    Search,
+    /// The filter box.
+    Filter,
 }
 
 pub enum Mode {
@@ -285,7 +294,7 @@ impl App {
             mode: Mode::Loading,
             query: Input::new(query.clone()),
             submitted_query: query.clone(),
-            editing: false,
+            typing: Typing::Nothing,
             list: ListFetch {
                 query_to_fetch: Some(query),
                 ..ListFetch::default()
@@ -295,7 +304,6 @@ impl App {
             rows: Vec::new(),
             visible: Vec::new(),
             filter: Input::default(),
-            filtering: false,
             table: TableState::default(),
             focus: Pane::Table,
             scroll: Scroll::default(),
@@ -437,9 +445,16 @@ impl App {
         }
     }
 
+    /// Stops typing in the filter box. Typing in the search box carries on.
+    fn stop_filtering(&mut self) {
+        if self.typing == Typing::Filter {
+            self.typing = Typing::Nothing;
+        }
+    }
+
     fn clear_filter(&mut self) {
         self.filter = Input::default();
-        self.filtering = false;
+        self.stop_filtering();
         self.refilter();
     }
 
@@ -541,7 +556,7 @@ impl App {
         self.list.shown_query = self.list.fetching_query.clone();
         // The filter is cleared either way.
         self.filter = Input::default();
-        self.filtering = false;
+        self.stop_filtering();
         if self.list.is_refresh {
             // The selection is kept by PR number, so a PR that moved is still selected.
             // One that is no longer listed is dropped.

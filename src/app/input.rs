@@ -7,7 +7,7 @@ use ratatui::layout::Position;
 use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 
-use super::{App, Mode, Pane};
+use super::{App, Mode, Pane, Typing};
 use crate::batch::on_confirm_key;
 
 /// The columns that a key press or a notch of the wheel scrolls a pane sideways.
@@ -16,7 +16,7 @@ const SIDEWAYS_COLUMNS: isize = 8;
 impl App {
     /// The mouse is ignored while a dialog is open or a box is being edited.
     pub(super) fn on_mouse(&mut self, mouse: MouseEvent) {
-        if !matches!(self.mode, Mode::Loading | Mode::List) || self.editing || self.filtering {
+        if !matches!(self.mode, Mode::Loading | Mode::List) || self.typing != Typing::Nothing {
             return;
         }
         let position = Position::new(mouse.column, mouse.row);
@@ -100,15 +100,11 @@ impl App {
                     self.mode = Mode::List;
                 }
             }
-            Mode::Loading | Mode::List => {
-                if self.editing {
-                    self.on_search_key(key);
-                } else if self.filtering {
-                    self.on_filter_key(key);
-                } else {
-                    self.on_list_key(key);
-                }
-            }
+            Mode::Loading | Mode::List => match self.typing {
+                Typing::Search => self.on_search_key(key),
+                Typing::Filter => self.on_filter_key(key),
+                Typing::Nothing => self.on_list_key(key),
+            },
         }
     }
 
@@ -116,14 +112,14 @@ impl App {
     fn on_search_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Enter => {
-                self.editing = false;
+                self.typing = Typing::Nothing;
                 self.submitted_query = self.query.value().to_string();
                 self.list.query_to_fetch = Some(self.submitted_query.clone());
                 self.list.refresh_requested = false;
                 self.errors.clear();
             }
             KeyCode::Esc => {
-                self.editing = false;
+                self.typing = Typing::Nothing;
                 self.query = Input::new(self.submitted_query.clone());
             }
             _ => {
@@ -136,7 +132,7 @@ impl App {
     /// is filtered as you type. Enter keeps the filter; Esc clears it.
     fn on_filter_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Enter => self.filtering = false,
+            KeyCode::Enter => self.typing = Typing::Nothing,
             KeyCode::Esc => self.clear_filter(),
             _ => {
                 self.filter.handle_event(&Event::Key(key));
@@ -156,8 +152,8 @@ impl App {
             return;
         }
         match key.code {
-            KeyCode::Char('/') => self.editing = true,
-            KeyCode::Char('f') => self.filtering = true,
+            KeyCode::Char('/') => self.typing = Typing::Search,
+            KeyCode::Char('f') => self.typing = Typing::Filter,
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Char('o') => self.open_focused(),
             KeyCode::Char('q') => self.should_quit = true,
