@@ -1,14 +1,17 @@
+use std::collections::HashSet;
+
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Cell, Clear, Paragraph, Row, Table, TableState, Wrap};
+use regex::Regex;
 
 use crate::app::{
-    App, ChecksLayout, CommentLayout, ConfirmOpen, Details, Fetch, Mode, Pane, Typing,
+    self, App, ChecksLayout, CommentLayout, ConfirmOpen, Details, Fetch, Mode, Pane, Typing,
 };
 use crate::batch::{Batch, Confirm, ItemStatus, Summary};
-use crate::gh::PrState;
+use crate::gh::{Comment, PrState};
 use crate::keys;
 use crate::model::{self, CheckState};
 
@@ -73,31 +76,44 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         let error = Paragraph::new(error).red().wrap(Wrap { trim: false });
         frame.render_widget(error, error_area);
     }
+    draw_dialog(app, frame, body_area);
+    let status = status_line(app, &hints(app));
+    frame.render_widget(
+        Line::from(status).style(Style::new().reversed()),
+        status_area,
+    );
+}
+
+/// The popup over the table that the mode asks for, if any.
+fn draw_dialog(app: &App, frame: &mut Frame, area: Rect) {
+    match &app.mode {
+        Mode::Confirm(confirm) => confirm_dialog(confirm, app.dry_run, frame, area),
+        Mode::ConfirmOpen(confirm) => open_dialog(confirm, frame, area),
+        Mode::Help => help_popup(frame, area),
+        Mode::Running(batch) => running_popup(batch, app.dry_run, spinner(app), frame, area),
+        Mode::Results(summary) => results_popup(summary, app.dry_run, frame, area),
+        Mode::Loading | Mode::List => {}
+    }
+}
+
+/// The keys that do something now, for the end of the status line.
+fn hints(app: &App) -> String {
     let hints = match &app.mode {
-        Mode::Confirm(confirm) => {
-            confirm_dialog(confirm, app.dry_run, frame, body_area);
-            "←/→ Tab: Choose | Enter: Confirm | Esc: Cancel"
-        }
-        Mode::ConfirmOpen(confirm) => {
-            open_dialog(confirm, frame, body_area);
-            "←/→ Tab: Choose | Enter: Confirm | Esc: Cancel"
-        }
-        Mode::Help => {
-            help_popup(frame, body_area);
-            "Esc ? q: Close"
-        }
-        Mode::Running(batch) => {
-            running_popup(batch, app.dry_run, spinner(app), frame, body_area);
-            "q: Cancel | Ctrl-C: Quit"
-        }
-        Mode::Results(summary) => {
-            results_popup(summary, app.dry_run, frame, body_area);
-            "Enter/Esc: Close"
-        }
-        _ if app.typing == Typing::Search => "Enter: Search | Esc: Cancel",
-        _ if app.typing == Typing::Filter => "Enter: Keep filter | Esc: Clear filter",
-        _ => &keys::bar(),
+        Mode::Confirm(_) | Mode::ConfirmOpen(_) => "←/→ Tab: Choose | Enter: Confirm | Esc: Cancel",
+        Mode::Help => "Esc ? q: Close",
+        Mode::Running(_) => "q: Cancel | Ctrl-C: Quit",
+        Mode::Results(_) => "Enter/Esc: Close",
+        Mode::Loading | Mode::List => match app.typing {
+            Typing::Search => "Enter: Search | Esc: Cancel",
+            Typing::Filter => "Enter: Keep filter | Esc: Clear filter",
+            Typing::Nothing => return keys::bar(),
+        },
     };
+    hints.to_string()
+}
+
+/// The status bar: what is going on, then the `hints`.
+fn status_line(app: &App, hints: &str) -> String {
     let mut parts = Vec::new();
     if app.list.searching {
         parts.push(format!("{} Searching", spinner(app)));
@@ -117,11 +133,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         parts.push(format!("Refresh failed: {failure}"));
     }
     parts.push(hints.to_string());
-    let status = parts.join(" | ");
-    frame.render_widget(
-        Line::from(status).style(Style::new().reversed()),
-        status_area,
-    );
+    parts.join(" | ")
 }
 
 /// The width of the table's first column, which holds `[ ]` or `[x]`.
@@ -162,37 +174,8 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
         | Mode::Results(_) => {
             // Borrowing the fields rather than calling `visible_rows` leaves `app.table` free.
             let rows = app.visible.iter().map(|&i| &app.rows[i]).map(|row| {
-                let mark = if app.selected.contains(&row.pr.number) {
-                    "[x]"
-                } else {
-                    "[ ]"
-                };
-                let checks = Cell::new(row.checks_label());
-                // The checks of a closed or merged PR no longer matter, so they aren't coloured.
-                let checks = if row.pr.state == PrState::Open {
-                    checks.style(state_style(row.checks.state))
-                } else {
-                    checks
-                };
-                let cells = Row::new(
-                    [
-                        Cell::new(mark),
-                        Cell::new(format!("#{}", row.pr.number)),
-                        checks,
-                        Cell::new(model::review_label(row.pr.review_decision)),
-                    ]
-                    .into_iter()
-                    .chain(
-                        row.title_cells(app.columns.as_ref())
-                            .into_iter()
-                            .map(Cell::new),
-                    ),
-                );
-                if row.pr.state == PrState::Open {
-                    cells
-                } else {
-                    cells.dim()
-                }
+                let selected = app.selected.contains(&row.pr.number);
+                pr_row(row, selected, app.columns.as_ref())
             });
             // The groups of the column regex share the space the title had.
             let titles = match &app.columns {
@@ -232,6 +215,33 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
             };
             app.drawn.areas.table_offset = app.table.offset();
         }
+    }
+}
+
+/// A PR's row of the table. A closed or merged PR is dimmed.
+fn pr_row<'a>(row: &'a app::Row, selected: bool, columns: Option<&Regex>) -> Row<'a> {
+    let mark = if selected { "[x]" } else { "[ ]" };
+    let checks = Cell::new(row.checks_label());
+    // The checks of a closed or merged PR no longer matter, so they aren't coloured.
+    let checks = if row.pr.state == PrState::Open {
+        checks.style(state_style(row.checks.state))
+    } else {
+        checks
+    };
+    let cells = Row::new(
+        [
+            Cell::new(mark),
+            Cell::new(format!("#{}", row.pr.number)),
+            checks,
+            Cell::new(model::review_label(row.pr.review_decision)),
+        ]
+        .into_iter()
+        .chain(row.title_cells(columns).into_iter().map(Cell::new)),
+    );
+    if row.pr.state == PrState::Open {
+        cells
+    } else {
+        cells.dim()
     }
 }
 
@@ -276,7 +286,14 @@ fn confirm_dialog(confirm: &Confirm, dry_run: bool, frame: &mut Frame, area: Rec
 
     let title = format!("Review {}", count(confirm.prs.len(), "PR"));
     // One PR per line: long titles are cut off rather than wrapped.
-    popup(frame, area, title, dry_run, lines, false, footer);
+    let dialog = Popup {
+        title,
+        dry_run,
+        lines,
+        wrap: false,
+        footer,
+    };
+    popup(frame, area, dialog);
 }
 
 fn open_dialog(confirm: &ConfirmOpen, frame: &mut Frame, area: Rect) {
@@ -297,7 +314,14 @@ fn open_dialog(confirm: &ConfirmOpen, frame: &mut Frame, area: Rect) {
         "Open {} in the browser?",
         count(confirm.numbers.len(), "PR")
     );
-    popup(frame, area, title, false, lines, true, footer);
+    let dialog = Popup {
+        title,
+        dry_run: false,
+        lines,
+        wrap: true,
+        footer,
+    };
+    popup(frame, area, dialog);
 }
 
 fn help_popup(frame: &mut Frame, area: Rect) {
@@ -306,7 +330,14 @@ fn help_popup(frame: &mut Frame, area: Rect) {
         .map(|help| Line::from(format!("{:<16} {}", help.keys, help.action)))
         .collect();
     let footer = vec![Line::default(), Line::from("[ OK ]".reversed()).centered()];
-    popup(frame, area, "Keys".to_string(), false, lines, false, footer);
+    let help = Popup {
+        title: "Keys".to_string(),
+        dry_run: false,
+        lines,
+        wrap: false,
+        footer,
+    };
+    popup(frame, area, help);
 }
 
 fn running_popup(batch: &Batch, dry_run: bool, spinner: &str, frame: &mut Frame, area: Rect) {
@@ -326,7 +357,14 @@ fn running_popup(batch: &Batch, dry_run: bool, spinner: &str, frame: &mut Frame,
         Line::from(vec![Span::raw(format!("#{:<7}", item.pr.number)), label])
     }));
     let footer = vec![Line::default(), Line::from("q: Cancel").dim().centered()];
-    popup(frame, area, title, dry_run, lines, true, footer);
+    let running = Popup {
+        title,
+        dry_run,
+        lines,
+        wrap: true,
+        footer,
+    };
+    popup(frame, area, running);
 }
 
 fn item_style(status: &ItemStatus) -> Style {
@@ -391,29 +429,39 @@ fn results_popup(summary: &Summary, dry_run: bool, frame: &mut Frame, area: Rect
     }
     let footer = vec![Line::default(), Line::from("[ OK ]".reversed()).centered()];
     // Errors can be long, so they wrap.
-    popup(
-        frame,
-        area,
-        "Results".to_string(),
+    let results = Popup {
+        title: "Results".to_string(),
         dry_run,
         lines,
-        true,
+        wrap: true,
         footer,
-    );
+    };
+    popup(frame, area, results);
 }
 
-/// Draws a bordered popup in the middle of `area`. The `footer` lines, such as buttons, are
-/// pinned to the bottom so they stay visible even when `lines` doesn't fit. Wrapped lines are
-/// sized by estimate, so with `wrap` the popup may cut off the end of `lines`.
-fn popup(
-    frame: &mut Frame,
-    area: Rect,
-    mut title: String,
+/// What a popup shows.
+struct Popup<'a> {
+    title: String,
+    /// Whether to add ` [DRY RUN]` to the title.
     dry_run: bool,
-    lines: Vec<Line>,
+    lines: Vec<Line<'a>>,
+    /// Whether long lines wrap rather than being cut off.
     wrap: bool,
-    footer: Vec<Line>,
-) {
+    /// Lines pinned to the bottom, such as buttons.
+    footer: Vec<Line<'a>>,
+}
+
+/// Draws a bordered popup in the middle of `area`. The footer lines are pinned to the bottom so
+/// they stay visible even when `lines` doesn't fit. Wrapped lines are sized by estimate, so with
+/// `wrap` the popup may cut off the end of `lines`.
+fn popup(frame: &mut Frame, area: Rect, popup: Popup) {
+    let Popup {
+        mut title,
+        dry_run,
+        lines,
+        wrap,
+        footer,
+    } = popup;
     if dry_run {
         title.push_str(" [DRY RUN]");
     }
@@ -638,38 +686,15 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
         .unwrap_or(0);
     let x = usize::from(app.scroll.comment_x).min(widest.saturating_sub(width));
 
-    // One document: a header per comment, and the body under it when it is open. Each comment's
-    // height is counted as wrapped, as the layout is what `update` steps through.
-    let now = jiff::Timestamp::now();
-    let mut document: Vec<Line> = Vec::new();
-    let mut items = Vec::with_capacity(comments.len());
-    let mut total = 0;
-    for (i, comment) in comments.iter().enumerate() {
-        let open = app.scroll.comments_open.contains(&i);
-        let author = comment
-            .author
-            .as_ref()
-            .map_or("ghost", |a| a.login.as_str());
-        let marker = if open { '▼' } else { '▶' };
-        let mut header = Line::from(format!(
-            "{marker} @{author} · {}",
-            model::ago(&comment.created_at, now)
-        ));
-        if i == selected {
-            header = header.reversed();
-        }
-        let mut lines = vec![header];
-        if open {
-            lines.extend(model::crop_tables(&bodies[i], width, x).lines);
-            lines.push(Line::default());
-        }
-        let height = Paragraph::new(Text::from(lines.clone()))
-            .wrap(Wrap { trim: false })
-            .line_count(inner.width);
-        items.push((total, height));
-        total += height;
-        document.extend(lines);
-    }
+    let (document, items) = comment_document(
+        comments,
+        bodies,
+        &app.scroll.comments_open,
+        selected,
+        inner.width,
+        x,
+    );
+    let total = items.last().map_or(0, |&(start, height)| start + height);
     let pane = Paragraph::new(Text::from(document)).wrap(Wrap { trim: false });
     let scroll = app
         .scroll
@@ -687,6 +712,50 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     app.scroll.comment = selected;
     app.scroll.comment_x = u16::try_from(x).unwrap_or(u16::MAX);
     app.scroll.comments = scroll;
+}
+
+/// The comments as one document: a header per comment, and the body under it when it is open.
+/// Also each comment's first line and height, counted as wrapped to `width`, as that layout is
+/// what `update` steps through.
+fn comment_document(
+    comments: &[Comment],
+    bodies: &[Text<'static>],
+    open: &HashSet<usize>,
+    selected: usize,
+    width: u16,
+    x: usize,
+) -> (Vec<Line<'static>>, Vec<(usize, usize)>) {
+    let now = jiff::Timestamp::now();
+    let mut document = Vec::new();
+    let mut items = Vec::with_capacity(comments.len());
+    let mut total = 0;
+    for (i, comment) in comments.iter().enumerate() {
+        let is_open = open.contains(&i);
+        let author = comment
+            .author
+            .as_ref()
+            .map_or("ghost", |a| a.login.as_str());
+        let marker = if is_open { '▼' } else { '▶' };
+        let mut header = Line::from(format!(
+            "{marker} @{author} · {}",
+            model::ago(&comment.created_at, now)
+        ));
+        if i == selected {
+            header = header.reversed();
+        }
+        let mut lines = vec![header];
+        if is_open {
+            lines.extend(model::crop_tables(&bodies[i], usize::from(width), x).lines);
+            lines.push(Line::default());
+        }
+        let height = Paragraph::new(Text::from(lines.clone()))
+            .wrap(Wrap { trim: false })
+            .line_count(width);
+        items.push((total, height));
+        total += height;
+        document.extend(lines);
+    }
+    (document, items)
 }
 
 fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
