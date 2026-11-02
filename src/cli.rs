@@ -58,3 +58,28 @@ impl MergeMethod {
         }
     }
 }
+
+/// `PRs (<repo>)`, plus ` [DRY RUN]`. The query isn't included: it can change, and the search
+/// box shows it.
+pub fn title(repo: Option<&str>, dry_run: bool) -> String {
+    let mut title = String::from("PRs");
+    if let Some(repo) = repo {
+        title.push_str(&format!(" ({repo})"));
+    }
+    if dry_run {
+        title.push_str(" [DRY RUN]");
+    }
+    title
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn title_shows_repo_and_dry_run() {
+        assert_eq!(title(None, false), "PRs");
+        assert_eq!(title(Some("o/r"), false), "PRs (o/r)");
+        assert_eq!(title(Some("o/r"), true), "PRs (o/r) [DRY RUN]");
+    }
+}

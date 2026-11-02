@@ -3,8 +3,7 @@
 use color_eyre::eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::app::one_line;
-use crate::model::CheckState;
+use crate::model::{CheckState, one_line};
 
 /// Approves PRs, all at once up to a limit, then merges the approved ones one at a time if
 /// asked to.

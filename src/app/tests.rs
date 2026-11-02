@@ -1331,12 +1331,6 @@ fn scroll_goes_back_to_the_top_when_the_highlight_moves() {
     assert_eq!(app.scroll.description, 1);
 }
 
-#[test]
-fn title_shows_repo_and_dry_run() {
-    assert_eq!(title(None, false), "PRs");
-    assert_eq!(title(Some("o/r"), false), "PRs (o/r)");
-    assert_eq!(title(Some("o/r"), true), "PRs (o/r) [DRY RUN]");
-}
 
 fn limited_app(limit: u32) -> App {
     App::new("PRs".to_string(), "is:pr".to_string(), false).with_limit(limit)

@@ -184,6 +184,11 @@ pub fn review_label(review_decision: ReviewDecision) -> &'static str {
 static HTML_COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<!--.*?-->").unwrap());
 static BLANK_LINES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{3,}").unwrap());
 
+/// Joins the lines of `text` with spaces, so it fits in one row.
+pub fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Removes HTML comments and runs of blank lines from a PR or comment body.
 pub fn clean_body(body: Option<&str>) -> String {
     let body = body.unwrap_or_default().replace("\r\n", "\n");

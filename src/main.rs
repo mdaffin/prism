@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
 }
 
 async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
-    let title = app::title(args.repo.as_deref(), args.dry_run);
+    let title = cli::title(args.repo.as_deref(), args.dry_run);
     let query = query::initial(args.author.as_deref(), &args.search);
     let mut app = App::new(title, query, args.dry_run)
         .with_limit(args.limit)

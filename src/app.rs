@@ -11,7 +11,7 @@ use crate::batch::{
     Batch, BatchItem, Choice, Confirm, ConfirmPr, ItemStatus, Summary, auto_merge, finished_status,
 };
 use crate::gh::{Pr, PrDetails, PrState, PrStatus, StatusUpdate};
-use crate::model::{self, CheckState, Checks};
+use crate::model::{self, CheckState, Checks, one_line};
 
 mod input;
 mod panes;
@@ -798,24 +798,6 @@ impl App {
             self.selected.insert(number);
         }
     }
-}
-
-/// Joins the lines of `text` with spaces, so it fits in one row.
-pub fn one_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// `PRs (<repo>)`, plus ` [DRY RUN]`. The query isn't included: it can change, and the search
-/// box shows it.
-pub fn title(repo: Option<&str>, dry_run: bool) -> String {
-    let mut title = String::from("PRs");
-    if let Some(repo) = repo {
-        title.push_str(&format!(" ({repo})"));
-    }
-    if dry_run {
-        title.push_str(" [DRY RUN]");
-    }
-    title
 }
 
 #[cfg(test)]
