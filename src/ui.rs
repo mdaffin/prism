@@ -221,13 +221,7 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
 /// A PR's row of the table. A closed or merged PR is dimmed.
 fn pr_row<'a>(row: &'a app::Row, selected: bool, columns: Option<&Regex>) -> Row<'a> {
     let mark = if selected { "[x]" } else { "[ ]" };
-    let checks = Cell::new(row.checks_label());
-    // The checks of a closed or merged PR no longer matter, so they aren't coloured.
-    let checks = if row.pr.state == PrState::Open {
-        checks.style(state_style(row.checks.state))
-    } else {
-        checks
-    };
+    let checks = Cell::new(row.checks_label()).style(checks_style(row));
     let cells = Row::new(
         [
             Cell::new(mark),
@@ -265,24 +259,18 @@ fn confirm_dialog(confirm: &Confirm, dry_run: bool, frame: &mut Frame, area: Rec
     }
     let mut footer = Vec::new();
     if !confirm.left_out.is_empty() {
-        let numbers: Vec<String> = confirm.left_out.iter().map(|n| format!("#{n}")).collect();
         footer.push(Line::default());
         footer.push(
-            Line::from(format!("Left out closed or merged: {}", numbers.join(", "))).yellow(),
+            Line::from(format!(
+                "Left out closed or merged: {}",
+                pr_list(&confirm.left_out)
+            ))
+            .yellow(),
         );
     }
     footer.push(Line::default());
-    let mut buttons = Line::default();
-    for (i, choice) in confirm.choices().iter().enumerate() {
-        let label = format!("[ {} ]", choice.label());
-        buttons.push_span(if i == confirm.choice {
-            label.reversed()
-        } else {
-            label.into()
-        });
-        buttons.push_span("  ");
-    }
-    footer.push(buttons.centered());
+    let labels = confirm.choices().iter().map(|choice| choice.label());
+    footer.push(button_row(labels, confirm.choice));
 
     let title = format!("Review {}", count(confirm.prs.len(), "PR"));
     // One PR per line: long titles are cut off rather than wrapped.
@@ -297,19 +285,12 @@ fn confirm_dialog(confirm: &Confirm, dry_run: bool, frame: &mut Frame, area: Rec
 }
 
 fn open_dialog(confirm: &ConfirmOpen, frame: &mut Frame, area: Rect) {
-    let numbers: Vec<String> = confirm.numbers.iter().map(|n| format!("#{n}")).collect();
-    let lines = vec![Line::from(numbers.join(", "))];
-    let mut buttons = Line::default();
-    for (label, highlighted) in [("Open", confirm.open), ("Cancel", !confirm.open)] {
-        let label = format!("[ {label} ]");
-        buttons.push_span(if highlighted {
-            label.reversed()
-        } else {
-            label.into()
-        });
-        buttons.push_span("  ");
-    }
-    let footer = vec![Line::default(), buttons.centered()];
+    let lines = vec![Line::from(pr_list(&confirm.numbers))];
+    let highlighted = if confirm.open { 0 } else { 1 };
+    let footer = vec![
+        Line::default(),
+        button_row(["Open", "Cancel"], highlighted),
+    ];
     let title = format!(
         "Open {} in the browser?",
         count(confirm.numbers.len(), "PR")
@@ -402,27 +383,21 @@ fn results_popup(summary: &Summary, dry_run: bool, frame: &mut Frame, area: Rect
         );
     }
     if !summary.interrupted.is_empty() {
-        let numbers: Vec<String> = summary
-            .interrupted
-            .iter()
-            .map(|n| format!("#{n}"))
-            .collect();
         lines.push(Line::default());
         lines.push(
             Line::from(format!(
                 "Interrupted while running - check GitHub: {}",
-                numbers.join(", ")
+                pr_list(&summary.interrupted)
             ))
             .yellow(),
         );
     }
     if !summary.auto_merge.is_empty() {
-        let numbers: Vec<String> = summary.auto_merge.iter().map(|n| format!("#{n}")).collect();
         lines.push(Line::default());
         lines.push(
             Line::from(format!(
                 "Auto-merge queued (checks still pending): {}",
-                numbers.join(", ")
+                pr_list(&summary.auto_merge)
             ))
             .yellow(),
         );
@@ -499,6 +474,37 @@ fn popup(frame: &mut Frame, area: Rect, popup: Popup) {
     frame.render_widget(block, area);
     frame.render_widget(content, content_area);
     frame.render_widget(Paragraph::new(footer), footer_area);
+}
+
+/// The colour of a row's checks. The checks of a closed or merged PR no longer matter, so they
+/// aren't coloured.
+fn checks_style(row: &app::Row) -> Style {
+    if row.pr.state == PrState::Open {
+        state_style(row.checks.state)
+    } else {
+        Style::new()
+    }
+}
+
+/// `#1, #2, #3`.
+fn pr_list(numbers: &[u64]) -> String {
+    let numbers: Vec<String> = numbers.iter().map(|n| format!("#{n}")).collect();
+    numbers.join(", ")
+}
+
+/// A row of buttons, centred, with the one at `highlighted` reversed.
+fn button_row<'a>(labels: impl IntoIterator<Item = &'a str>, highlighted: usize) -> Line<'static> {
+    let mut buttons = Line::default();
+    for (i, label) in labels.into_iter().enumerate() {
+        let label = format!("[ {label} ]");
+        buttons.push_span(if i == highlighted {
+            label.reversed()
+        } else {
+            label.into()
+        });
+        buttons.push_span("  ");
+    }
+    buttons.centered()
 }
 
 /// Green for passing, yellow for pending or no checks, red for failing or a conflict.
@@ -802,15 +808,8 @@ fn pull_request(app: &App, frame: &mut Frame, area: Rect) {
     let Some(row) = app.highlighted() else {
         return;
     };
-    let checks = Span::raw(row.checks_label());
-    // The checks of a closed or merged PR no longer matter, so they aren't coloured.
-    let checks = if row.pr.state == PrState::Open {
-        checks.style(state_style(row.checks.state))
-    } else {
-        checks
-    };
     let mut summary = vec![
-        checks,
+        Span::styled(row.checks_label(), checks_style(row)),
         Span::raw("  "),
         Span::raw(model::review_label(row.pr.review_decision)),
     ];
