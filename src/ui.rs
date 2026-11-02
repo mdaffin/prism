@@ -1,10 +1,13 @@
 use std::collections::HashSet;
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
+use ratatui::layout::{Constraint, Flex, Layout, Margin, Position, Rect};
 use ratatui::style::{Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Cell, Clear, Paragraph, Row, Table, TableState, Wrap};
+use ratatui::widgets::{
+    Block, Cell, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
+    TableState, Wrap,
+};
 use regex::Regex;
 
 use crate::app::{
@@ -311,6 +314,14 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
                 table = table.dim();
             }
             frame.render_stateful_widget(table, table_area, &mut app.table);
+            // One row of the table is its header.
+            scrollbar(
+                frame,
+                area,
+                app.visible.len(),
+                usize::from(table_area.height.saturating_sub(1)),
+                app.table.offset(),
+            );
             // The header is one row.
             app.drawn.areas.table_rows = Rect {
                 y: table_area.y + 1,
@@ -708,10 +719,7 @@ fn wrapped_rows(text: &str, width: u16) -> u16 {
 fn filter(app: &App, frame: &mut Frame, area: Rect) {
     let width = area.width.saturating_sub(2);
     let scroll = app.filter.visual_scroll(usize::from(width));
-    let mut block = Block::bordered().title("Filter");
-    if app.typing == Typing::Filter {
-        block = block.cyan();
-    }
+    let block = pane_block("Filter", app.typing == Typing::Filter);
     let input = Paragraph::new(app.filter.value())
         .scroll((0, scroll as u16))
         .block(block);
@@ -732,10 +740,7 @@ fn search(app: &App, frame: &mut Frame, area: Rect) {
     if app.typing != Typing::Search && app.query_is_unsearched() {
         title.push_span(" · not searched".dim());
     }
-    let mut block = Block::bordered().title(title);
-    if app.typing == Typing::Search {
-        block = block.cyan();
-    }
+    let block = pane_block(title, app.typing == Typing::Search);
     let input = Paragraph::new(app.query.value())
         .scroll((0, scroll as u16))
         .block(block);
@@ -747,7 +752,7 @@ fn search(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 /// A bordered pane, with a cyan border and title while it has focus.
-fn pane_block(title: &str, focused: bool) -> Block<'_> {
+fn pane_block<'a>(title: impl Into<Line<'a>>, focused: bool) -> Block<'a> {
     let block = Block::bordered().title(title);
     // Not `block.cyan()`, which would colour the text inside the pane as well.
     if focused {
@@ -768,6 +773,24 @@ fn set_page(app: &mut App, pane: Pane, height: u16, kept: u16) {
 }
 
 /// The furthest a pane can scroll: until its last row is at the bottom.
+/// A scrollbar down the right border of `area`, drawn only while the pane's `content` rows don't
+/// all fit in its `viewport`. `offset` is the first row shown.
+fn scrollbar(frame: &mut Frame, area: Rect, content: usize, viewport: usize, offset: usize) {
+    if content <= viewport {
+        return;
+    }
+    // The position runs from 0 to the last offset, which is when the thumb reaches the bottom.
+    let mut state = ScrollbarState::new(content - viewport + 1)
+        .viewport_content_length(viewport)
+        .position(offset);
+    let bar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(None)
+        .end_symbol(None);
+    // Inside the corners.
+    let area = area.inner(Margin::new(0, 1));
+    frame.render_stateful_widget(bar, area, &mut state);
+}
+
 fn max_scroll(content_rows: usize, area_rows: u16) -> u16 {
     let max = content_rows.saturating_sub(usize::from(area_rows));
     to_u16(max)
@@ -801,6 +824,7 @@ fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
         frame.render_widget(Line::from("No checks."), inner);
         return;
     }
+    let rows_count = rows.len();
     // One row of the table is its header.
     let scroll = app
         .scroll
@@ -813,6 +837,8 @@ fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
     .header(Row::new(["Status", "Check"]).bold());
     let mut state = TableState::default().with_offset(usize::from(scroll));
     frame.render_stateful_widget(table, inner, &mut state);
+    let viewport = usize::from(inner.height.saturating_sub(1));
+    scrollbar(frame, area, rows_count, viewport, usize::from(scroll));
     app.drawn.checks_layout = ChecksLayout {
         count,
         first,
@@ -881,6 +907,13 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     let pane = Paragraph::new(Text::from(document)).wrap(Wrap { trim: false });
     let scroll = app.scroll.comments.min(max_scroll(total, inner.height));
     frame.render_widget(pane.scroll((scroll, 0)), inner);
+    scrollbar(
+        frame,
+        area,
+        total,
+        usize::from(inner.height),
+        usize::from(scroll),
+    );
 
     set_page(app, Pane::Comments, inner.height, 1);
     app.drawn.comment_layout = CommentLayout {
@@ -945,6 +978,7 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
         .highlighted()
         .and_then(|row| app.diffs.get(&row.pr.number));
     let mut scroll = 0;
+    let mut lines = 0;
     // A failure is a message, so it wraps; a diff is cut off at the pane's edge.
     let mut wrap = false;
     let text = match diff {
@@ -952,6 +986,7 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
         // A PR waiting for a free fetch slot has no entry yet.
         None | Some(Fetch::Loading(_)) => Text::from("Loading…"),
         Some(Fetch::Loaded(diff)) => {
+            lines = diff.lines.len();
             scroll = app
                 .scroll
                 .diff
@@ -977,6 +1012,13 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
         pane = pane.wrap(Wrap { trim: false });
     }
     frame.render_widget(pane, area);
+    scrollbar(
+        frame,
+        area,
+        lines,
+        usize::from(inner.height),
+        usize::from(scroll),
+    );
     app.scroll.diff = scroll;
 }
 
@@ -1041,11 +1083,19 @@ fn description(app: &mut App, frame: &mut Frame, area: Rect) {
     };
     let block = pane_block(title, app.focus == Pane::Description);
     let pane = Paragraph::new(text).wrap(Wrap { trim: false });
+    let lines = pane.line_count(inner.width);
     let scroll = app
         .scroll
         .description
-        .min(max_scroll(pane.line_count(inner.width), inner.height));
+        .min(max_scroll(lines, inner.height));
     frame.render_widget(pane.scroll((scroll, 0)).block(block), area);
+    scrollbar(
+        frame,
+        area,
+        lines,
+        usize::from(inner.height),
+        usize::from(scroll),
+    );
     app.scroll.description = scroll;
 }
 
@@ -2045,6 +2095,143 @@ mod tests {
         press(&mut app, "q");
         draw(&mut app, 160, 40);
         assert!(app.drawn.buttons.is_empty());
+    }
+
+    /// Whether `area`'s right border has a scrollbar (its track or thumb) beside the first row.
+    fn has_scrollbar(buffer: &Buffer, area: Rect) -> bool {
+        matches!(buffer[(area.right() - 1, area.y + 1)].symbol(), "█" | "║")
+    }
+
+    #[test]
+    fn a_pane_with_too_much_text_has_a_scrollbar() {
+        let mut app = app_with_long_panes();
+        // Open the first comment, whose body is long.
+        key(&mut app, KeyCode::Tab);
+        key(&mut app, KeyCode::Tab);
+        press(&mut app, " ");
+        let buffer = draw(&mut app, 160, 40);
+        let areas = &app.drawn.areas;
+        for (name, area) in [
+            ("checks", areas.checks),
+            ("comments", areas.comments),
+            ("description", areas.description),
+            ("diff", areas.diff),
+        ] {
+            assert!(has_scrollbar(&buffer, area), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_pane_whose_text_fits_has_no_scrollbar() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        let buffer = draw(&mut app, 160, 40);
+        let areas = &app.drawn.areas;
+        for (name, area) in [
+            ("table", areas.table),
+            ("checks", areas.checks),
+            ("comments", areas.comments),
+            ("description", areas.description),
+            ("diff", areas.diff),
+        ] {
+            assert!(!has_scrollbar(&buffer, area), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_table_has_a_scrollbar_only_with_more_rows_than_fit() {
+        let mut app = app_with((1..=80).map(|n| pr(n, "Bump", "OPEN", "")).collect());
+        let buffer = draw(&mut app, 160, 40);
+        assert!(has_scrollbar(&buffer, app.drawn.areas.table));
+
+        press(&mut app, "f#80");
+        let buffer = draw(&mut app, 160, 40);
+        assert!(!has_scrollbar(&buffer, app.drawn.areas.table));
+    }
+
+    #[test]
+    fn the_scrollbar_thumb_moves_to_the_bottom_with_the_scroll() {
+        let mut app = app_with_long_panes();
+        let thumb_rows = |buffer: &Buffer, area: Rect| -> Vec<u16> {
+            (area.y + 1..area.bottom() - 1)
+                .filter(|&y| buffer[(area.right() - 1, y)].symbol() == "█")
+                .collect()
+        };
+        let buffer = draw(&mut app, 160, 40);
+        let diff = app.drawn.areas.diff;
+        let at_top = thumb_rows(&buffer, diff);
+        assert_eq!(at_top.first(), Some(&(diff.y + 1)));
+        assert!(at_top.last() < Some(&(diff.bottom() - 2)));
+
+        for _ in 0..4 {
+            key(&mut app, KeyCode::Tab);
+        }
+        key(&mut app, KeyCode::End);
+        let buffer = draw(&mut app, 160, 40);
+        let at_bottom = thumb_rows(&buffer, diff);
+        assert_eq!(at_bottom.last(), Some(&(diff.bottom() - 2)));
+        assert!(at_bottom.first() > Some(&(diff.y + 1)));
+    }
+
+    #[test]
+    fn the_search_and_filter_boxes_colour_only_their_border_and_title_while_edited() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        press(&mut app, "fbump");
+        key(&mut app, KeyCode::Enter);
+        let buffer = draw(&mut app, 160, 40);
+        let search = app.drawn.areas.search;
+        let filter = app.drawn.areas.filter;
+        // Not being edited: nothing is cyan.
+        assert_ne!(buffer[(search.x, search.y + 1)].fg, Color::Cyan);
+        assert_ne!(buffer[(filter.x, filter.y + 1)].fg, Color::Cyan);
+
+        press(&mut app, "/");
+        let buffer = draw(&mut app, 160, 40);
+        assert_eq!(buffer[(search.x, search.y + 1)].fg, Color::Cyan);
+        assert_eq!(buffer[(search.x + 1, search.y)].fg, Color::Cyan);
+        assert_ne!(buffer[(search.x + 1, search.y + 1)].fg, Color::Cyan);
+        assert_ne!(buffer[(filter.x, filter.y + 1)].fg, Color::Cyan);
+
+        key(&mut app, KeyCode::Esc);
+        press(&mut app, "f");
+        let buffer = draw(&mut app, 160, 40);
+        assert_eq!(buffer[(filter.x, filter.y + 1)].fg, Color::Cyan);
+        assert_ne!(buffer[(filter.x + 1, filter.y + 1)].fg, Color::Cyan);
+        assert_ne!(buffer[(search.x, search.y + 1)].fg, Color::Cyan);
+    }
+
+    #[test]
+    fn a_drag_does_nothing() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        let mut app = app_with(vec![
+            pr(1, "Bump alpha", "OPEN", ""),
+            pr(2, "Bump beta", "OPEN", ""),
+        ]);
+        draw(&mut app, 160, 40);
+        let rows = app.drawn.areas.table_rows;
+        let diff = app.drawn.areas.diff;
+        let drag = |app: &mut App, x: u16, y: u16| {
+            app.update(Msg::Mouse(MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                column: x,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            }));
+        };
+        // Over a row's checkbox, a pane, a box, and then in a box being edited and a dialog.
+        drag(&mut app, rows.x + 1, rows.y + 1);
+        drag(&mut app, diff.x + 2, diff.y + 1);
+        let search = app.drawn.areas.search;
+        drag(&mut app, search.x + 2, search.y + 1);
+        press(&mut app, "/");
+        drag(&mut app, diff.x + 2, diff.y + 1);
+        key(&mut app, KeyCode::Esc);
+        press(&mut app, "?");
+        drag(&mut app, diff.x + 2, diff.y + 1);
+
+        assert!(matches!(app.mode, Mode::Help));
+        assert!(app.selected.is_empty());
+        assert_eq!(app.highlighted().unwrap().pr.number, 1);
+        assert!(app.focus == Pane::Table);
     }
     #[test]
     fn the_wheel_is_ignored_while_a_box_is_edited() {
