@@ -127,7 +127,7 @@ fn hints(app: &App) -> String {
         Mode::Loading | Mode::List => match app.typing {
             Typing::Search => keys::SEARCH_HINTS,
             Typing::Filter => keys::FILTER_HINTS,
-            Typing::Nothing => return keys::bar(),
+            Typing::Nothing => return keys::bar(app.focus),
         },
     };
     hints.to_string()
@@ -322,10 +322,18 @@ fn open_dialog(confirm: &ConfirmOpen, frame: &mut Frame, area: Rect) {
 }
 
 fn help_popup(frame: &mut Frame, area: Rect) {
-    let lines = keys::KEYS
-        .iter()
-        .map(|help| Line::from(format!("{:<16} {}", help.keys, help.action)))
-        .collect();
+    let mut lines = Vec::new();
+    for (pane, title) in keys::GROUPS {
+        let mut group = keys::group(pane).peekable();
+        if group.peek().is_none() {
+            continue;
+        }
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.push(Line::from(title).bold());
+        lines.extend(group.map(|help| Line::from(format!("{:<16} {}", help.keys, help.action))));
+    }
     let footer = vec![Line::default(), Line::from("[ OK ]".reversed()).centered()];
     let help = Popup {
         title: "Keys".to_string(),
@@ -1648,5 +1656,60 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("No PRs match the filter."))
         );
+    }
+
+    #[test]
+    fn the_status_bar_shows_the_focused_panes_keys() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        for expected in [
+            "Enter: Review | o: Open | ?: Help",
+            "Enter, o: Open | ?: Help",
+            "Enter, Space: Expand | o: Open | ?: Help",
+            "?: Help | /: Search",
+            "?: Help | /: Search",
+        ] {
+            let screen = lines(&draw(&mut app, 160, 30));
+            let bar = screen.last().unwrap();
+            assert!(bar.contains(expected), "{:?} in {bar:?}", app.focus);
+            // The keys of the other panes are not on it.
+            assert_eq!(
+                bar.matches("o: Open").count(),
+                expected.matches("o: Open").count()
+            );
+            app.update(Msg::Key(KeyCode::Tab.into()));
+        }
+    }
+
+    #[test]
+    fn the_help_popup_groups_the_keys_by_pane() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        press(&mut app, "?");
+        let screen = lines(&draw(&mut app, 160, 60));
+        // The panes behind the popup have titles too, so look from the popup's own.
+        let top = screen
+            .iter()
+            .position(|line| line.contains("Keys"))
+            .unwrap();
+        let row = |text: &str| {
+            screen
+                .iter()
+                .skip(top)
+                .position(|line| line.contains(text))
+                .unwrap_or_else(|| panic!("no {text:?}"))
+        };
+        let groups = [
+            "Everywhere",
+            "Pull requests",
+            "Checks",
+            "Comments",
+            "Description",
+        ];
+        let rows: Vec<usize> = groups.iter().map(|title| row(title)).collect();
+        assert!(rows.windows(2).all(|pair| pair[0] < pair[1]), "{rows:?}");
+        // Each group lists its own keys under its title.
+        assert!(row("Review the highlighted PR") > row("Pull requests"));
+        assert!(row("Open the highlighted check's page") > row("Checks"));
+        assert!(row("Expand or collapse the highlighted comment") > row("Comments"));
+        assert!(row("Scroll the description's tables sideways") > row("Description"));
     }
 }
