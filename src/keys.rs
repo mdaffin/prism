@@ -15,6 +15,10 @@ pub const SEARCH_HINTS: &str = "Enter: Search | Esc: Cancel";
 /// Editing the filter box.
 pub const FILTER_HINTS: &str = "Enter: Keep filter | Esc: Clear filter";
 
+/// The status bar's name for the key that opens the highlighted item, which the bar keeps when
+/// it has to drop hints.
+pub const OPEN: &str = "Open";
+
 pub struct KeyHelp {
     pub keys: &'static str,
     pub action: &'static str,
@@ -106,13 +110,13 @@ pub const KEYS: &[KeyHelp] = &[
         Pane::Table,
         "o",
         "Open the highlighted PR in the browser",
-        Some("Open"),
+        Some(OPEN),
     ),
     pane_key(
         Pane::Checks,
         "Enter, o",
         "Open the highlighted check's page",
-        Some("Open"),
+        Some(OPEN),
     ),
     pane_key(
         Pane::Comments,
@@ -130,7 +134,7 @@ pub const KEYS: &[KeyHelp] = &[
         Pane::Comments,
         "o",
         "Open the highlighted comment, or its PR if it has no page",
-        Some("Open"),
+        Some(OPEN),
     ),
     pane_key(
         Pane::Comments,
@@ -151,15 +155,33 @@ pub fn group(pane: Option<Pane>) -> impl Iterator<Item = &'static KeyHelp> {
     KEYS.iter().filter(move |help| help.pane == pane)
 }
 
-/// The status bar's key hints when `focus` has the focus, such as `Enter: Review | ?: Help`: the
-/// pane's own keys first, then those of every pane.
-pub fn bar(focus: Pane) -> String {
+/// A hint of the status bar, such as `Enter: Review`.
+pub struct Hint {
+    pub text: String,
+    /// Whether the bar keeps it when it is too narrow for all of them.
+    pub essential: bool,
+}
+
+/// The status bar's key hints when `focus` has the focus: the pane's own keys first, then those
+/// of every pane.
+pub fn bar_hints(focus: Pane) -> Vec<Hint> {
     [Some(focus), None]
         .into_iter()
         .flat_map(group)
-        .filter_map(|help| help.bar.map(|bar| format!("{}: {bar}", help.keys)))
-        .collect::<Vec<_>>()
-        .join(" | ")
+        .filter_map(|help| {
+            help.bar.map(|bar| Hint {
+                text: format!("{}: {bar}", help.keys),
+                essential: bar == OPEN,
+            })
+        })
+        .collect()
+}
+
+/// The hints joined, such as `Enter: Review | ?: Help`.
+#[cfg(test)]
+pub fn bar(focus: Pane) -> String {
+    let hints: Vec<String> = bar_hints(focus).into_iter().map(|hint| hint.text).collect();
+    hints.join(" | ")
 }
 
 #[cfg(test)]

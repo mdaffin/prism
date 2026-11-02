@@ -167,6 +167,13 @@ pub enum Typing {
     Filter,
 }
 
+/// What `o` opens for the highlighted item of a pane.
+pub enum Page {
+    Url(String),
+    /// The item has no page of its own.
+    Missing,
+}
+
 pub enum Mode {
     /// No list has been fetched yet.
     Loading,
@@ -684,32 +691,18 @@ impl App {
     /// the diff nothing. A missing page is reported, except that a comment without one falls back
     /// to its PR.
     fn open_focused(&mut self) {
-        let page = match self.focus {
-            Pane::Table => {
-                let numbers = self.highlighted().map(|row| row.pr.number);
-                self.errors.opens.clear();
-                self.prs_to_open = numbers.into_iter().collect();
-                return;
-            }
-            Pane::Checks => Some(
-                self.highlighted_check_url()
-                    .ok_or("The highlighted check has no page"),
-            ),
-            Pane::Comments => self.highlighted_comment_url().map(Ok),
-            Pane::Description | Pane::Diff => return,
-        };
-        match page {
-            Some(Ok(url)) => {
-                self.errors.opens.clear();
-                self.pages_to_open.push(url);
-            }
-            Some(Err(message)) => {
-                self.errors.opens.clear();
-                self.errors.opens.push(message.to_string());
-            }
-            None => {
+        if matches!(self.focus, Pane::Description | Pane::Diff) {
+            return;
+        }
+        self.errors.opens.clear();
+        match (self.focus, self.highlighted_page()) {
+            (_, Some(Page::Url(url))) => self.pages_to_open.push(url),
+            (Pane::Checks, _) => self
+                .errors
+                .opens
+                .push("The highlighted check has no page".to_string()),
+            _ => {
                 let number = self.highlighted().map(|row| row.pr.number);
-                self.errors.opens.clear();
                 self.prs_to_open = number.into_iter().collect();
             }
         }
@@ -730,21 +723,28 @@ impl App {
         }
     }
 
-    /// The page of the highlighted check of the highlighted PR.
-    fn highlighted_check_url(&self) -> Option<String> {
-        let results = self.highlighted()?.checks.worst_first();
-        let last = results.len().checked_sub(1)?;
-        results[self.scroll.check.min(last)].url.clone()
-    }
-
-    /// The page of the highlighted comment of the highlighted PR, once its details have loaded.
-    fn highlighted_comment_url(&self) -> Option<String> {
-        let Some(Fetch::Loaded(loaded)) = self.details.get(&self.highlighted()?.pr.number) else {
-            return None;
+    /// The page that `o` opens for the highlighted item of the focused pane, for the status bar.
+    /// `None` when the pane has no such item: the table opens the PR itself, and the checks and
+    /// comments are empty or still loading.
+    pub fn highlighted_page(&self) -> Option<Page> {
+        let url = match self.focus {
+            Pane::Checks => {
+                let results = self.highlighted()?.checks.worst_first();
+                let last = results.len().checked_sub(1)?;
+                results[self.scroll.check.min(last)].url.clone()
+            }
+            Pane::Comments => {
+                let Some(Fetch::Loaded(loaded)) = self.details.get(&self.highlighted()?.pr.number)
+                else {
+                    return None;
+                };
+                let comments = &loaded.details.comments;
+                let last = comments.len().checked_sub(1)?;
+                comments[self.scroll.comment.min(last)].url.clone()
+            }
+            Pane::Table | Pane::Description | Pane::Diff => return None,
         };
-        let comments = &loaded.details.comments;
-        let last = comments.len().checked_sub(1)?;
-        comments[self.scroll.comment.min(last)].url.clone()
+        Some(url.map_or(Page::Missing, Page::Url))
     }
 
     /// Ctrl-O: opens the selected PRs, from any pane. With none selected it does nothing.
