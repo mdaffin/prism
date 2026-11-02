@@ -22,6 +22,7 @@ pub fn pr_with(
         "statusCheckRollup": rollup,
         "mergeable": mergeable,
         "reviewDecision": review,
+        "url": format!("https://example.test/pull/{number}"),
         "updatedAt": "2026-01-01T00:00:00Z",
     }))
     .unwrap()

@@ -1,6 +1,7 @@
 mod app;
 mod batch;
 mod cli;
+mod clipboard;
 mod gh;
 mod keys;
 mod model;
@@ -143,6 +144,12 @@ fn start_work(
                 let _ = tx.send(Msg::Opened(number, gh.open(number).await));
             }
         });
+    }
+    if let Some(text) = app.copy_to_run() {
+        use std::io::Write;
+        let mut stdout = std::io::stdout();
+        let _ = stdout.write_all(clipboard::osc52(&text).as_bytes());
+        let _ = stdout.flush();
     }
     let pages = app.pages_to_run();
     if !pages.is_empty() {

@@ -18,6 +18,8 @@ pub const FILTER_HINTS: &str = "Enter: Keep filter | Esc: Clear filter";
 /// The status bar's name for the key that opens the highlighted item, which the bar keeps when
 /// it has to drop hints.
 pub const OPEN: &str = "Open";
+/// The status bar's name for the key that copies the highlighted item's URL.
+pub const COPY: &str = "Copy";
 
 pub struct KeyHelp {
     pub keys: &'static str,
@@ -113,10 +115,22 @@ pub const KEYS: &[KeyHelp] = &[
         Some(OPEN),
     ),
     pane_key(
+        Pane::Table,
+        "y",
+        "Copy the highlighted PR's URL",
+        Some(COPY),
+    ),
+    pane_key(
         Pane::Checks,
         "Enter, o",
         "Open the highlighted check's page",
         Some(OPEN),
+    ),
+    pane_key(
+        Pane::Checks,
+        "y",
+        "Copy the highlighted check's URL",
+        Some(COPY),
     ),
     pane_key(
         Pane::Comments,
@@ -135,6 +149,12 @@ pub const KEYS: &[KeyHelp] = &[
         "o",
         "Open the highlighted comment, or its PR if it has no page",
         Some(OPEN),
+    ),
+    pane_key(
+        Pane::Comments,
+        "y",
+        "Copy the highlighted comment's URL, or its PR's if it has no page",
+        Some(COPY),
     ),
     pane_key(
         Pane::Comments,
@@ -160,6 +180,9 @@ pub struct Hint {
     pub text: String,
     /// Whether the bar keeps it when it is too narrow for all of them.
     pub essential: bool,
+    /// Whether it is about the highlighted item's page, so the bar leaves it out when there is
+    /// none.
+    pub for_page: bool,
 }
 
 /// The status bar's key hints when `focus` has the focus: the pane's own keys first, then those
@@ -172,6 +195,7 @@ pub fn bar_hints(focus: Pane) -> Vec<Hint> {
             help.bar.map(|bar| Hint {
                 text: format!("{}: {bar}", help.keys),
                 essential: bar == OPEN,
+                for_page: bar == OPEN || bar == COPY,
             })
         })
         .collect()
@@ -192,9 +216,9 @@ mod tests {
     fn the_bar_has_the_focused_panes_keys_first() {
         let tail = "?: Help | /: Search | q: Quit";
         for (pane, own) in [
-            (Pane::Table, "Enter: Review | o: Open"),
-            (Pane::Checks, "Enter, o: Open"),
-            (Pane::Comments, "Enter, Space: Expand | o: Open"),
+            (Pane::Table, "Enter: Review | o: Open | y: Copy"),
+            (Pane::Checks, "Enter, o: Open | y: Copy"),
+            (Pane::Comments, "Enter, Space: Expand | o: Open | y: Copy"),
         ] {
             assert_eq!(bar(pane), format!("{own} | {tail}"));
         }

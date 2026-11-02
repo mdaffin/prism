@@ -14,7 +14,7 @@ use tokio::process::Command;
 use crate::cli::MergeMethod;
 
 /// Fields requested from `gh pr list --json`: only what the table needs, so it renders sooner.
-const LIST_FIELDS: &str = "number,title,state,statusCheckRollup,mergeable,reviewDecision,updatedAt";
+const LIST_FIELDS: &str = "number,title,state,statusCheckRollup,mergeable,reviewDecision,updatedAt,url";
 
 /// Fields requested by the timed refresh: what can change under a row that is already listed.
 const STATUS_FIELDS: &str = "number,state,statusCheckRollup,mergeable,reviewDecision,updatedAt";
@@ -274,6 +274,8 @@ pub struct Pr {
     pub status_check_rollup: Vec<Check>,
     pub mergeable: Mergeable,
     pub review_decision: ReviewDecision,
+    /// The PR's page on GitHub.
+    pub url: String,
     /// When the PR last changed, as GitHub reports it. A change means its details and diff may
     /// have changed too.
     pub updated_at: String,
@@ -450,6 +452,7 @@ mod tests {
         ],
         "mergeable": "MERGEABLE",
         "reviewDecision": "",
+        "url": "https://example.test/pull/12",
         "updatedAt": "2026-01-02T03:04:06Z"
       },
       {
@@ -459,6 +462,7 @@ mod tests {
         "statusCheckRollup": [],
         "mergeable": "UNKNOWN",
         "reviewDecision": "APPROVED",
+        "url": "https://example.test/pull/13",
         "updatedAt": "2026-01-02T03:04:07Z"
       }
     ]"#;
@@ -505,6 +509,7 @@ mod tests {
           ],
           "mergeable": "MERGEABLE",
           "reviewDecision": "",
+          "url": "https://example.test/pull/1",
           "updatedAt": "2026-01-02T03:04:06Z"
         }]"#;
         let prs: Vec<Pr> = serde_json::from_str(json).unwrap();

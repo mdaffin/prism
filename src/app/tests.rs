@@ -453,6 +453,7 @@ fn app_with_check_pages() -> App {
         ],
         "mergeable": "MERGEABLE",
         "reviewDecision": "",
+        "url": "https://example.test/pull/1",
         "updatedAt": "2026-01-01T00:00:00Z",
     }))
     .unwrap();
@@ -583,6 +584,87 @@ fn enter_in_the_comments_expands_the_highlighted_comment() {
     assert!(matches!(app.mode, Mode::List));
     key(&mut app, KeyCode::Enter);
     assert!(!app.scroll.comments_open.contains(&0));
+}
+
+#[test]
+fn y_in_the_table_copies_the_highlighted_prs_url() {
+    let mut app = app_with_rows(3);
+    press(&mut app, " j");
+    press(&mut app, "y");
+    assert_eq!(
+        app.copy_to_run().as_deref(),
+        Some("https://example.test/pull/2")
+    );
+    assert_eq!(app.note.as_deref(), Some("Copied the PR's URL"));
+    // It is taken once, and the next key clears the note.
+    assert_eq!(app.copy_to_run(), None);
+    press(&mut app, "j");
+    assert_eq!(app.note, None);
+    assert_eq!(app.copy_to_run(), None);
+}
+
+#[test]
+fn y_in_the_checks_copies_the_highlighted_checks_url_or_says_it_has_none() {
+    let mut app = app_with_check_pages();
+    focus(&mut app, Pane::Checks);
+    press(&mut app, "y");
+    assert_eq!(
+        app.copy_to_run().as_deref(),
+        Some("https://example.test/job")
+    );
+    assert_eq!(app.note.as_deref(), Some("Copied the URL"));
+
+    press(&mut app, "jy");
+    assert_eq!(app.copy_to_run(), None);
+    assert_eq!(
+        app.note.as_deref(),
+        Some("The highlighted check has no page to copy")
+    );
+}
+
+#[test]
+fn y_in_the_comments_copies_the_comments_url_and_falls_back_to_the_pr() {
+    let mut app = app_with_check_pages();
+    let details = serde_json::from_value(serde_json::json!({
+        "headRefName": "branch",
+        "body": "",
+        "comments": [
+            {"createdAt": "2026-01-02T03:00:00Z", "body": "a",
+             "url": "https://example.test/pull/1#issuecomment-1"},
+            {"createdAt": "2026-01-02T03:00:00Z", "body": "b"},
+        ],
+        "additions": 1,
+        "deletions": 1,
+    }))
+    .unwrap();
+    app.update(Msg::DetailsLoaded(1, Ok(details)));
+    app.drawn.comment_layout = CommentLayout {
+        items: vec![(0, 1), (1, 1)],
+        viewport: 5,
+    };
+    focus(&mut app, Pane::Comments);
+    press(&mut app, "y");
+    assert_eq!(
+        app.copy_to_run().as_deref(),
+        Some("https://example.test/pull/1#issuecomment-1")
+    );
+    press(&mut app, "jy");
+    assert_eq!(
+        app.copy_to_run().as_deref(),
+        Some("https://example.test/pull/1")
+    );
+    assert_eq!(app.note.as_deref(), Some("Copied the PR's URL"));
+}
+
+#[test]
+fn y_copies_nothing_in_the_description_and_the_diff() {
+    let mut app = app_with_rows(2);
+    for pane in [Pane::Description, Pane::Diff] {
+        focus(&mut app, pane);
+        press(&mut app, "y");
+        assert_eq!(app.copy_to_run(), None, "{pane:?}");
+        assert_eq!(app.note, None, "{pane:?}");
+    }
 }
 
 #[test]

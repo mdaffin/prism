@@ -92,6 +92,11 @@ impl App {
         std::mem::take(&mut self.prs_to_open)
     }
 
+    /// The text to put on the clipboard now. The caller must send it to the terminal.
+    pub fn copy_to_run(&mut self) -> Option<String> {
+        self.text_to_copy.take()
+    }
+
     /// The pages to open in the browser now. The caller must open them.
     pub fn pages_to_run(&mut self) -> Vec<String> {
         std::mem::take(&mut self.pages_to_open)

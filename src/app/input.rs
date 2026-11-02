@@ -62,6 +62,7 @@ impl App {
     }
 
     pub(super) fn on_key(&mut self, key: KeyEvent) {
+        self.note = None;
         let ctrl_c =
             key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c');
         if ctrl_c {
@@ -155,6 +156,7 @@ impl App {
             KeyCode::Char('f') => self.typing = Typing::Filter,
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Char('o') => self.open_focused(),
+            KeyCode::Char('y') => self.copy_focused(),
             KeyCode::Char('q') => self.should_quit = true,
             // Esc never quits: it is too easy to hit by accident. It clears the filter, then
             // the selection.

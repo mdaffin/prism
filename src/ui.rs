@@ -155,6 +155,7 @@ fn status_line(app: &App, width: u16) -> String {
     if let Some(failure) = &app.status.failure {
         parts.push(format!("Refresh failed: {failure}"));
     }
+    parts.extend(app.note.clone());
     if let Some(hints) = mode_hints(app) {
         parts.push(hints.to_string());
         return parts.join(" | ");
@@ -164,7 +165,7 @@ fn status_line(app: &App, width: u16) -> String {
         (_, Some(Page::Url(url))) => Some(url),
         // With no page there is no `o` hint either: it would promise one.
         (focus, Some(Page::Missing)) => {
-            hints.retain(|hint| !hint.essential);
+            hints.retain(|hint| !hint.for_page);
             Some(if focus == Pane::Comments {
                 "No page, o opens the PR".to_string()
             } else {
@@ -1732,9 +1733,9 @@ mod tests {
     fn the_status_bar_shows_the_focused_panes_keys() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         for expected in [
-            "Enter: Review | o: Open | ?: Help",
-            "Enter, o: Open | ?: Help",
-            "Enter, Space: Expand | o: Open | ?: Help",
+            "Enter: Review | o: Open | y: Copy | ?: Help",
+            "Enter, o: Open | y: Copy | ?: Help",
+            "Enter, Space: Expand | o: Open | y: Copy | ?: Help",
             "?: Help | /: Search",
             "?: Help | /: Search",
         ] {
@@ -1821,7 +1822,7 @@ mod tests {
         tab(&mut app, 1);
         let bar = status_bar(&mut app, 160);
         assert!(
-            bar.contains("Enter, o: Open | ?: Help | /: Search | q: Quit | https://example.test/job"),
+            bar.contains("Enter, o: Open | y: Copy | ?: Help | /: Search | q: Quit | https://example.test/job"),
             "{bar}"
         );
 
@@ -1829,7 +1830,10 @@ mod tests {
         press(&mut app, "j");
         let bar = status_bar(&mut app, 160);
         assert!(bar.ends_with("q: Quit | No page"), "{bar}");
-        assert!(!bar.contains("o: Open"), "{bar}");
+        assert!(
+            !bar.contains("o: Open") && !bar.contains("y: Copy"),
+            "{bar}"
+        );
     }
 
     #[test]
@@ -1851,7 +1855,7 @@ mod tests {
         tab(&mut app, 2);
         let bar = status_bar(&mut app, 160);
         assert!(
-            bar.contains("Enter, Space: Expand | o: Open | ?: Help | /: Search | q: Quit | https://example.test/pull/1#issuecomment-1"),
+            bar.contains("Enter, Space: Expand | o: Open | y: Copy | ?: Help | /: Search | q: Quit | https://example.test/pull/1#issuecomment-1"),
             "{bar}"
         );
         // `o` still opens the PR for a comment with no page of its own.
@@ -1894,7 +1898,7 @@ mod tests {
             "{bar}"
         );
         assert!(
-            bar.contains("o: Open | ?: Help | /: Search | q: Quit | https://"),
+            bar.contains("o: Open | y: Copy | ?: Help | /: Search | q: Quit | https://"),
             "{bar}"
         );
         // Narrower still: the other hints go, `o` stays.
@@ -1902,6 +1906,17 @@ mod tests {
         assert!(bar.contains("…") && bar.contains("Enter, o: Open"), "{bar}");
         assert!(!bar.contains("?: Help"), "{bar}");
         assert!(bar.chars().count() <= 50, "{bar}");
+    }
+
+    #[test]
+    fn the_status_bar_says_what_was_copied_until_the_next_key() {
+        let mut app = app_with_check_pages();
+        tab(&mut app, 1);
+        press(&mut app, "y");
+        let bar = status_bar(&mut app, 160);
+        assert!(bar.starts_with("Copied the URL | Enter, o: Open"), "{bar}");
+        press(&mut app, "k");
+        assert!(!status_bar(&mut app, 160).contains("Copied"));
     }
 
     #[test]

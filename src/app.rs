@@ -76,6 +76,10 @@ pub struct App {
     prs_to_open: Vec<u64>,
     /// Pages (a check's or a comment's) to open in the browser, in order.
     pages_to_open: Vec<String>,
+    /// Text for the clipboard.
+    text_to_copy: Option<String>,
+    /// What the last key did that the screen doesn't show, such as a copy. The next key clears it.
+    pub note: Option<String>,
     /// Details by PR number. An entry is added when its fetch starts, so a PR is fetched once.
     pub details: HashMap<u64, Fetch<Details>>,
     /// Diffs by PR number. An entry is added when its fetch starts, so a PR is fetched once.
@@ -330,6 +334,8 @@ impl App {
             errors: Errors::default(),
             prs_to_open: Vec::new(),
             pages_to_open: Vec::new(),
+            text_to_copy: None,
+            note: None,
             selected: HashSet::new(),
             details: HashMap::new(),
             diffs: HashMap::new(),
@@ -706,6 +712,25 @@ impl App {
                 self.prs_to_open = number.into_iter().collect();
             }
         }
+    }
+
+    /// `y`: copies what `o` would open: the URL of the highlighted item, or the PR's where it has
+    /// none of its own. The description and the diff have nothing to copy.
+    fn copy_focused(&mut self) {
+        let (text, note) = match (self.focus, self.highlighted_page()) {
+            (_, Some(Page::Url(url))) => (url, "Copied the URL"),
+            (Pane::Checks, _) => {
+                self.note = Some("The highlighted check has no page to copy".to_string());
+                return;
+            }
+            (Pane::Table | Pane::Comments, _) => match self.highlighted() {
+                Some(row) => (row.pr.url.clone(), "Copied the PR's URL"),
+                None => return,
+            },
+            (Pane::Description | Pane::Diff, _) => return,
+        };
+        self.text_to_copy = Some(text);
+        self.note = Some(note.to_string());
     }
 
     /// Enter: acts on the highlighted item of the focused pane. The table reviews its highlighted
