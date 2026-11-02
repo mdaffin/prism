@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 
 use ansi_to_tui::IntoText;
 use color_eyre::eyre::Result;
@@ -17,7 +18,7 @@ mod input;
 mod panes;
 mod work;
 
-pub use panes::{ChecksLayout, CommentLayout, Drawn, Pane, Scroll};
+pub use panes::{ChecksLayout, CommentLayout, Drawn, Pane, Scroll, to_u16};
 pub use work::{Details, Diff, Fetch};
 use work::forget_failed;
 
@@ -802,9 +803,14 @@ impl App {
     }
 
     fn toggle(&mut self, number: u64) {
-        if !self.selected.remove(&number) {
-            self.selected.insert(number);
-        }
+        toggle(&mut self.selected, number);
+    }
+}
+
+/// Removes `value` from `set` if it is there, else adds it.
+fn toggle<T: Eq + Hash>(set: &mut HashSet<T>, value: T) {
+    if !set.remove(&value) {
+        set.insert(value);
     }
 }
 

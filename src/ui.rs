@@ -8,7 +8,7 @@ use ratatui::widgets::{Block, Cell, Clear, Paragraph, Row, Table, TableState, Wr
 use regex::Regex;
 
 use crate::app::{
-    self, App, ChecksLayout, CommentLayout, ConfirmOpen, Details, Fetch, Mode, Pane, Typing,
+    self, App, ChecksLayout, CommentLayout, ConfirmOpen, Details, Fetch, Mode, Pane, Typing, to_u16,
 };
 use crate::batch::{Batch, Confirm, ItemStatus, Summary};
 use crate::gh::{Comment, PrState};
@@ -147,10 +147,8 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
     app.drawn.areas.table_checkboxes = Rect::default();
     let table_area = table_block.inner(area);
     frame.render_widget(table_block, area);
-    if app.focus == Pane::Table {
-        // One row of the table is its header.
-        app.drawn.page = table_area.height.saturating_sub(2).max(1);
-    }
+    // One row of the table is its header.
+    set_page(app, Pane::Table, table_area.height, 2);
 
     match app.mode {
         Mode::Loading => frame.render_widget(Line::from("Loading…"), table_area),
@@ -592,10 +590,18 @@ fn pane_block(title: &str, focused: bool) -> Block<'_> {
     }
 }
 
+/// While `pane` has focus, sets the rows a PgUp/PgDn moves: its `height` less the `kept` rows
+/// that stay in view, and at least one.
+fn set_page(app: &mut App, pane: Pane, height: u16, kept: u16) {
+    if app.focus == pane {
+        app.drawn.page = height.saturating_sub(kept).max(1);
+    }
+}
+
 /// The furthest a pane can scroll: until its last row is at the bottom.
 fn max_scroll(content_rows: usize, area_rows: u16) -> u16 {
     let max = content_rows.saturating_sub(usize::from(area_rows));
-    u16::try_from(max).unwrap_or(u16::MAX)
+    to_u16(max)
 }
 
 fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -603,9 +609,7 @@ fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
     app.drawn.checks_layout = ChecksLayout::default();
     let block = pane_block("Checks", app.focus == Pane::Checks);
     let inner = block.inner(area);
-    if app.focus == Pane::Checks {
-        app.drawn.page = inner.height.saturating_sub(2).max(1);
-    }
+    set_page(app, Pane::Checks, inner.height, 2);
     frame.render_widget(block, area);
     let Some(row) = app.highlighted() else {
         return;
@@ -708,15 +712,13 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
         .min(max_scroll(total, inner.height));
     frame.render_widget(pane.scroll((scroll, 0)), inner);
 
-    if app.focus == Pane::Comments {
-        app.drawn.page = inner.height.saturating_sub(1).max(1);
-    }
+    set_page(app, Pane::Comments, inner.height, 1);
     app.drawn.comment_layout = CommentLayout {
         items,
         viewport: usize::from(inner.height),
     };
     app.scroll.comment = selected;
-    app.scroll.comment_x = u16::try_from(x).unwrap_or(u16::MAX);
+    app.scroll.comment_x = to_u16(x);
     app.scroll.comments = scroll;
 }
 
@@ -768,9 +770,7 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
     app.drawn.areas.diff = area;
     let block = pane_block("Diff", app.focus == Pane::Diff);
     let inner = block.inner(area);
-    if app.focus == Pane::Diff {
-        app.drawn.page = inner.height.saturating_sub(1).max(1);
-    }
+    set_page(app, Pane::Diff, inner.height, 1);
     let diff = app
         .highlighted()
         .and_then(|row| app.diffs.get(&row.pr.number));
@@ -834,9 +834,7 @@ fn description(app: &mut App, frame: &mut Frame, area: Rect) {
     app.drawn.areas.description = area;
     // The block's inner area doesn't depend on its title.
     let inner = pane_block("", false).inner(area);
-    if app.focus == Pane::Description {
-        app.drawn.page = inner.height.saturating_sub(1).max(1);
-    }
+    set_page(app, Pane::Description, inner.height, 1);
     let width = usize::from(inner.width);
     let mut widest = 0;
     let mut x = 0;
@@ -854,7 +852,7 @@ fn description(app: &mut App, frame: &mut Frame, area: Rect) {
             }
         },
     };
-    app.scroll.description_x = u16::try_from(x).unwrap_or(u16::MAX);
+    app.scroll.description_x = to_u16(x);
     let title = if widest > width {
         "Description (←/→ scroll tables)"
     } else {

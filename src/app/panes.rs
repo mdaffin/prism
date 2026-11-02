@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use ratatui::layout::{Position, Rect};
 
-use super::App;
+use super::{App, toggle};
 
 /// Rows scrolled off the top of the checks, description, comments and diff panes. They go back to
 /// the top when the highlight moves. The view clamps them to the content it draws.
@@ -158,17 +158,16 @@ impl App {
         match pane {
             Pane::Table => self.move_highlight(by),
             Pane::Checks => {
-                self.scroll.checks = self.scroll.checks.saturating_add_signed(clamp_i16(by));
+                self.scroll.checks = scrolled(self.scroll.checks, by);
             }
             Pane::Comments => {
-                self.scroll.comments = self.scroll.comments.saturating_add_signed(clamp_i16(by));
+                self.scroll.comments = scrolled(self.scroll.comments, by);
             }
             Pane::Description => {
-                self.scroll.description =
-                    self.scroll.description.saturating_add_signed(clamp_i16(by));
+                self.scroll.description = scrolled(self.scroll.description, by);
             }
             Pane::Diff => {
-                self.scroll.diff = self.scroll.diff.saturating_add_signed(clamp_i16(by));
+                self.scroll.diff = scrolled(self.scroll.diff, by);
             }
         }
     }
@@ -180,7 +179,7 @@ impl App {
             Pane::Comments => &mut self.scroll.comment_x,
             _ => return,
         };
-        *x = x.saturating_add_signed(clamp_i16(by));
+        *x = scrolled(*x, by);
     }
 
     /// Up/Down: like `move_focused`, except that the comments pane goes comment by comment.
@@ -219,7 +218,7 @@ impl App {
         } else {
             return;
         };
-        self.scroll.checks = u16::try_from(first).unwrap_or(u16::MAX);
+        self.scroll.checks = to_u16(first);
     }
 
     /// Up/Down in the comments pane. It moves the highlight to the next comment once that
@@ -244,14 +243,14 @@ impl App {
                 let start = layout.items[n].0;
                 self.scroll.comment = n;
                 if start < top {
-                    self.scroll.comments = u16::try_from(start).unwrap_or(u16::MAX);
+                    self.scroll.comments = to_u16(start);
                 } else if start >= bottom {
                     let first = (start + 1).saturating_sub(layout.viewport);
-                    self.scroll.comments = u16::try_from(first).unwrap_or(u16::MAX);
+                    self.scroll.comments = to_u16(first);
                 }
             }
             _ => {
-                self.scroll.comments = self.scroll.comments.saturating_add_signed(clamp_i16(by));
+                self.scroll.comments = scrolled(self.scroll.comments, by);
                 self.keep_comment_on_screen();
             }
         }
@@ -329,9 +328,7 @@ impl App {
             return;
         };
         let current = self.scroll.comment.min(last);
-        if !self.scroll.comments_open.remove(&current) {
-            self.scroll.comments_open.insert(current);
-        }
+        toggle(&mut self.scroll.comments_open, current);
     }
 
     /// PgUp/PgDn: a page in the focused pane.
@@ -357,7 +354,7 @@ impl App {
                 // The view pulls the scroll back so the pane isn't left past its end.
                 let start = self.drawn.comment_layout.items[n].0;
                 self.scroll.comment = n;
-                self.scroll.comments = u16::try_from(start).unwrap_or(u16::MAX);
+                self.scroll.comments = to_u16(start);
             }
             Pane::Description => self.scroll.description = if end { u16::MAX } else { 0 },
             Pane::Diff => self.scroll.diff = if end { u16::MAX } else { 0 },
@@ -383,6 +380,13 @@ impl App {
     }
 }
 
-fn clamp_i16(n: isize) -> i16 {
-    n.clamp(i16::MIN.into(), i16::MAX.into()) as i16
+/// `from` moved by `by`, but not below 0 or above `u16::MAX`.
+fn scrolled(from: u16, by: isize) -> u16 {
+    let by = by.clamp(i16::MIN.into(), i16::MAX.into()) as i16;
+    from.saturating_add_signed(by)
+}
+
+/// `n`, or `u16::MAX` if it is too big.
+pub fn to_u16(n: usize) -> u16 {
+    u16::try_from(n).unwrap_or(u16::MAX)
 }
