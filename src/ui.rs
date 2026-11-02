@@ -40,8 +40,6 @@ const CHECKS_WIDTH: u16 = 12;
 const REVIEW_WIDTH: u16 = 11;
 /// Fits `app/renovate` and a typical login; a longer one is cut.
 const AUTHOR_WIDTH: u16 = 16;
-/// The narrowest the title columns together may get before the Author column makes way for them.
-const MIN_TITLE_WIDTH: u16 = 30;
 
 /// The width of the checks pane's status column, which fits `… pending` and a space.
 const CHECK_STATUS_WIDTH: u16 = 10;
@@ -269,10 +267,7 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
         | Mode::Help
         | Mode::Running(_)
         | Mode::Results(_) => {
-            // Narrow terminals lose the Author column before the title is cut.
-            let fixed = CHECKBOX_WIDTH + NUMBER_WIDTH + CHECKS_WIDTH + REVIEW_WIDTH;
-            let author =
-                app.shows_author() && table_area.width >= fixed + AUTHOR_WIDTH + MIN_TITLE_WIDTH;
+            let author = app.shows_author();
             // Borrowing the fields rather than calling `visible_rows` leaves `app.table` free.
             let rows = app.visible.iter().map(|&i| &app.rows[i]).map(|row| {
                 let selected = app.selected.contains(&row.pr.number);
@@ -1255,15 +1250,6 @@ mod tests {
         let screen = lines(&draw(&mut app, 200, 30));
 
         assert!(screen.iter().any(|l| l.contains("Author")));
-    }
-
-    #[test]
-    fn a_narrow_table_drops_the_author_before_cutting_the_title() {
-        let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
-        let screen = lines(&draw(&mut app, 120, 30));
-
-        assert!(!screen.iter().any(|l| l.contains("Author")));
-        assert!(screen.iter().any(|l| l.contains("Bump alpha")));
     }
 
     #[test]

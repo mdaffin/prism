@@ -274,7 +274,7 @@ impl Row {
     }
 
     /// Whether any column contains `text`, which must be lowercase. The author counts even when
-    /// its column is hidden, as the app does not know how wide the table is.
+    /// its column is hidden, which is only when every row has the same one.
     fn matches(&self, text: &str, columns: Option<&Regex>) -> bool {
         [
             format!("#{}", self.pr.number),
