@@ -768,7 +768,7 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     frame.render_widget(block, area);
     let (comments, bodies) = match app.highlighted().map(|row| app.details.get(&row.pr.number)) {
         None => return,
-        Some(None | Some(Fetch::Loading)) => {
+        Some(None | Some(Fetch::Loading(_))) => {
             frame.render_widget(Line::from("Loading…"), inner);
             return;
         }
@@ -875,7 +875,7 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
     let text = match diff {
         None if app.highlighted().is_none() => Text::default(),
         // A PR waiting for a free fetch slot has no entry yet.
-        None | Some(Fetch::Loading) => Text::from("Loading…"),
+        None | Some(Fetch::Loading(_)) => Text::from("Loading…"),
         Some(Fetch::Loaded(diff)) => {
             scroll = app
                 .scroll
@@ -920,7 +920,7 @@ fn pull_request(app: &App, frame: &mut Frame, area: Rect) {
             Span::raw(" lines  "),
             Span::raw(details.head_ref_name.as_str()),
         ]),
-        None | Some(Fetch::Loading) => summary.push(Span::raw("  Loading…")),
+        None | Some(Fetch::Loading(_)) => summary.push(Span::raw("  Loading…")),
         Some(Fetch::Failed(_)) => {}
     }
     let title = Line::from(format!("#{} {}", row.pr.number, row.pr.title)).bold();
@@ -938,7 +938,7 @@ fn description(app: &mut App, frame: &mut Frame, area: Rect) {
     let text = match app.highlighted() {
         None => Text::default(),
         Some(row) => match app.details.get(&row.pr.number) {
-            None | Some(Fetch::Loading) => Text::from("Loading…"),
+            None | Some(Fetch::Loading(_)) => Text::from("Loading…"),
             Some(Fetch::Loaded(Details { body, .. })) => {
                 widest = model::widest_table(body);
                 x = usize::from(app.scroll.description_x).min(widest.saturating_sub(width));
@@ -1278,7 +1278,7 @@ mod tests {
             "deletions": 3,
         }))
         .unwrap();
-        app.update(Msg::DetailsLoaded(7, Ok(details)));
+        app.details_loaded(7, Ok(details));
         let buffer = draw(&mut app, 160, 30);
         let screen = lines(&buffer);
         let title = screen
@@ -1387,8 +1387,8 @@ mod tests {
             "deletions": 1,
         }))
         .unwrap();
-        app.update(Msg::DetailsLoaded(1, Ok(details)));
-        app.update(Msg::DiffLoaded(1, Ok(vec!["+added"; 200].join("\n"))));
+        app.details_loaded(1, Ok(details));
+        app.diff_loaded(1, Ok(vec!["+added"; 200].join("\n")));
         draw(&mut app, 160, 40);
         app
     }
@@ -1475,7 +1475,7 @@ mod tests {
             "deletions": 1,
         }))
         .unwrap();
-        app.update(Msg::DetailsLoaded(1, Ok(details)));
+        app.details_loaded(1, Ok(details));
         let screen = lines(&draw(&mut app, 160, 40));
         assert!(screen.iter().any(|line| line.contains("scroll tables")));
         assert!(!screen.iter().any(|line| line.contains("END")));
@@ -1520,7 +1520,7 @@ mod tests {
             "deletions": 1,
         }))
         .unwrap();
-        app.update(Msg::DetailsLoaded(1, Ok(details)));
+        app.details_loaded(1, Ok(details));
         app.focus = Pane::Comments;
         // Collapsed, there are only the headers.
         let screen = lines(&draw(&mut app, 160, 40));
@@ -1851,7 +1851,7 @@ mod tests {
             "deletions": 1,
         }))
         .unwrap();
-        app.update(Msg::DetailsLoaded(1, Ok(details)));
+        app.details_loaded(1, Ok(details));
         tab(&mut app, 2);
         let bar = status_bar(&mut app, 160);
         assert!(

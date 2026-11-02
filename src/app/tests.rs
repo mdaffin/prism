@@ -19,6 +19,11 @@ fn app_with_rows(count: u64) -> App {
     app_with(prs(1..=count))
 }
 
+/// The PR numbers of the fetches an app started.
+fn started(fetches: Vec<(u64, FetchId)>) -> Vec<u64> {
+    fetches.into_iter().map(|(number, _)| number).collect()
+}
+
 fn numbers(app: &App) -> Vec<u64> {
     app.rows.iter().map(|row| row.pr.number).collect()
 }
@@ -266,7 +271,7 @@ fn a_refreshed_row_stays_where_it_was_even_if_it_no_longer_matches() {
 fn rows_the_filter_hides_are_still_prefetched() {
     let mut app = app_with_titles();
     press(&mut app, "fgamma");
-    assert_eq!(app.details_to_fetch(), [3, 1, 2]);
+    assert_eq!(started(app.details_to_fetch()), [3, 1, 2]);
 }
 
 fn ctrl_a(app: &mut App) {
@@ -502,7 +507,7 @@ fn o_opens_the_highlighted_comment_and_falls_back_to_the_pr() {
         "deletions": 1,
     }))
     .unwrap();
-    app.update(Msg::DetailsLoaded(1, Ok(details)));
+    app.details_loaded(1, Ok(details));
     app.drawn.comment_layout = CommentLayout {
         items: vec![(0, 1), (1, 1)],
         viewport: 5,
@@ -637,7 +642,7 @@ fn y_in_the_comments_copies_the_comments_url_and_falls_back_to_the_pr() {
         "deletions": 1,
     }))
     .unwrap();
-    app.update(Msg::DetailsLoaded(1, Ok(details)));
+    app.details_loaded(1, Ok(details));
     app.drawn.comment_layout = CommentLayout {
         items: vec![(0, 1), (1, 1)],
         viewport: 5,
@@ -1141,28 +1146,25 @@ fn a_failed_search_keeps_the_old_results() {
 }
 
 fn finish(app: &mut App, number: u64) {
-    app.update(Msg::DetailsLoaded(
-        number,
-        Err(color_eyre::eyre::eyre!("failed")),
-    ));
+    app.details_loaded(number, Err(color_eyre::eyre::eyre!("failed")));
 }
 
 #[test]
 fn prefetches_details_from_the_highlight_within_the_limit() {
     let mut app = app_with_rows(8);
-    assert_eq!(app.details_to_fetch(), [1, 2, 3, 4]);
+    assert_eq!(started(app.details_to_fetch()), [1, 2, 3, 4]);
     // Every slot is busy.
     assert!(app.details_to_fetch().is_empty());
 
     // Freed slots go to the highlighted row and those below it, then wrap to the top.
     app.table.select(Some(5));
     finish(&mut app, 1);
-    assert_eq!(app.details_to_fetch(), [6]);
+    assert_eq!(started(app.details_to_fetch()), [6]);
     finish(&mut app, 2);
     finish(&mut app, 3);
-    assert_eq!(app.details_to_fetch(), [7, 8]);
+    assert_eq!(started(app.details_to_fetch()), [7, 8]);
     finish(&mut app, 4);
-    assert_eq!(app.details_to_fetch(), [5]);
+    assert_eq!(started(app.details_to_fetch()), [5]);
 
     // Nothing is fetched twice, including failures.
     for number in 5..=8 {
@@ -1174,28 +1176,25 @@ fn prefetches_details_from_the_highlight_within_the_limit() {
 #[test]
 fn prefetches_diffs_from_the_highlight_within_the_limit() {
     let mut app = app_with_rows(8);
-    assert_eq!(app.diffs_to_fetch(), [1, 2, 3, 4]);
+    assert_eq!(started(app.diffs_to_fetch()), [1, 2, 3, 4]);
     // Every slot is busy.
     assert!(app.diffs_to_fetch().is_empty());
 
     // Freed slots go to the highlighted row and those below it, then wrap to the top.
     app.table.select(Some(5));
-    app.update(Msg::DiffLoaded(1, Ok("diff\t".to_string())));
+    app.diff_loaded(1, Ok("diff\t".to_string()));
     assert!(matches!(&app.diffs[&1], Fetch::Loaded(d) if d.to_string() == "diff    "));
-    assert_eq!(app.diffs_to_fetch(), [6]);
+    assert_eq!(started(app.diffs_to_fetch()), [6]);
     for number in [2, 3] {
-        app.update(Msg::DiffLoaded(number, Ok(String::new())));
+        app.diff_loaded(number, Ok(String::new()));
     }
-    assert_eq!(app.diffs_to_fetch(), [7, 8]);
-    app.update(Msg::DiffLoaded(4, Ok(String::new())));
-    assert_eq!(app.diffs_to_fetch(), [5]);
+    assert_eq!(started(app.diffs_to_fetch()), [7, 8]);
+    app.diff_loaded(4, Ok(String::new()));
+    assert_eq!(started(app.diffs_to_fetch()), [5]);
 
     // Nothing is fetched twice, including failures.
     for number in 5..=8 {
-        app.update(Msg::DiffLoaded(
-            number,
-            Err(color_eyre::eyre::eyre!("failed")),
-        ));
+        app.diff_loaded(number, Err(color_eyre::eyre::eyre!("failed")));
     }
     assert!(app.diffs_to_fetch().is_empty());
 }
@@ -1203,10 +1202,7 @@ fn prefetches_diffs_from_the_highlight_within_the_limit() {
 #[test]
 fn diff_colours_become_styles() {
     let mut app = app_with_rows(1);
-    app.update(Msg::DiffLoaded(
-        1,
-        Ok("\x1b[32m+added\x1b[m\n ctx".to_string()),
-    ));
+    app.diff_loaded(1, Ok("\x1b[32m+added\x1b[m\n ctx".to_string()));
     let Fetch::Loaded(text) = &app.diffs[&1] else {
         panic!("diff should be loaded");
     };
@@ -1621,7 +1617,104 @@ fn ctrl_r_drops_cached_details_and_diffs_but_a_new_search_keeps_them() {
     app.update(Msg::PrsLoaded(id, Ok(prs(1..=2))));
     assert_eq!((app.details.len(), app.diffs.len()), (0, 0));
     // So they are fetched again.
-    assert_eq!(app.details_to_fetch(), [1, 2]);
+    assert_eq!(started(app.details_to_fetch()), [1, 2]);
+}
+
+fn details_with_body(body: &str) -> PrDetails {
+    serde_json::from_value(serde_json::json!({
+        "headRefName": "branch",
+        "body": body,
+        "comments": [],
+        "additions": 1,
+        "deletions": 1,
+    }))
+    .unwrap()
+}
+
+/// The body of the loaded details of a PR, if they are loaded.
+fn loaded_body(app: &App, number: u64) -> Option<String> {
+    match app.details.get(&number) {
+        Some(Fetch::Loaded(loaded)) => loaded.details.body.clone(),
+        _ => None,
+    }
+}
+
+#[test]
+fn a_result_from_before_ctrl_r_is_dropped() {
+    let mut app = app_with_rows(2);
+    let details = app.details_to_fetch();
+    let diffs = app.diffs_to_fetch();
+    assert_eq!(started(details.clone()), [1, 2]);
+
+    ctrl_r(&mut app);
+    let (id, _) = app.list_to_fetch().unwrap();
+    app.update(Msg::PrsLoaded(id, Ok(prs(1..=2))));
+    assert!(app.details.is_empty() && app.diffs.is_empty());
+
+    // The fetches that were running now finish, with what was current before the refresh.
+    for &(number, id) in &details {
+        app.update(Msg::DetailsLoaded(number, id, Ok(details_with_body("old"))));
+    }
+    for &(number, id) in &diffs {
+        app.update(Msg::DiffLoaded(number, id, Ok("old".to_string())));
+    }
+    assert!(app.details.is_empty() && app.diffs.is_empty());
+    // Failures from them are dropped too.
+    let (number, id) = details[0];
+    app.update(Msg::DetailsLoaded(
+        number,
+        id,
+        Err(color_eyre::eyre::eyre!("old failure")),
+    ));
+    assert!(app.details.is_empty());
+}
+
+#[test]
+fn a_result_from_before_ctrl_r_does_not_replace_the_new_fetch() {
+    let mut app = app_with_rows(1);
+    let before = app.details_to_fetch()[0].1;
+
+    ctrl_r(&mut app);
+    let (id, _) = app.list_to_fetch().unwrap();
+    app.update(Msg::PrsLoaded(id, Ok(prs(1..=1))));
+    let after = app.details_to_fetch()[0].1;
+    assert_ne!(before, after);
+
+    // The old fetch finishes first and is ignored, so the PR is still loading.
+    app.update(Msg::DetailsLoaded(1, before, Ok(details_with_body("old"))));
+    assert!(matches!(app.details[&1], Fetch::Loading(current) if current == after));
+    app.update(Msg::DetailsLoaded(1, after, Ok(details_with_body("new"))));
+    assert_eq!(loaded_body(&app, 1).as_deref(), Some("new"));
+    // A late duplicate doesn't overwrite what loaded.
+    app.update(Msg::DetailsLoaded(1, before, Ok(details_with_body("old"))));
+    assert_eq!(loaded_body(&app, 1).as_deref(), Some("new"));
+}
+
+#[test]
+fn a_result_from_before_a_changed_pr_was_dropped_is_ignored() {
+    let mut app = app_with_rows(2);
+    let details = app.details_to_fetch();
+    let diffs = app.diffs_to_fetch();
+    let fetch = start_status_refresh(&mut app).unwrap();
+    let update = update(vec![
+        status(1, "OPEN", false, "", "2026-02-02T00:00:00Z"),
+        status(2, "OPEN", true, "", UNCHANGED),
+    ]);
+    app.update(Msg::StatusRefreshed(fetch.id, update));
+    let fresh = started(app.details_to_fetch());
+    assert_eq!(fresh, [1]);
+
+    // The details of #1 that were running are stale; those of #2 are not.
+    for &(number, id) in &details {
+        app.update(Msg::DetailsLoaded(number, id, Ok(details_with_body("d"))));
+    }
+    assert!(matches!(app.details[&1], Fetch::Loading(_)));
+    assert_eq!(loaded_body(&app, 2).as_deref(), Some("d"));
+    for &(number, id) in &diffs {
+        app.update(Msg::DiffLoaded(number, id, Ok(String::new())));
+    }
+    assert!(!app.diffs.contains_key(&1));
+    assert!(matches!(app.diffs[&2], Fetch::Loaded(_)));
 }
 
 #[test]
@@ -1752,7 +1845,7 @@ fn a_pr_that_changed_has_its_details_and_diff_fetched_again() {
     app.update(Msg::StatusRefreshed(fetch.id, update));
     assert!(!app.details.contains_key(&1) && !app.diffs.contains_key(&1));
     assert!(app.details.contains_key(&2) && app.diffs.contains_key(&2));
-    assert_eq!(app.details_to_fetch(), [1]);
+    assert_eq!(started(app.details_to_fetch()), [1]);
 }
 
 #[test]

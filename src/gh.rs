@@ -14,7 +14,8 @@ use tokio::process::Command;
 use crate::cli::MergeMethod;
 
 /// Fields requested from `gh pr list --json`: only what the table needs, so it renders sooner.
-const LIST_FIELDS: &str = "number,title,state,statusCheckRollup,mergeable,reviewDecision,updatedAt,url";
+const LIST_FIELDS: &str =
+    "number,title,state,statusCheckRollup,mergeable,reviewDecision,updatedAt,url";
 
 /// Fields requested by the timed refresh: what can change under a row that is already listed.
 const STATUS_FIELDS: &str = "number,state,statusCheckRollup,mergeable,reviewDecision,updatedAt";

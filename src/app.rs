@@ -19,8 +19,8 @@ mod panes;
 mod work;
 
 pub use panes::{ChecksLayout, CommentLayout, Drawn, Pane, Scroll, to_u16};
-use work::forget_failed;
-pub use work::{Details, Diff, Fetch};
+pub use work::{Details, Diff, Fetch, FetchId};
+use work::{forget_failed, is_current};
 
 /// The most failed row refreshes, and the most failed opens, to list above the status bar.
 const MAX_LISTED_ERRORS: usize = 3;
@@ -84,6 +84,8 @@ pub struct App {
     pub details: HashMap<u64, Fetch<Details>>,
     /// Diffs by PR number. An entry is added when its fetch starts, so a PR is fetched once.
     pub diffs: HashMap<u64, Fetch<Diff>>,
+    /// The id of the latest details or diff fetch started: see [`FetchId`].
+    next_fetch_id: FetchId,
     /// Rows to fetch again after a batch, so they show their new state without replacing the
     /// list.
     to_refresh: Vec<u64>,
@@ -285,8 +287,11 @@ pub enum Msg {
     Mouse(MouseEvent),
     /// The result of the list fetch with this id.
     PrsLoaded(u64, Result<Vec<Pr>>),
-    DetailsLoaded(u64, Result<PrDetails>),
-    DiffLoaded(u64, Result<String>),
+    /// The result of the details fetch with this id for this PR, dropped if the PR's entry has
+    /// been dropped or fetched again since (see [`FetchId`]).
+    DetailsLoaded(u64, FetchId, Result<PrDetails>),
+    /// Likewise for a diff.
+    DiffLoaded(u64, FetchId, Result<String>),
     /// The result of approving this PR, in the batch with this epoch (see
     /// [`App::batch_epoch`]). One from an earlier batch, such as a cancelled one, is dropped.
     Approved(u64, u64, Result<()>),
@@ -339,6 +344,7 @@ impl App {
             selected: HashSet::new(),
             details: HashMap::new(),
             diffs: HashMap::new(),
+            next_fetch_id: 0,
             to_refresh: Vec::new(),
             refreshing: HashSet::new(),
             spinner: 0,
@@ -510,10 +516,12 @@ impl App {
             }
             Msg::Opened(_, Ok(())) | Msg::PageOpened(Ok(())) => {}
             Msg::PrRefreshed(number, result) => self.row_refreshed(number, result),
-            Msg::DetailsLoaded(number, Err(e)) => {
+            Msg::DetailsLoaded(number, id, _) if !is_current(&self.details, number, id) => {}
+            Msg::DiffLoaded(number, id, _) if !is_current(&self.diffs, number, id) => {}
+            Msg::DetailsLoaded(number, _, Err(e)) => {
                 self.details.insert(number, Fetch::Failed(e.to_string()));
             }
-            Msg::DetailsLoaded(number, Ok(details)) => {
+            Msg::DetailsLoaded(number, _, Ok(details)) => {
                 let body = model::render_markdown(&model::clean_body(details.body.as_deref()));
                 let comment_bodies = details
                     .comments
@@ -531,10 +539,10 @@ impl App {
                     }),
                 );
             }
-            Msg::DiffLoaded(number, Err(e)) => {
+            Msg::DiffLoaded(number, _, Err(e)) => {
                 self.diffs.insert(number, Fetch::Failed(e.to_string()));
             }
-            Msg::DiffLoaded(number, Ok(diff)) => {
+            Msg::DiffLoaded(number, _, Ok(diff)) => {
                 // A tab would be drawn as a single cell. Parsing here rather than when drawing
                 // means each diff is parsed once.
                 let diff = match diff.replace('\t', "    ").into_text() {

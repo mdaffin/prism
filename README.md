@@ -89,6 +89,7 @@ Press `?` in the program for the full list.
 | `Ctrl-A` | Select every visible PR with passing checks. |
 | `Enter` | Act on the highlighted item: review the PR in the table, expand or collapse a comment, open a check. Nothing in the description and diff. |
 | `o` | Open the highlighted item: the PR in the table, a check or a comment on GitHub. Nothing in the description and diff. |
+| `y` | Copy the URL of the highlighted item (the PR's in the table) to the clipboard. Works over SSH if the terminal supports OSC 52; in tmux, turn on `set-clipboard`. |
 | `Ctrl-G` | Review the selected PRs, from any pane. |
 | `Ctrl-O` | Open the selected PRs in the browser, from any pane. Asks first for more than five. |
 | `Ctrl-R` | Run the query again, keeping the selection. |

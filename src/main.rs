@@ -112,14 +112,14 @@ fn start_work(
             Msg::PrsLoaded(id, gh.list_prs(&query, limit).await)
         });
     }
-    for number in app.details_to_fetch() {
+    for (number, id) in app.details_to_fetch() {
         spawn(gh, tx, async move |gh| {
-            Msg::DetailsLoaded(number, gh.pr_details(number).await)
+            Msg::DetailsLoaded(number, id, gh.pr_details(number).await)
         });
     }
-    for number in app.diffs_to_fetch() {
+    for (number, id) in app.diffs_to_fetch() {
         spawn(gh, tx, async move |gh| {
-            Msg::DiffLoaded(number, gh.pr_diff(number).await)
+            Msg::DiffLoaded(number, id, gh.pr_diff(number).await)
         });
     }
     for number in app.refreshes_to_fetch() {

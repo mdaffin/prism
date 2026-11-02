@@ -21,9 +21,13 @@ const MAX_APPROVALS: usize = 4;
 /// The most row refreshes to run at once.
 const MAX_REFRESHES: usize = 4;
 
+/// Tells one fetch from another for the same PR. A result that arrives after its entry was
+/// dropped, perhaps for a newer fetch, no longer has the id of the entry and is dropped too.
+pub type FetchId = u64;
+
 /// Something fetched in the background for a PR, such as its details or its diff.
 pub enum Fetch<T> {
-    Loading,
+    Loading(FetchId),
     Loaded(T),
     /// Kept rather than removed, so a failing PR isn't fetched again on every update.
     Failed(String),
@@ -42,22 +46,38 @@ pub struct Details {
 /// A PR's diff with gh's colours.
 pub type Diff = Text<'static>;
 
-/// Marks the PRs in `order` that have no entry in `fetches` as loading, and returns them, as
-/// many as there are free slots out of `max`. The caller must start their fetches.
-fn start_fetches<T>(fetches: &mut HashMap<u64, Fetch<T>>, order: Vec<u64>, max: usize) -> Vec<u64> {
+/// Marks the PRs in `order` that have no entry in `fetches` as loading, and returns them with
+/// their fetch ids, as many as there are free slots out of `max`. The caller must start their
+/// fetches, and send the ids back with the results.
+fn start_fetches<T>(
+    fetches: &mut HashMap<u64, Fetch<T>>,
+    next_id: &mut FetchId,
+    order: Vec<u64>,
+    max: usize,
+) -> Vec<(u64, FetchId)> {
     let in_flight = fetches
         .values()
-        .filter(|fetch| matches!(fetch, Fetch::Loading))
+        .filter(|fetch| matches!(fetch, Fetch::Loading(_)))
         .count();
     let numbers: Vec<u64> = order
         .into_iter()
         .filter(|number| !fetches.contains_key(number))
         .take(max.saturating_sub(in_flight))
         .collect();
-    for &number in &numbers {
-        fetches.insert(number, Fetch::Loading);
-    }
     numbers
+        .into_iter()
+        .map(|number| {
+            *next_id += 1;
+            fetches.insert(number, Fetch::Loading(*next_id));
+            (number, *next_id)
+        })
+        .collect()
+}
+
+/// Whether a result with this id is the one the entry for `number` is waiting for. If the entry
+/// was dropped, such as by a refresh, or dropped and started again, it is not.
+pub(super) fn is_current<T>(fetches: &HashMap<u64, Fetch<T>>, number: u64, id: FetchId) -> bool {
+    matches!(fetches.get(&number), Some(Fetch::Loading(current)) if *current == id)
 }
 
 /// Drops the failed fetches, so they are tried again.
@@ -90,6 +110,25 @@ impl App {
     /// must start them.
     pub fn opens_to_run(&mut self) -> Vec<u64> {
         std::mem::take(&mut self.prs_to_open)
+    }
+
+    /// Delivers a details result as if its fetch had just started for this PR, which replaces
+    /// any entry it had.
+    #[cfg(test)]
+    pub fn details_loaded(&mut self, number: u64, result: color_eyre::eyre::Result<PrDetails>) {
+        self.next_fetch_id += 1;
+        let id = self.next_fetch_id;
+        self.details.insert(number, Fetch::Loading(id));
+        self.update(super::Msg::DetailsLoaded(number, id, result));
+    }
+
+    /// Likewise for a diff.
+    #[cfg(test)]
+    pub fn diff_loaded(&mut self, number: u64, result: color_eyre::eyre::Result<String>) {
+        self.next_fetch_id += 1;
+        let id = self.next_fetch_id;
+        self.diffs.insert(number, Fetch::Loading(id));
+        self.update(super::Msg::DiffLoaded(number, id, result));
     }
 
     /// The text to put on the clipboard now. The caller must send it to the terminal.
@@ -186,18 +225,28 @@ impl App {
         })
     }
 
-    /// PRs whose details haven't been requested yet, as many as there are free fetch slots.
-    /// Marks them as loading, so the caller must start the fetches.
-    pub fn details_to_fetch(&mut self) -> Vec<u64> {
+    /// PRs whose details haven't been requested yet, as many as there are free fetch slots, with
+    /// their fetch ids. Marks them as loading, so the caller must start the fetches.
+    pub fn details_to_fetch(&mut self) -> Vec<(u64, FetchId)> {
         let order = self.numbers_from_highlight();
-        start_fetches(&mut self.details, order, MAX_DETAIL_FETCHES)
+        start_fetches(
+            &mut self.details,
+            &mut self.next_fetch_id,
+            order,
+            MAX_DETAIL_FETCHES,
+        )
     }
 
-    /// PRs whose diffs haven't been requested yet, as many as there are free fetch slots. Marks
-    /// them as loading, so the caller must start the fetches.
-    pub fn diffs_to_fetch(&mut self) -> Vec<u64> {
+    /// PRs whose diffs haven't been requested yet, as many as there are free fetch slots, with
+    /// their fetch ids. Marks them as loading, so the caller must start the fetches.
+    pub fn diffs_to_fetch(&mut self) -> Vec<(u64, FetchId)> {
         let order = self.numbers_from_highlight();
-        start_fetches(&mut self.diffs, order, MAX_DIFF_FETCHES)
+        start_fetches(
+            &mut self.diffs,
+            &mut self.next_fetch_id,
+            order,
+            MAX_DIFF_FETCHES,
+        )
     }
 
     /// The PR numbers in the order background fetches should take them: the highlighted PR, then
