@@ -7,6 +7,9 @@ mod model;
 mod query;
 mod ui;
 
+#[cfg(test)]
+mod testing;
+
 use std::time::Duration;
 
 use clap::Parser;

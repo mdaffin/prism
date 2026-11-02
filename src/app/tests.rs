@@ -1,19 +1,11 @@
 use super::work::StatusFetch;
 use super::*;
 use crate::gh::{PrStatus, ReviewDecision};
+use crate::testing::{app_with, pr_with, press};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 fn pr(number: u64, state: &str) -> Pr {
-    serde_json::from_value(serde_json::json!({
-        "number": number,
-        "title": "t",
-        "state": state,
-        "statusCheckRollup": [],
-        "mergeable": "MERGEABLE",
-        "reviewDecision": "",
-        "updatedAt": "2026-01-01T00:00:00Z",
-    }))
-    .unwrap()
+    pr_with(number, "t", state, "", "MERGEABLE", serde_json::json!([]))
 }
 
 fn prs(numbers: impl IntoIterator<Item = u64>) -> Vec<Pr> {
@@ -24,16 +16,7 @@ fn prs(numbers: impl IntoIterator<Item = u64>) -> Vec<Pr> {
 }
 
 fn app_with_rows(count: u64) -> App {
-    let mut app = App::new(String::new(), "is:pr".to_string(), false);
-    let (id, _) = app.list_to_fetch().unwrap();
-    app.update(Msg::PrsLoaded(id, Ok(prs(1..=count))));
-    app
-}
-
-fn press(app: &mut App, keys: &str) {
-    for c in keys.chars() {
-        app.update(Msg::Key(KeyEvent::from(KeyCode::Char(c))));
-    }
+    app_with(prs(1..=count))
 }
 
 fn numbers(app: &App) -> Vec<u64> {
@@ -137,15 +120,11 @@ fn titled(number: u64, title: &str) -> Pr {
 
 /// Three open PRs titled "Bump alpha", "Bump beta" and "Update gamma".
 fn app_with_titles() -> App {
-    let mut app = App::new(String::new(), "is:pr".to_string(), false);
-    let (id, _) = app.list_to_fetch().unwrap();
-    let prs = vec![
+    app_with(vec![
         titled(1, "Bump alpha"),
         titled(2, "Bump beta"),
         titled(3, "Update gamma"),
-    ];
-    app.update(Msg::PrsLoaded(id, Ok(prs)));
-    app
+    ])
 }
 
 fn visible_numbers(app: &App) -> Vec<u64> {
@@ -301,8 +280,6 @@ fn ctrl_a(app: &mut App) {
 fn ctrl_a_selects_open_prs_with_passing_checks_only() {
     let mut closed = pr_with_checks(4, "passing");
     closed.state = PrState::Merged;
-    let mut app = App::new(String::new(), "is:pr".to_string(), false);
-    let (id, _) = app.list_to_fetch().unwrap();
     let prs = vec![
         pr_with_checks(1, "passing"),
         pr_with_checks(2, "pending"),
@@ -310,7 +287,7 @@ fn ctrl_a_selects_open_prs_with_passing_checks_only() {
         closed,
         pr_with_checks(5, "passing"),
     ];
-    app.update(Msg::PrsLoaded(id, Ok(prs)));
+    let mut app = app_with(prs);
     ctrl_a(&mut app);
     assert_eq!(app.selected, HashSet::from([1, 5]));
     // Nothing starts: it only selects.
@@ -426,9 +403,7 @@ fn app_with_check_pages() -> App {
         "updatedAt": "2026-01-01T00:00:00Z",
     }))
     .unwrap();
-    let mut app = App::new(String::new(), "is:pr".to_string(), false);
-    let (id, _) = app.list_to_fetch().unwrap();
-    app.update(Msg::PrsLoaded(id, Ok(vec![pr])));
+    let mut app = app_with(vec![pr]);
     app.drawn.checks_layout = ChecksLayout {
         count: 3,
         first: 0,
@@ -568,24 +543,20 @@ fn enter_confirms_the_selected_prs_in_table_order() {
 
 #[test]
 fn closed_and_merged_prs_sort_after_open_ones() {
-    let mut app = App::new(String::new(), "is:pr".to_string(), false);
-    let (id, _) = app.list_to_fetch().unwrap();
     let prs = vec![
         pr(1, "MERGED"),
         pr(2, "OPEN"),
         pr(3, "CLOSED"),
         pr(4, "OPEN"),
     ];
-    app.update(Msg::PrsLoaded(id, Ok(prs)));
+    let app = app_with(prs);
     assert_eq!(numbers(&app), [2, 4, 1, 3]);
 }
 
 #[test]
 fn closed_and_merged_prs_are_left_out() {
-    let mut app = App::new(String::new(), "is:pr".to_string(), false);
-    let (id, _) = app.list_to_fetch().unwrap();
     let prs = vec![pr(1, "OPEN"), pr(2, "CLOSED"), pr(3, "MERGED")];
-    app.update(Msg::PrsLoaded(id, Ok(prs)));
+    let mut app = app_with(prs);
     press(&mut app, " j j ");
     key(&mut app, KeyCode::Enter);
     assert_eq!(confirm_numbers(&app), [1]);
@@ -802,30 +773,19 @@ fn pr_with_checks(number: u64, checks: &str) -> Pr {
         }]),
         _ => serde_json::json!([]),
     };
-    serde_json::from_value(serde_json::json!({
-        "number": number,
-        "title": "t",
-        "state": "OPEN",
-        "statusCheckRollup": rollup,
-        "mergeable": "MERGEABLE",
-        "reviewDecision": "",
-        "updatedAt": "2026-01-01T00:00:00Z",
-    }))
-    .unwrap()
+    pr_with(number, "t", "OPEN", "", "MERGEABLE", rollup)
 }
 
 /// Lists PRs 1 to 4 (passing, pending, no checks, pending), selects them all and chooses
 /// Approve & merge.
 fn start_approving_and_merging() -> App {
-    let mut app = App::new(String::new(), "is:pr".to_string(), false);
-    let (id, _) = app.list_to_fetch().unwrap();
     let prs = vec![
         pr_with_checks(1, "passing"),
         pr_with_checks(2, "pending"),
         pr_with_checks(3, "none"),
         pr_with_checks(4, "pending"),
     ];
-    app.update(Msg::PrsLoaded(id, Ok(prs)));
+    let mut app = app_with(prs);
     assert_eq!(numbers(&app), [1, 2, 3, 4]);
     press(&mut app, " j j j ");
     key(&mut app, KeyCode::Enter);
@@ -1562,9 +1522,7 @@ fn a_timed_refresh_waits_for_a_search_a_batch_and_row_refreshes() {
     // Nothing to refresh before a list loads, or when no PR is open.
     let mut app = App::new(String::new(), "is:pr".to_string(), false);
     assert!(start_status_refresh(&mut app).is_none());
-    let mut app = App::new(String::new(), "is:pr".to_string(), false);
-    let (id, _) = app.list_to_fetch().unwrap();
-    app.update(Msg::PrsLoaded(id, Ok(vec![pr(1, "MERGED")])));
+    let mut app = app_with(vec![pr(1, "MERGED")]);
     assert!(start_status_refresh(&mut app).is_none());
     assert!(start_status_refresh(&mut app).is_none());
 }
@@ -1613,9 +1571,7 @@ fn a_pr_that_changed_has_its_details_and_diff_fetched_again() {
 
 #[test]
 fn a_row_known_to_be_closed_is_not_updated() {
-    let mut app = App::new(String::new(), "is:pr".to_string(), false);
-    let (id, _) = app.list_to_fetch().unwrap();
-    app.update(Msg::PrsLoaded(id, Ok(vec![pr(1, "OPEN"), pr(2, "MERGED")])));
+    let mut app = app_with(vec![pr(1, "OPEN"), pr(2, "MERGED")]);
     let fetch = start_status_refresh(&mut app).unwrap();
     let update = update(vec![status(
         2,

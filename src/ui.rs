@@ -815,26 +815,10 @@ mod tests {
     use super::*;
     use crate::app::Msg;
     use crate::gh::Pr;
+    use crate::testing::{app_with, pr_with, press};
 
     fn pr(number: u64, title: &str, state: &str, review: &str) -> Pr {
-        serde_json::from_value(serde_json::json!({
-            "number": number,
-            "title": title,
-            "state": state,
-            "statusCheckRollup": [],
-            "mergeable": "MERGEABLE",
-            "reviewDecision": review,
-            "updatedAt": "2026-01-01T00:00:00Z",
-        }))
-        .unwrap()
-    }
-
-    /// An app that has loaded these PRs, in the order given before the table sorts them.
-    fn app_with(prs: Vec<Pr>) -> App {
-        let mut app = App::new("PRs".to_string(), "is:pr".to_string(), false);
-        let (id, _) = app.list_to_fetch().unwrap();
-        app.update(Msg::PrsLoaded(id, Ok(prs)));
-        app
+        pr_with(number, title, state, review, "MERGEABLE", serde_json::json!([]))
     }
 
     /// Draws the app on a screen of this size, as the real terminal would show it.
@@ -907,16 +891,7 @@ mod tests {
     }
 
     fn pr_checked(number: u64, mergeable: &str, checks: Vec<serde_json::Value>) -> Pr {
-        serde_json::from_value(serde_json::json!({
-            "number": number,
-            "title": format!("PR {number}"),
-            "state": "OPEN",
-            "statusCheckRollup": checks,
-            "mergeable": mergeable,
-            "reviewDecision": "",
-            "updatedAt": "2026-01-01T00:00:00Z",
-        }))
-        .unwrap()
+        pr_with(number, &format!("PR {number}"), "OPEN", "", mergeable, checks.into())
     }
 
     /// Five open PRs, one in each state. The table puts them in this order: passing first, then
@@ -929,12 +904,6 @@ mod tests {
             pr_checked(4, "MERGEABLE", vec![run("build", "COMPLETED", "FAILURE")]),
             pr_checked(5, "CONFLICTING", vec![run("build", "COMPLETED", "SUCCESS")]),
         ])
-    }
-
-    fn press(app: &mut App, keys: &str) {
-        for c in keys.chars() {
-            app.update(Msg::Key(KeyCode::Char(c).into()));
-        }
     }
 
     #[test]
