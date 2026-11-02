@@ -20,6 +20,27 @@ const MAX_ERROR_ROWS: u16 = 5;
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/// The rows of the search and filter boxes: a line of text and the border around it.
+const INPUT_BOX_ROWS: u16 = 3;
+
+/// The most rows the comments pane takes.
+const MAX_COMMENTS_ROWS: u16 = 10;
+
+/// The rows of the Pull request box: the border, the title and the summary line.
+const PULL_REQUEST_ROWS: u16 = 4;
+
+/// The widest a popup gets, however wide the terminal is.
+const MAX_POPUP_WIDTH: u16 = 90;
+
+/// The widths of the table's columns other than the title. Each fits its longest value, such as
+/// `#12345`, `· no checks` and `✓ approved`, and a space.
+const NUMBER_WIDTH: u16 = 7;
+const CHECKS_WIDTH: u16 = 12;
+const REVIEW_WIDTH: u16 = 11;
+
+/// The width of the checks pane's status column, which fits `… pending` and a space.
+const CHECK_STATUS_WIDTH: u16 = 10;
+
 pub fn view(app: &mut App, frame: &mut Frame) {
     let error = app.errors.text();
     let error_rows = error
@@ -37,17 +58,17 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     let [top_area, checks_area, comments_area] = Layout::vertical([
         Constraint::Fill(2),
         Constraint::Fill(1),
-        Constraint::Max(10),
+        Constraint::Max(MAX_COMMENTS_ROWS),
     ])
     .areas(left_area);
     // The filter box is only there while it is being edited or has text in it.
     let filter_rows = if app.typing == Typing::Filter || !app.filter.value().is_empty() {
-        3
+        INPUT_BOX_ROWS
     } else {
         0
     };
     let [search_area, filter_area, table_area] = Layout::vertical([
-        Constraint::Length(3),
+        Constraint::Length(INPUT_BOX_ROWS),
         Constraint::Length(filter_rows),
         Constraint::Fill(1),
     ])
@@ -61,7 +82,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
 
     pr_table(app, frame, table_area);
     let [pull_request_area, description_area, diff_area] = Layout::vertical([
-        Constraint::Length(4),
+        Constraint::Length(PULL_REQUEST_ROWS),
         Constraint::Fill(1),
         Constraint::Fill(2),
     ])
@@ -182,9 +203,9 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
             };
             let widths = [
                 Constraint::Length(CHECKBOX_WIDTH),
-                Constraint::Length(7),
-                Constraint::Length(12),
-                Constraint::Length(11),
+                Constraint::Length(NUMBER_WIDTH),
+                Constraint::Length(CHECKS_WIDTH),
+                Constraint::Length(REVIEW_WIDTH),
             ]
             .into_iter()
             .chain(titles.iter().map(|_| Constraint::Fill(1)))
@@ -439,7 +460,7 @@ fn popup(frame: &mut Frame, area: Rect, popup: Popup) {
         title.push_str(" [DRY RUN]");
     }
     let full = area;
-    let width = area.width.saturating_sub(4).min(90);
+    let width = area.width.saturating_sub(4).min(MAX_POPUP_WIDTH);
     let inner_width = usize::from(width.saturating_sub(2).max(1));
     let rows: usize = if wrap {
         lines
@@ -637,7 +658,7 @@ fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
         .scroll
         .checks
         .min(max_scroll(rows.len(), inner.height.saturating_sub(1)));
-    let table = Table::new(rows, [Constraint::Length(10), Constraint::Fill(1)])
+    let table = Table::new(rows, [Constraint::Length(CHECK_STATUS_WIDTH), Constraint::Fill(1)])
         .header(Row::new(["Status", "Check"]).bold());
     let mut state = TableState::default().with_offset(usize::from(scroll));
     frame.render_stateful_widget(table, inner, &mut state);
