@@ -27,8 +27,16 @@ const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 /// The rows of the search and filter boxes: a line of text and the border around it.
 const INPUT_BOX_ROWS: u16 = 3;
 
-/// The most rows the comments pane takes.
+/// The narrowest terminal that gets the list beside the details. The table needs about 90 columns
+/// for its fixed columns and a title that reads, and it is half the screen.
+const WIDE_LAYOUT_MIN_WIDTH: u16 = 180;
+
+/// The most rows the comments pane takes, and the checks and comments in a narrow terminal.
 const MAX_COMMENTS_ROWS: u16 = 10;
+
+/// The fewest rows the checks and comments get in a narrow terminal, so a short one still shows a
+/// few of each.
+const MIN_LOWER_ROWS: u16 = 6;
 
 /// The rows of the Pull request box: the border, the title and the summary line.
 const PULL_REQUEST_ROWS: u16 = 4;
@@ -50,6 +58,69 @@ const BUTTON_GAP: u16 = 2;
 /// The width of the checks pane's status column, which fits `… pending` and a space.
 const CHECK_STATUS_WIDTH: u16 = 10;
 
+/// Where each part of the screen goes.
+struct PaneLayout {
+    /// The search and filter boxes and the table.
+    list: Rect,
+    checks: Rect,
+    comments: Rect,
+    pull_request: Rect,
+    description: Rect,
+    diff: Rect,
+}
+
+/// With room, the list is above the checks and comments on the left and the PR's details are on
+/// the right. In a narrow terminal that would leave the table too little width, so the list takes
+/// the full width on top. Under it, what is read most gets the space: the description beside the
+/// diff, with the checks and comments in a short row at the bottom.
+fn pane_layout(body: Rect) -> PaneLayout {
+    let halves = |area| Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).areas(area);
+    if body.width >= WIDE_LAYOUT_MIN_WIDTH {
+        let [left, detail] = halves(body);
+        let [list, checks, comments] = Layout::vertical([
+            Constraint::Fill(2),
+            Constraint::Fill(1),
+            Constraint::Max(MAX_COMMENTS_ROWS),
+        ])
+        .areas(left);
+        let [pull_request, description, diff] = Layout::vertical([
+            Constraint::Length(PULL_REQUEST_ROWS),
+            Constraint::Fill(1),
+            Constraint::Fill(2),
+        ])
+        .areas(detail);
+        PaneLayout {
+            list,
+            checks,
+            comments,
+            pull_request,
+            description,
+            diff,
+        }
+    } else {
+        let lower_rows = (body.height / 5).clamp(MIN_LOWER_ROWS, MAX_COMMENTS_ROWS);
+        let [list, details, lower] = Layout::vertical([
+            Constraint::Fill(2),
+            Constraint::Fill(3),
+            Constraint::Length(lower_rows),
+        ])
+        .areas(body);
+        let [left, diff] = halves(details);
+        let [pull_request, description] =
+            Layout::vertical([Constraint::Length(PULL_REQUEST_ROWS), Constraint::Fill(1)])
+                .areas(left);
+        let [checks, comments] = halves(lower);
+        PaneLayout {
+            list,
+            checks,
+            comments,
+            pull_request,
+            description,
+            diff,
+        }
+    }
+}
+
 pub fn view(app: &mut App, frame: &mut Frame) {
     let error = app.errors.text();
     let error_rows = error
@@ -62,14 +133,14 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         Constraint::Length(1),
     ])
     .areas(frame.area());
-    let [left_area, detail_area] =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).areas(body_area);
-    let [top_area, checks_area, comments_area] = Layout::vertical([
-        Constraint::Fill(2),
-        Constraint::Fill(1),
-        Constraint::Max(MAX_COMMENTS_ROWS),
-    ])
-    .areas(left_area);
+    let PaneLayout {
+        list: top_area,
+        checks: checks_area,
+        comments: comments_area,
+        pull_request: pull_request_area,
+        description: description_area,
+        diff: diff_area,
+    } = pane_layout(body_area);
     // The filter box is only there while it is being edited or has text in it.
     let filter_rows = if app.typing == Typing::Filter || !app.filter.value().is_empty() {
         INPUT_BOX_ROWS
@@ -96,12 +167,6 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     }
 
     pr_table(app, frame, table_area);
-    let [pull_request_area, description_area, diff_area] = Layout::vertical([
-        Constraint::Length(PULL_REQUEST_ROWS),
-        Constraint::Fill(1),
-        Constraint::Fill(2),
-    ])
-    .areas(detail_area);
     checks(app, frame, checks_area);
     comments(app, frame, comments_area);
     pull_request(app, frame, pull_request_area);
@@ -1084,10 +1149,7 @@ fn description(app: &mut App, frame: &mut Frame, area: Rect) {
     let block = pane_block(title, app.focus == Pane::Description);
     let pane = Paragraph::new(text).wrap(Wrap { trim: false });
     let lines = pane.line_count(inner.width);
-    let scroll = app
-        .scroll
-        .description
-        .min(max_scroll(lines, inner.height));
+    let scroll = app.scroll.description.min(max_scroll(lines, inner.height));
     frame.render_widget(pane.scroll((scroll, 0)).block(block), area);
     scrollbar(
         frame,
@@ -1157,7 +1219,7 @@ mod tests {
             pr(7, "Bump example-lib", "OPEN", "APPROVED"),
             pr(9, "Old change", "MERGED", ""),
         ]);
-        let buffer = draw(&mut app, 160, 30);
+        let buffer = draw(&mut app, 200, 30);
         let screen = lines(&buffer);
 
         assert!(screen[0].starts_with("PRs"));
@@ -1220,7 +1282,7 @@ mod tests {
     #[test]
     fn colours_the_checks_column() {
         let mut app = one_of_each();
-        let buffer = draw(&mut app, 160, 30);
+        let buffer = draw(&mut app, 200, 30);
         for (label, colour) in [
             ("✓ passing", Color::Green),
             ("… pending", Color::Yellow),
@@ -1244,7 +1306,7 @@ mod tests {
         let mut app = one_of_each();
         // The conflicting PR is last.
         press(&mut app, "jjjj");
-        let buffer = draw(&mut app, 160, 40);
+        let buffer = draw(&mut app, 200, 40);
         let screen = lines(&buffer);
 
         let conflict = find(&buffer, "Merge conflict").unwrap();
@@ -1262,7 +1324,7 @@ mod tests {
     #[test]
     fn a_conflict_with_no_checks_still_shows_the_conflict() {
         let mut app = app_with(vec![pr_checked(1, "CONFLICTING", vec![])]);
-        let buffer = draw(&mut app, 160, 40);
+        let buffer = draw(&mut app, 200, 40);
         assert!(find(&buffer, "Merge conflict").is_some());
         assert!(find(&buffer, "No checks.").is_none());
     }
@@ -1273,7 +1335,7 @@ mod tests {
         // Select everything, then open the dialog.
         press(&mut app, " j j j j ");
         ctrl_g(&mut app);
-        let buffer = draw(&mut app, 160, 40);
+        let buffer = draw(&mut app, 200, 40);
         for (label, colour) in [
             ("✓ passing", Color::Green),
             ("… pending", Color::Yellow),
@@ -1388,11 +1450,11 @@ mod tests {
             pr(3, "Update gamma", "OPEN", ""),
         ]);
         // No box until there is a filter.
-        let screen = lines(&draw(&mut app, 160, 30));
+        let screen = lines(&draw(&mut app, 200, 30));
         assert!(!screen.iter().any(|line| line.contains("Filter")));
 
         press(&mut app, " jjfgamma");
-        let screen = lines(&draw(&mut app, 160, 30));
+        let screen = lines(&draw(&mut app, 200, 30));
         assert!(screen.iter().any(|line| line.contains("Filter")));
         assert!(screen.iter().any(|line| line.contains("Update gamma")));
         assert!(!screen.iter().any(|line| line.contains("Bump alpha")));
@@ -1410,7 +1472,7 @@ mod tests {
             model::parse_column_regex(r"Bump (?<container>.+?)(?: from \S+)? to (?<version>\S+)$")
                 .unwrap(),
         );
-        let screen = lines(&draw(&mut app, 160, 30));
+        let screen = lines(&draw(&mut app, 200, 30));
 
         let header = screen.iter().find(|line| line.contains("Checks")).unwrap();
         assert!(header.contains("container") && header.contains("version"));
@@ -1439,7 +1501,7 @@ mod tests {
             Some(model::parse_column_regex(r"Bump (?<container>.+?) to (?<version>\S+)$").unwrap());
 
         press(&mut app, "f3.4");
-        let screen = lines(&draw(&mut app, 160, 30));
+        let screen = lines(&draw(&mut app, 200, 30));
         assert!(screen.iter().any(|line| line.contains("#2")));
         assert!(!screen.iter().any(|line| line.contains("#1")));
 
@@ -1448,7 +1510,7 @@ mod tests {
             app.update(Msg::Key(KeyCode::Backspace.into()));
         }
         press(&mut app, "Bump");
-        let screen = lines(&draw(&mut app, 160, 30));
+        let screen = lines(&draw(&mut app, 200, 30));
         assert!(screen.iter().any(|line| line.contains("No PRs match")));
     }
 
@@ -1462,7 +1524,7 @@ mod tests {
         assert_eq!(app.approvals_to_run().len(), 4);
         let epoch = app.batch_epoch();
         app.update(Msg::Approved(epoch, 1, Ok(())));
-        let screen = lines(&draw(&mut app, 160, 30));
+        let screen = lines(&draw(&mut app, 200, 30));
         // The popup draws over the table, so a status shares its line with a table row.
         let with = |text: &str| screen.iter().filter(|line| line.contains(text)).count();
         assert_eq!(with("✓ done"), 1);
@@ -1471,7 +1533,7 @@ mod tests {
         assert!(screen.iter().any(|line| line.contains("q: Cancel")));
 
         press(&mut app, "q");
-        let screen = lines(&draw(&mut app, 160, 30));
+        let screen = lines(&draw(&mut app, 200, 30));
         assert!(screen.iter().any(|line| line.contains("Cancelled: 2 PRs")));
         assert!(
             screen
@@ -1483,7 +1545,7 @@ mod tests {
     #[test]
     fn the_pull_request_box_shows_the_title_and_a_summary() {
         let mut app = app_with(vec![pr(7, "Bump example-lib", "OPEN", "APPROVED")]);
-        let screen = lines(&draw(&mut app, 160, 30));
+        let screen = lines(&draw(&mut app, 200, 30));
         assert!(screen.iter().any(|line| line.contains("Pull request")));
         // Until the details load, only what the list knows is shown.
         let summary = screen
@@ -1500,7 +1562,7 @@ mod tests {
         }))
         .unwrap();
         app.details_loaded(7, Ok(details));
-        let buffer = draw(&mut app, 160, 30);
+        let buffer = draw(&mut app, 200, 30);
         let screen = lines(&buffer);
         let title = screen
             .iter()
@@ -1521,12 +1583,12 @@ mod tests {
     #[test]
     fn dims_everything_behind_a_popup() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        let plain = draw(&mut app, 160, 30);
+        let plain = draw(&mut app, 200, 30);
         let table = find(&plain, "is:pr").unwrap();
         assert!(!plain[table].modifier.contains(Modifier::DIM));
 
         press(&mut app, "?");
-        let buffer = draw(&mut app, 160, 30);
+        let buffer = draw(&mut app, 200, 30);
         assert!(buffer[table].modifier.contains(Modifier::DIM));
         let popup = find(&buffer, "Keys").unwrap();
         let inside = Position::new(popup.x + 2, popup.y + 1);
@@ -1547,7 +1609,7 @@ mod tests {
     #[test]
     fn a_click_focuses_the_pane_under_it() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         let panes = [
             (Pane::Checks, app.drawn.areas.checks),
             (Pane::Comments, app.drawn.areas.comments),
@@ -1610,7 +1672,7 @@ mod tests {
         .unwrap();
         app.details_loaded(1, Ok(details));
         app.diff_loaded(1, Ok(vec!["+added"; 200].join("\n")));
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         app
     }
 
@@ -1664,7 +1726,7 @@ mod tests {
         let mut app = app_with_long_panes();
         app.focus = Pane::Checks;
         press(&mut app, "jj");
-        let buffer = draw(&mut app, 160, 40);
+        let buffer = draw(&mut app, 200, 40);
         assert_eq!(app.scroll.check, 2);
         // The first row under the header is check 0; the highlight is on the third.
         let checks = app.drawn.areas.checks;
@@ -1676,11 +1738,11 @@ mod tests {
         assert!(!reversed(0) && !reversed(1) && reversed(2));
 
         // It stays through redraws, and goes back to the first when the PR changes.
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         assert_eq!(app.scroll.check, 2);
         app.focus = Pane::Table;
         press(&mut app, "j");
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         assert_eq!(app.scroll.check, 0);
     }
 
@@ -1697,7 +1759,7 @@ mod tests {
         }))
         .unwrap();
         app.details_loaded(1, Ok(details));
-        let screen = lines(&draw(&mut app, 160, 40));
+        let screen = lines(&draw(&mut app, 200, 40));
         assert!(screen.iter().any(|line| line.contains("scroll tables")));
         assert!(!screen.iter().any(|line| line.contains("END")));
 
@@ -1705,13 +1767,13 @@ mod tests {
         for _ in 0..20 {
             press(&mut app, "l");
         }
-        let screen = lines(&draw(&mut app, 160, 40));
+        let screen = lines(&draw(&mut app, 200, 40));
         assert!(screen.iter().any(|line| line.contains("END")));
         // The prose stays where it was, and the scroll stops at the table's end.
         assert!(screen.iter().any(|line| line.contains("Some prose")));
         let at_end = app.scroll.description_x;
         press(&mut app, "l");
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         assert_eq!(app.scroll.description_x, at_end);
 
         // And it scrolls back.
@@ -1744,12 +1806,12 @@ mod tests {
         app.details_loaded(1, Ok(details));
         app.focus = Pane::Comments;
         // Collapsed, there are only the headers.
-        let screen = lines(&draw(&mut app, 160, 40));
+        let screen = lines(&draw(&mut app, 200, 40));
         assert!(screen.iter().any(|line| line.contains("▶ @someone")));
         assert!(!screen.iter().any(|line| line.contains("Some bold prose")));
 
         press(&mut app, "j ");
-        let screen = lines(&draw(&mut app, 160, 40));
+        let screen = lines(&draw(&mut app, 200, 40));
         assert!(screen.iter().any(|line| line.contains("▼ @someone")));
         assert!(screen.iter().any(|line| line.contains("Some bold prose")));
         assert!(!screen.iter().any(|line| line.contains("END")));
@@ -1757,12 +1819,12 @@ mod tests {
         for _ in 0..20 {
             press(&mut app, "l");
         }
-        let screen = lines(&draw(&mut app, 160, 40));
+        let screen = lines(&draw(&mut app, 200, 40));
         assert!(screen.iter().any(|line| line.contains("END")));
 
         // Collapsing hides it again.
         press(&mut app, " ");
-        let screen = lines(&draw(&mut app, 160, 40));
+        let screen = lines(&draw(&mut app, 200, 40));
         assert!(!screen.iter().any(|line| line.contains("Some bold prose")));
     }
 
@@ -1777,7 +1839,7 @@ mod tests {
         assert_eq!(app.scroll.comment, 1);
         assert!(app.scroll.comments_open.contains(&1));
         assert!(app.focus == Pane::Comments);
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         // The body is under the header now, and a click on it does nothing more.
         click(&mut app, header(2));
         assert_eq!(app.scroll.comment, 1);
@@ -1796,12 +1858,12 @@ mod tests {
         let comments = app.drawn.areas.comments;
         click(&mut app, Position::new(comments.x + 2, comments.y + 1));
         assert!(app.scroll.comments_open.contains(&0));
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         // Scroll to the end, where the pane's scroll has been clamped, so the second comment's
         // header is some way down the pane.
         let second = app.drawn.comment_layout.items[1].0;
         app.scroll.comments = u16::MAX;
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         let row = u16::try_from(second).unwrap() - app.scroll.comments;
         assert!(row > 0);
         click(
@@ -1820,7 +1882,7 @@ mod tests {
         click(&mut app, Position::new(checks.x + 2, checks.y + 3));
         assert_eq!(app.scroll.check, 1);
         app.scroll.checks = 5;
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         click(&mut app, Position::new(checks.x + 2, checks.y + 2));
         assert_eq!(app.scroll.check, 5);
         // The border and the header highlight nothing.
@@ -1855,7 +1917,7 @@ mod tests {
         // Only the 20 even PRs are shown; the table is too short to show them all.
         press(&mut app, "feven");
         app.update(Msg::Key(KeyCode::Enter.into()));
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         let rows = app.drawn.areas.table_rows;
         click(&mut app, Position::new(rows.x + 5, rows.y + 2));
         assert_eq!(app.table.selected(), Some(2));
@@ -1865,7 +1927,7 @@ mod tests {
         for _ in 0..30 {
             press(&mut app, "j");
         }
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         let offset = app.drawn.areas.table_offset;
         assert!(offset > 0);
         let rows = app.drawn.areas.table_rows;
@@ -1883,13 +1945,13 @@ mod tests {
             pr(1, "Bump alpha", "OPEN", ""),
             pr(2, "Bump beta", "OPEN", ""),
         ]);
-        draw(&mut app, 160, 30);
+        draw(&mut app, 200, 30);
         let rows = app.drawn.areas.table_rows;
         // The checkbox of the second row, while the first is highlighted.
         click(&mut app, Position::new(rows.x + 1, rows.y + 1));
         assert_eq!(app.selected, HashSet::from([2]));
         assert_eq!(app.table.selected(), Some(1));
-        let buffer = draw(&mut app, 160, 30);
+        let buffer = draw(&mut app, 200, 30);
         assert!(
             lines(&buffer)
                 .iter()
@@ -1915,7 +1977,7 @@ mod tests {
             pr(1, "Bump alpha", "OPEN", ""),
             pr(2, "Bump beta", "OPEN", ""),
         ]);
-        draw(&mut app, 160, 30);
+        draw(&mut app, 200, 30);
         let rows = app.drawn.areas.table_rows;
         click(&mut app, Position::new(rows.x + 5, rows.y + 1));
         assert_eq!(app.table.selected(), Some(1));
@@ -1927,7 +1989,7 @@ mod tests {
     #[test]
     fn the_mouse_is_ignored_in_a_dialog() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         let diff = Position::new(app.drawn.areas.diff.x + 2, app.drawn.areas.diff.y + 1);
         press(&mut app, "?");
         click(&mut app, diff);
@@ -1957,7 +2019,7 @@ mod tests {
         press(&mut app, " j ");
         ctrl_g(&mut app);
         assert!(matches!(app.mode, Mode::Confirm(_)));
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         app
     }
 
@@ -1972,14 +2034,14 @@ mod tests {
             crossterm::event::KeyModifiers::CONTROL,
         )));
         assert!(matches!(app.mode, Mode::ConfirmOpen(_)));
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         app
     }
 
     #[test]
     fn the_buttons_are_recorded_where_they_are_drawn() {
         let mut app = app_confirming();
-        let buffer = draw(&mut app, 160, 40);
+        let buffer = draw(&mut app, 200, 40);
         let drawn: Vec<String> = app
             .drawn
             .buttons
@@ -2031,7 +2093,7 @@ mod tests {
     fn clicking_ok_closes_the_help_and_results_popups() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "?");
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         assert_eq!(app.drawn.buttons.len(), 1);
         click_button(&mut app, 0);
         assert!(matches!(app.mode, Mode::List));
@@ -2041,7 +2103,7 @@ mod tests {
         // `q` cancels the running batch, which shows the results.
         press(&mut app, "q");
         assert!(matches!(app.mode, Mode::Results(_)));
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         click_button(&mut app, 0);
         assert!(matches!(app.mode, Mode::List));
     }
@@ -2080,7 +2142,7 @@ mod tests {
     fn a_click_does_nothing_while_a_batch_runs() {
         let mut app = app_confirming();
         click_button(&mut app, 0);
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         assert!(app.drawn.buttons.is_empty());
         for position in [Position::new(80, 20), Position::new(0, 0)] {
             click(&mut app, position);
@@ -2093,7 +2155,7 @@ mod tests {
         let mut app = app_confirming();
         assert!(!app.drawn.buttons.is_empty());
         press(&mut app, "q");
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         assert!(app.drawn.buttons.is_empty());
     }
 
@@ -2109,7 +2171,7 @@ mod tests {
         key(&mut app, KeyCode::Tab);
         key(&mut app, KeyCode::Tab);
         press(&mut app, " ");
-        let buffer = draw(&mut app, 160, 40);
+        let buffer = draw(&mut app, 200, 40);
         let areas = &app.drawn.areas;
         for (name, area) in [
             ("checks", areas.checks),
@@ -2124,7 +2186,7 @@ mod tests {
     #[test]
     fn a_pane_whose_text_fits_has_no_scrollbar() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        let buffer = draw(&mut app, 160, 40);
+        let buffer = draw(&mut app, 200, 40);
         let areas = &app.drawn.areas;
         for (name, area) in [
             ("table", areas.table),
@@ -2140,11 +2202,11 @@ mod tests {
     #[test]
     fn the_table_has_a_scrollbar_only_with_more_rows_than_fit() {
         let mut app = app_with((1..=80).map(|n| pr(n, "Bump", "OPEN", "")).collect());
-        let buffer = draw(&mut app, 160, 40);
+        let buffer = draw(&mut app, 200, 40);
         assert!(has_scrollbar(&buffer, app.drawn.areas.table));
 
         press(&mut app, "f#80");
-        let buffer = draw(&mut app, 160, 40);
+        let buffer = draw(&mut app, 200, 40);
         assert!(!has_scrollbar(&buffer, app.drawn.areas.table));
     }
 
@@ -2156,7 +2218,7 @@ mod tests {
                 .filter(|&y| buffer[(area.right() - 1, y)].symbol() == "█")
                 .collect()
         };
-        let buffer = draw(&mut app, 160, 40);
+        let buffer = draw(&mut app, 200, 40);
         let diff = app.drawn.areas.diff;
         let at_top = thumb_rows(&buffer, diff);
         assert_eq!(at_top.first(), Some(&(diff.y + 1)));
@@ -2166,7 +2228,7 @@ mod tests {
             key(&mut app, KeyCode::Tab);
         }
         key(&mut app, KeyCode::End);
-        let buffer = draw(&mut app, 160, 40);
+        let buffer = draw(&mut app, 200, 40);
         let at_bottom = thumb_rows(&buffer, diff);
         assert_eq!(at_bottom.last(), Some(&(diff.bottom() - 2)));
         assert!(at_bottom.first() > Some(&(diff.y + 1)));
@@ -2177,7 +2239,7 @@ mod tests {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "fbump");
         key(&mut app, KeyCode::Enter);
-        let buffer = draw(&mut app, 160, 40);
+        let buffer = draw(&mut app, 200, 40);
         let search = app.drawn.areas.search;
         let filter = app.drawn.areas.filter;
         // Not being edited: nothing is cyan.
@@ -2185,7 +2247,7 @@ mod tests {
         assert_ne!(buffer[(filter.x, filter.y + 1)].fg, Color::Cyan);
 
         press(&mut app, "/");
-        let buffer = draw(&mut app, 160, 40);
+        let buffer = draw(&mut app, 200, 40);
         assert_eq!(buffer[(search.x, search.y + 1)].fg, Color::Cyan);
         assert_eq!(buffer[(search.x + 1, search.y)].fg, Color::Cyan);
         assert_ne!(buffer[(search.x + 1, search.y + 1)].fg, Color::Cyan);
@@ -2193,7 +2255,7 @@ mod tests {
 
         key(&mut app, KeyCode::Esc);
         press(&mut app, "f");
-        let buffer = draw(&mut app, 160, 40);
+        let buffer = draw(&mut app, 200, 40);
         assert_eq!(buffer[(filter.x, filter.y + 1)].fg, Color::Cyan);
         assert_ne!(buffer[(filter.x + 1, filter.y + 1)].fg, Color::Cyan);
         assert_ne!(buffer[(search.x, search.y + 1)].fg, Color::Cyan);
@@ -2206,7 +2268,7 @@ mod tests {
             pr(1, "Bump alpha", "OPEN", ""),
             pr(2, "Bump beta", "OPEN", ""),
         ]);
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         let rows = app.drawn.areas.table_rows;
         let diff = app.drawn.areas.diff;
         let drag = |app: &mut App, x: u16, y: u16| {
@@ -2233,10 +2295,118 @@ mod tests {
         assert_eq!(app.highlighted().unwrap().pr.number, 1);
         assert!(app.focus == Pane::Table);
     }
+
+    #[test]
+    fn a_wide_terminal_puts_the_list_beside_the_details() {
+        let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
+        draw(&mut app, 200, 40);
+        let areas = &app.drawn.areas;
+        // The list, checks and comments are one column on the left, the details on the right.
+        assert_eq!(areas.table.x, 0);
+        assert!(areas.table.width <= 100);
+        assert_eq!(areas.checks.y, areas.table.bottom());
+        assert_eq!(areas.comments.y, areas.checks.bottom());
+        assert!(areas.description.x >= areas.table.right());
+        assert_eq!(areas.diff.x, areas.description.x);
+    }
+
+    #[test]
+    fn a_narrow_terminal_gives_the_list_the_full_width_above_everything_else() {
+        let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
+        draw(&mut app, 120, 40);
+        let areas = &app.drawn.areas;
+        assert_eq!((areas.table.x, areas.table.width), (0, 120));
+        for (name, area) in [
+            ("checks", areas.checks),
+            ("comments", areas.comments),
+            ("description", areas.description),
+            ("diff", areas.diff),
+        ] {
+            assert!(area.y >= areas.table.bottom(), "{name} is below the list");
+        }
+    }
+
+    #[test]
+    fn a_narrow_terminal_puts_the_description_beside_the_diff_above_the_checks_and_comments() {
+        let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
+        draw(&mut app, 120, 40);
+        let areas = &app.drawn.areas;
+        // The description is on the left and the diff on the right, in the same rows.
+        assert_eq!(areas.description.x, 0);
+        assert!(areas.diff.x >= areas.description.right());
+        assert_eq!(
+            areas.diff.y,
+            areas.description.y.saturating_sub(PULL_REQUEST_ROWS)
+        );
+        assert_eq!(areas.diff.bottom(), areas.description.bottom());
+        // The checks and comments are side by side below them, a short row.
+        assert_eq!(areas.checks.y, areas.description.bottom());
+        assert_eq!(areas.comments.y, areas.checks.y);
+        assert_eq!(areas.checks.x, 0);
+        assert!(areas.comments.x >= areas.checks.right());
+        assert_eq!(areas.comments.bottom(), 40 - 1);
+        assert!(areas.checks.height <= MAX_COMMENTS_ROWS);
+        assert!(areas.description.height > areas.checks.height);
+    }
+
+    #[test]
+    fn a_short_narrow_terminal_still_gives_the_checks_and_comments_a_few_rows() {
+        let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
+        draw(&mut app, 100, 24);
+        assert!(app.drawn.areas.checks.height >= MIN_LOWER_ROWS);
+        assert!(app.drawn.areas.comments.height >= MIN_LOWER_ROWS);
+    }
+
+    #[test]
+    fn the_layout_changes_at_the_width_limit() {
+        for (width, wide) in [
+            (WIDE_LAYOUT_MIN_WIDTH - 1, false),
+            (WIDE_LAYOUT_MIN_WIDTH, true),
+        ] {
+            let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
+            draw(&mut app, width, 40);
+            assert_eq!(app.drawn.areas.table.width < width, wide, "{width}");
+        }
+    }
+
+    #[test]
+    fn a_narrow_terminal_shows_the_author_and_title_in_the_list() {
+        let mut app = app_with(vec![by("app/renovate", 1, "Bump alpha")]);
+        let screen = lines(&draw(&mut app, 120, 40));
+        let row = screen
+            .iter()
+            .find(|l| l.contains("[ ]") && l.contains("#1"))
+            .unwrap();
+        assert!(row.contains("app/renovate") && row.contains("Bump alpha"));
+    }
+
+    #[test]
+    fn every_pane_is_drawn_and_clickable_in_a_narrow_terminal() {
+        let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
+        draw(&mut app, 100, 40);
+        for pane in [
+            Pane::Checks,
+            Pane::Comments,
+            Pane::Description,
+            Pane::Diff,
+            Pane::Table,
+        ] {
+            let area = match pane {
+                Pane::Table => app.drawn.areas.table,
+                Pane::Checks => app.drawn.areas.checks,
+                Pane::Comments => app.drawn.areas.comments,
+                Pane::Description => app.drawn.areas.description,
+                Pane::Diff => app.drawn.areas.diff,
+            };
+            assert!(area.width > 2 && area.height > 2, "{pane:?}");
+            click(&mut app, Position::new(area.x + 1, area.y + 1));
+            assert!(app.focus == pane, "{pane:?}");
+        }
+    }
     #[test]
     fn the_wheel_is_ignored_while_a_box_is_edited() {
         let mut app = app_with_long_panes();
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         let diff = Position::new(app.drawn.areas.diff.x + 2, app.drawn.areas.diff.y + 1);
         press(&mut app, "f");
         wheel(&mut app, diff, true);
@@ -2261,7 +2431,7 @@ mod tests {
     #[test]
     fn a_click_on_the_search_box_edits_the_query_with_the_cursor_there() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         click_search(&mut app, 3);
         assert!(app.typing == Typing::Search);
         assert_eq!(app.query.cursor(), 3);
@@ -2273,14 +2443,14 @@ mod tests {
     #[test]
     fn a_click_on_the_filter_box_edits_the_filter_only_while_it_is_drawn() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         assert_eq!(app.drawn.areas.filter, Rect::default());
         click(&mut app, Position::new(2, 4));
         assert!(app.typing != Typing::Filter);
 
         press(&mut app, "fbump");
         key(&mut app, KeyCode::Enter);
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         assert!(app.typing == Typing::Nothing);
         click_filter(&mut app, 2);
         assert!(app.typing == Typing::Filter);
@@ -2291,10 +2461,10 @@ mod tests {
     fn the_filter_box_has_no_area_once_it_is_emptied() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "fbump");
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         assert!(app.drawn.areas.filter != Rect::default());
         key(&mut app, KeyCode::Esc);
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         assert_eq!(app.drawn.areas.filter, Rect::default());
     }
 
@@ -2302,7 +2472,7 @@ mod tests {
     fn a_click_on_the_other_box_switches_to_it() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "fbump");
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         click_search(&mut app, 0);
         assert!(app.typing == Typing::Search);
         assert_eq!(app.filter.value(), "bump");
@@ -2316,7 +2486,7 @@ mod tests {
             pr(1, "Bump alpha", "OPEN", ""),
             pr(2, "Bump beta", "OPEN", ""),
         ]);
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         press(&mut app, "/");
         press(&mut app, " label:deps");
         let rows = app.drawn.areas.table_rows;
@@ -2327,7 +2497,7 @@ mod tests {
         assert!(app.list_to_fetch().is_none(), "not submitted");
         // The click did what it does anywhere else.
         assert_eq!(app.highlighted().unwrap().pr.number, 2);
-        let screen = lines(&draw(&mut app, 160, 40));
+        let screen = lines(&draw(&mut app, 200, 40));
         assert!(screen.iter().any(|l| l.contains("not searched")));
 
         // `/` resumes the same text, and Esc restores the searched query.
@@ -2335,7 +2505,7 @@ mod tests {
         assert_eq!(app.query.value(), "is:pr label:deps");
         key(&mut app, KeyCode::Esc);
         assert_eq!(app.query.value(), "is:pr");
-        let screen = lines(&draw(&mut app, 160, 40));
+        let screen = lines(&draw(&mut app, 200, 40));
         assert!(!screen.iter().any(|l| l.contains("not searched")));
     }
 
@@ -2346,7 +2516,7 @@ mod tests {
             pr(2, "Update beta", "OPEN", ""),
         ]);
         press(&mut app, "fbump");
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         let diff = Position::new(app.drawn.areas.diff.x + 2, app.drawn.areas.diff.y + 1);
         click(&mut app, diff);
 
@@ -2359,7 +2529,7 @@ mod tests {
     #[test]
     fn ctrl_r_runs_the_submitted_query_not_the_unsearched_text() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        draw(&mut app, 160, 40);
+        draw(&mut app, 200, 40);
         press(&mut app, "/");
         press(&mut app, " label:deps");
         click(&mut app, Position::new(2, 38));
@@ -2375,7 +2545,7 @@ mod tests {
     fn says_when_the_filter_hides_every_pr() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "fzzz");
-        let screen = lines(&draw(&mut app, 160, 30));
+        let screen = lines(&draw(&mut app, 200, 30));
         assert!(
             screen
                 .iter()
@@ -2393,7 +2563,7 @@ mod tests {
             "?: Help | /: Search",
             "?: Help | /: Search",
         ] {
-            let screen = lines(&draw(&mut app, 160, 30));
+            let screen = lines(&draw(&mut app, 200, 30));
             let bar = screen.last().unwrap();
             assert!(bar.contains(expected), "{:?} in {bar:?}", app.focus);
             // The keys of the other panes are not on it.
@@ -2409,7 +2579,7 @@ mod tests {
     fn the_help_popup_groups_the_keys_by_pane() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "?");
-        let screen = lines(&draw(&mut app, 160, 60));
+        let screen = lines(&draw(&mut app, 200, 60));
         // The panes behind the popup have titles too, so look from the popup's own.
         let top = screen
             .iter()
@@ -2586,7 +2756,7 @@ mod tests {
     fn a_failed_details_fetch_shows_gh_s_first_line_in_the_comments_and_description() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         app.details_loaded(1, Err(gh_failure()));
-        let screen = lines(&draw(&mut app, 160, 40)).join("\n");
+        let screen = lines(&draw(&mut app, 200, 40)).join("\n");
         // Once in each of the Comments and Description panes.
         let message = "Failed to load details: GraphQL: Could not resolve to a PullRequest";
         assert_eq!(screen.matches(message).count(), 2, "{screen}");
