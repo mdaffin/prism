@@ -93,6 +93,7 @@ Press `?` in the program for the full list.
 | `Ctrl-G` | Review the selected PRs, from any pane. |
 | `Ctrl-O` | Open the selected PRs in the browser, from any pane. Asks first for more than five. |
 | `Ctrl-R` | Run the query again, keeping the selection. |
+| `p` | Pause or resume the timed refresh. It also pauses while the terminal is out of focus, if the terminal reports that, and catches up when focus returns. |
 | `Esc` | Clear the filter, then the selection. |
 | `q` | Quit, close a dialog, or cancel a running batch. |
 | `Ctrl-C` | Quit from anywhere. |

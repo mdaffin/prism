@@ -95,6 +95,11 @@ pub const KEYS: &[KeyHelp] = &[
         None,
     ),
     key("Ctrl-R", "Run the query again, keeping the selection", None),
+    key(
+        "p",
+        "Pause or resume the timed refresh, which also pauses while the terminal is out of focus",
+        None,
+    ),
     key("Esc", "Clear the filter, then the selection", None),
     key(
         "q",

@@ -157,6 +157,7 @@ impl App {
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Char('o') => self.open_focused(),
             KeyCode::Char('y') => self.copy_focused(),
+            KeyCode::Char('p') => self.toggle_refresh_paused(),
             KeyCode::Char('q') => self.should_quit = true,
             // Esc never quits: it is too easy to hit by accident. It clears the filter, then
             // the selection.

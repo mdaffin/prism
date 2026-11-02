@@ -155,6 +155,9 @@ fn status_line(app: &App, width: u16) -> String {
     if let Some(failure) = &app.status.failure {
         parts.push(format!("Refresh failed: {failure}"));
     }
+    if app.status.paused() {
+        parts.push("Refresh paused".to_string());
+    }
     parts.extend(app.note.clone());
     if let Some(hints) = mode_hints(app) {
         parts.push(hints.to_string());
@@ -1971,6 +1974,19 @@ mod tests {
             !pane.contains("more detail") && !pane.contains("gh pr view"),
             "{pane}"
         );
+    }
+
+    #[test]
+    fn the_status_bar_says_when_the_refresh_is_paused() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        assert!(!status_bar(&mut app, 160).contains("Refresh paused"));
+        press(&mut app, "p");
+        assert!(status_bar(&mut app, 160).starts_with("Refresh paused | "));
+        press(&mut app, "p");
+        app.update(Msg::FocusLost);
+        assert!(status_bar(&mut app, 160).contains("Refresh paused"));
+        app.update(Msg::FocusGained);
+        assert!(!status_bar(&mut app, 160).contains("Refresh paused"));
     }
 
     #[test]

@@ -1782,6 +1782,71 @@ fn a_timed_refresh_covers_the_open_rows_once_at_a_time() {
 }
 
 #[test]
+fn a_timed_refresh_that_came_due_out_of_focus_runs_when_focus_returns() {
+    let mut app = app_with_rows(2);
+    app.update(Msg::FocusLost);
+    assert!(app.status.paused());
+    // The timer keeps firing, and nothing starts.
+    assert!(start_status_refresh(&mut app).is_none());
+    assert!(start_status_refresh(&mut app).is_none());
+    // Back in focus, the missed one runs at once, with no wait for the next tick.
+    app.update(Msg::FocusGained);
+    assert!(!app.status.paused());
+    assert!(app.status_to_fetch().is_some());
+    // Only one, and nothing is owed afterwards.
+    assert!(app.status_to_fetch().is_none());
+}
+
+#[test]
+fn losing_and_regaining_focus_without_a_missed_refresh_starts_none() {
+    let mut app = app_with_rows(2);
+    app.update(Msg::FocusLost);
+    app.update(Msg::FocusGained);
+    assert!(app.status_to_fetch().is_none());
+    // The timer works as before.
+    assert!(start_status_refresh(&mut app).is_some());
+}
+
+#[test]
+fn p_pauses_and_resumes_the_timed_refresh() {
+    let mut app = app_with_rows(2);
+    press(&mut app, "p");
+    assert!(app.status.paused());
+    assert!(start_status_refresh(&mut app).is_none());
+    // Resuming runs the one that was missed.
+    press(&mut app, "p");
+    assert!(!app.status.paused());
+    assert!(app.status_to_fetch().is_some());
+
+    // Pausing with nothing missed doesn't start one on resuming.
+    press(&mut app, "pp");
+    assert!(app.status_to_fetch().is_none());
+}
+
+#[test]
+fn a_refresh_stays_paused_until_both_focus_and_the_key_allow_it() {
+    let mut app = app_with_rows(2);
+    press(&mut app, "p");
+    app.update(Msg::FocusLost);
+    assert!(start_status_refresh(&mut app).is_none());
+    // Focus is back, but `p` still holds it.
+    app.update(Msg::FocusGained);
+    assert!(app.status.paused());
+    assert!(app.status_to_fetch().is_none());
+    press(&mut app, "p");
+    assert!(app.status_to_fetch().is_some());
+}
+
+#[test]
+fn ctrl_r_still_runs_the_query_while_paused() {
+    let mut app = app_with_rows(2);
+    app.update(Msg::FocusLost);
+    press(&mut app, "p");
+    ctrl_r(&mut app);
+    assert!(app.list_to_fetch().is_some());
+}
+
+#[test]
 fn a_timed_refresh_waits_for_a_search_a_batch_and_row_refreshes() {
     let mut app = app_with_rows(2);
     press(&mut app, "/");

@@ -125,6 +125,19 @@ pub struct StatusRefresh {
     in_flight: bool,
     /// Why the last refresh failed, shown in the status bar until one succeeds.
     pub failure: Option<String>,
+    /// Whether the terminal has lost focus, which many report. Nobody is looking, so it pauses.
+    unfocused: bool,
+    /// Whether `p` paused it, for terminals that don't report focus.
+    paused_by_hand: bool,
+    /// Whether a refresh came due while it was paused, to run when it resumes.
+    missed: bool,
+}
+
+impl StatusRefresh {
+    /// Whether the timed refresh is paused. Ctrl-R still runs the query again.
+    pub fn paused(&self) -> bool {
+        self.unfocused || self.paused_by_hand
+    }
 }
 
 /// The errors shown above the status bar.
@@ -316,6 +329,9 @@ pub enum Msg {
     Tick,
     /// Time for a timed status refresh.
     RefreshDue,
+    /// The terminal gained or lost the focus.
+    FocusGained,
+    FocusLost,
     /// The result of the timed status refresh with this id.
     StatusRefreshed(RefreshId, StatusUpdate),
 }
@@ -397,6 +413,19 @@ impl App {
         RefreshId {
             list_id: self.list.id,
             batch_epoch: self.batch_epoch,
+        }
+    }
+
+    /// `p`: pauses the timed refresh, or resumes it.
+    fn toggle_refresh_paused(&mut self) {
+        self.status.paused_by_hand = !self.status.paused_by_hand;
+        self.run_missed_refresh();
+    }
+
+    /// Asks for the refresh that came due while paused, now that nothing holds it back.
+    fn run_missed_refresh(&mut self) {
+        if !self.status.paused() && std::mem::take(&mut self.status.missed) {
+            self.status.requested = self.can_refresh();
         }
     }
 
@@ -500,7 +529,13 @@ impl App {
             Msg::Key(key) => self.on_key(key),
             Msg::Mouse(mouse) => self.on_mouse(mouse),
             Msg::Tick => self.spinner = self.spinner.wrapping_add(1),
+            Msg::RefreshDue if self.status.paused() => self.status.missed = true,
             Msg::RefreshDue => self.status.requested = self.can_refresh(),
+            Msg::FocusLost => self.status.unfocused = true,
+            Msg::FocusGained => {
+                self.status.unfocused = false;
+                self.run_missed_refresh();
+            }
             Msg::StatusRefreshed(id, update) => {
                 self.status.in_flight = false;
                 // Results for a list or batch state that has since changed are dropped.

@@ -16,7 +16,8 @@ use std::time::Duration;
 use clap::Parser;
 use color_eyre::eyre::Result;
 use crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyEventKind, MouseEventKind,
+    DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event,
+    EventStream, KeyEventKind, MouseEventKind,
 };
 use crossterm::execute;
 use futures::StreamExt;
@@ -39,16 +40,23 @@ async fn main() -> Result<()> {
 
     let terminal = ratatui::init();
     let mouse = !args.no_mouse;
+    // Focus events pause the timed refresh while the terminal is out of focus. A terminal that
+    // doesn't report them ignores the request.
+    execute!(std::io::stdout(), EnableFocusChange)?;
     if mouse {
         execute!(std::io::stdout(), EnableMouseCapture)?;
-        // ratatui's panic hook doesn't know about the mouse.
-        let hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            let _ = execute!(std::io::stdout(), DisableMouseCapture);
-            hook(info)
-        }));
     }
+    // ratatui's panic hook doesn't know about the mouse or the focus events.
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = execute!(std::io::stdout(), DisableFocusChange);
+        if mouse {
+            let _ = execute!(std::io::stdout(), DisableMouseCapture);
+        }
+        hook(info)
+    }));
     let result = run(terminal, args).await;
+    let _ = execute!(std::io::stdout(), DisableFocusChange);
     if mouse {
         let _ = execute!(std::io::stdout(), DisableMouseCapture);
     }
@@ -86,6 +94,8 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
             Some(event) = events.next() => match event? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => Msg::Key(key),
                 Event::Mouse(mouse) => Msg::Mouse(mouse),
+                Event::FocusGained => Msg::FocusGained,
+                Event::FocusLost => Msg::FocusLost,
                 // Anything else, such as a resize, only needs a redraw.
                 _ => continue,
             },
