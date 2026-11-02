@@ -78,6 +78,12 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     .areas(top_area);
 
     frame.render_widget(Line::from(app.title()).bold().reversed(), title_area);
+    app.drawn.areas.search = search_area;
+    app.drawn.areas.filter = if filter_rows > 0 {
+        filter_area
+    } else {
+        Rect::default()
+    };
     search(app, frame, search_area);
     if filter_rows > 0 {
         filter(app, frame, filter_area);
@@ -668,6 +674,9 @@ fn search(app: &App, frame: &mut Frame, area: Rect) {
     let mut title = Line::from("Search");
     if app.list.searching {
         title.push_span(format!(" · {} searching", spinner(app)).yellow().bold());
+    }
+    if app.typing != Typing::Search && app.query_is_unsearched() {
+        title.push_span(" · not searched".dim());
     }
     let mut block = Block::bordered().title(title);
     if app.typing == Typing::Search {
@@ -1812,17 +1821,154 @@ mod tests {
     }
 
     #[test]
-    fn the_mouse_is_ignored_in_a_dialog_or_a_box() {
+    fn the_mouse_is_ignored_in_a_dialog() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         draw(&mut app, 160, 40);
         let diff = Position::new(app.drawn.areas.diff.x + 2, app.drawn.areas.diff.y + 1);
         press(&mut app, "?");
         click(&mut app, diff);
         assert!(app.focus == Pane::Table);
-        press(&mut app, "q");
+        // Not even a box's area is live behind a dialog.
+        click(&mut app, Position::new(2, 2));
+        assert!(app.typing == Typing::Nothing);
+    }
+
+    #[test]
+    fn the_wheel_is_ignored_while_a_box_is_edited() {
+        let mut app = app_with_long_panes();
+        draw(&mut app, 160, 40);
+        let diff = Position::new(app.drawn.areas.diff.x + 2, app.drawn.areas.diff.y + 1);
         press(&mut app, "f");
+        wheel(&mut app, diff, true);
+        assert_eq!(app.scroll.diff, 0);
+    }
+
+    fn key(app: &mut App, code: KeyCode) {
+        app.update(Msg::Key(code.into()));
+    }
+
+    /// Clicks `column` characters into the text of the search box, as last drawn.
+    fn click_search(app: &mut App, column: u16) {
+        let area = app.drawn.areas.search;
+        click(app, Position::new(area.x + 1 + column, area.y + 1));
+    }
+
+    fn click_filter(app: &mut App, column: u16) {
+        let area = app.drawn.areas.filter;
+        click(app, Position::new(area.x + 1 + column, area.y + 1));
+    }
+
+    #[test]
+    fn a_click_on_the_search_box_edits_the_query_with_the_cursor_there() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        draw(&mut app, 160, 40);
+        click_search(&mut app, 3);
+        assert!(app.typing == Typing::Search);
+        assert_eq!(app.query.cursor(), 3);
+        // Past the end of the text puts the cursor at the end.
+        click_search(&mut app, 60);
+        assert_eq!(app.query.cursor(), app.query.value().chars().count());
+    }
+
+    #[test]
+    fn a_click_on_the_filter_box_edits_the_filter_only_while_it_is_drawn() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        draw(&mut app, 160, 40);
+        assert_eq!(app.drawn.areas.filter, Rect::default());
+        click(&mut app, Position::new(2, 4));
+        assert!(app.typing != Typing::Filter);
+
+        press(&mut app, "fbump");
+        key(&mut app, KeyCode::Enter);
+        draw(&mut app, 160, 40);
+        assert!(app.typing == Typing::Nothing);
+        click_filter(&mut app, 2);
+        assert!(app.typing == Typing::Filter);
+        assert_eq!(app.filter.cursor(), 2);
+    }
+
+    #[test]
+    fn the_filter_box_has_no_area_once_it_is_emptied() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        press(&mut app, "fbump");
+        draw(&mut app, 160, 40);
+        assert!(app.drawn.areas.filter != Rect::default());
+        key(&mut app, KeyCode::Esc);
+        draw(&mut app, 160, 40);
+        assert_eq!(app.drawn.areas.filter, Rect::default());
+    }
+
+    #[test]
+    fn a_click_on_the_other_box_switches_to_it() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        press(&mut app, "fbump");
+        draw(&mut app, 160, 40);
+        click_search(&mut app, 0);
+        assert!(app.typing == Typing::Search);
+        assert_eq!(app.filter.value(), "bump");
+        click_filter(&mut app, 0);
+        assert!(app.typing == Typing::Filter);
+    }
+
+    #[test]
+    fn a_click_on_the_table_leaves_the_search_box_keeping_its_text_unsearched() {
+        let mut app = app_with(vec![
+            pr(1, "Bump alpha", "OPEN", ""),
+            pr(2, "Bump beta", "OPEN", ""),
+        ]);
+        draw(&mut app, 160, 40);
+        press(&mut app, "/");
+        press(&mut app, " label:deps");
+        let rows = app.drawn.areas.table_rows;
+        click(&mut app, Position::new(rows.x + 20, rows.y + 1));
+
+        assert!(app.typing == Typing::Nothing);
+        assert_eq!(app.query.value(), "is:pr label:deps");
+        assert!(app.list_to_fetch().is_none(), "not submitted");
+        // The click did what it does anywhere else.
+        assert_eq!(app.highlighted().unwrap().pr.number, 2);
+        let screen = lines(&draw(&mut app, 160, 40));
+        assert!(screen.iter().any(|l| l.contains("not searched")));
+
+        // `/` resumes the same text, and Esc restores the searched query.
+        press(&mut app, "/");
+        assert_eq!(app.query.value(), "is:pr label:deps");
+        key(&mut app, KeyCode::Esc);
+        assert_eq!(app.query.value(), "is:pr");
+        let screen = lines(&draw(&mut app, 160, 40));
+        assert!(!screen.iter().any(|l| l.contains("not searched")));
+    }
+
+    #[test]
+    fn a_click_on_a_pane_leaves_the_filter_box_keeping_its_filter() {
+        let mut app = app_with(vec![
+            pr(1, "Bump alpha", "OPEN", ""),
+            pr(2, "Update beta", "OPEN", ""),
+        ]);
+        press(&mut app, "fbump");
+        draw(&mut app, 160, 40);
+        let diff = Position::new(app.drawn.areas.diff.x + 2, app.drawn.areas.diff.y + 1);
         click(&mut app, diff);
-        assert!(app.focus == Pane::Table);
+
+        assert!(app.typing == Typing::Nothing);
+        assert!(app.focus == Pane::Diff);
+        assert_eq!(app.filter.value(), "bump");
+        assert_eq!(app.visible_rows().count(), 1);
+    }
+
+    #[test]
+    fn ctrl_r_runs_the_submitted_query_not_the_unsearched_text() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        draw(&mut app, 160, 40);
+        press(&mut app, "/");
+        press(&mut app, " label:deps");
+        click(&mut app, Position::new(2, 38));
+        app.update(Msg::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('r'),
+            crossterm::event::KeyModifiers::CONTROL,
+        )));
+        let (_, query) = app.list_to_fetch().unwrap();
+        assert_eq!(query, "is:pr");
     }
 
     #[test]

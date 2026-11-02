@@ -803,6 +803,12 @@ impl App {
         }
     }
 
+    /// Whether the search box holds text that has not been searched for, after a click away from
+    /// it.
+    pub fn query_is_unsearched(&self) -> bool {
+        self.query.value() != self.submitted_query
+    }
+
     /// Whether the table has an Author column: not when the search names one author, as every row
     /// would show the same name.
     pub fn shows_author(&self) -> bool {

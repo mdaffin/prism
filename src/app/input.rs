@@ -4,8 +4,9 @@ use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::layout::Position;
-use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
+use tui_input::{Input, InputRequest};
+use unicode_width::UnicodeWidthChar;
 
 use super::{App, Mode, Pane, Typing};
 use crate::batch::on_confirm_key;
@@ -13,13 +14,36 @@ use crate::batch::on_confirm_key;
 /// The columns that a key press or a notch of the wheel scrolls a pane sideways.
 const SIDEWAYS_COLUMNS: isize = 8;
 
+/// The index of the character of `text` drawn at `column`, counted in display columns from its
+/// start, or its length when `column` is past the end.
+fn char_at_column(text: &str, column: usize) -> usize {
+    let mut x = 0;
+    for (index, c) in text.chars().enumerate() {
+        x += c.width().unwrap_or(0);
+        if column < x {
+            return index;
+        }
+    }
+    text.chars().count()
+}
+
 impl App {
-    /// The mouse is ignored while a dialog is open or a box is being edited.
+    /// The mouse is ignored while a dialog is open. While a box is being edited only a click does
+    /// anything: on a box it moves the cursor or switches to the other box, and anywhere else it
+    /// leaves the box, keeping its text, and then does what it does on any other day.
     pub(super) fn on_mouse(&mut self, mouse: MouseEvent) {
-        if !matches!(self.mode, Mode::Loading | Mode::List) || self.typing != Typing::Nothing {
+        if !matches!(self.mode, Mode::Loading | Mode::List) {
             return;
         }
         let position = Position::new(mouse.column, mouse.row);
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+            if self.click_box(position) {
+                return;
+            }
+            self.typing = Typing::Nothing;
+        } else if self.typing != Typing::Nothing {
+            return;
+        }
         let Some(pane) = self.drawn.areas.at(position) else {
             return;
         };
@@ -59,6 +83,30 @@ impl App {
             MouseEventKind::ScrollUp => self.wheel(pane, -1),
             _ => {}
         }
+    }
+
+    /// Starts editing the box under `position`, if there is one, with the cursor at the clicked
+    /// column. Returns whether there was one.
+    fn click_box(&mut self, position: Position) -> bool {
+        let (typing, area) = if self.drawn.areas.search.contains(position) {
+            (Typing::Search, self.drawn.areas.search)
+        } else if self.drawn.areas.filter.contains(position) {
+            (Typing::Filter, self.drawn.areas.filter)
+        } else {
+            return false;
+        };
+        self.typing = typing;
+        let input = match typing {
+            Typing::Filter => &mut self.filter,
+            _ => &mut self.query,
+        };
+        // The text starts inside the border, scrolled to keep the cursor in view.
+        let width = usize::from(area.width.saturating_sub(2));
+        let column =
+            usize::from(position.x.saturating_sub(area.x + 1)) + input.visual_scroll(width);
+        let index = char_at_column(input.value(), column);
+        input.handle(InputRequest::SetCursor(index));
+        true
     }
 
     pub(super) fn on_key(&mut self, key: KeyEvent) {
@@ -182,5 +230,27 @@ impl App {
             KeyCode::Enter => self.enter_focused(),
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::char_at_column;
+
+    #[test]
+    fn a_column_maps_to_the_character_drawn_there() {
+        assert_eq!(char_at_column("is:pr", 0), 0);
+        assert_eq!(char_at_column("is:pr", 3), 3);
+        assert_eq!(char_at_column("is:pr", 5), 5);
+        assert_eq!(char_at_column("is:pr", 40), 5);
+        assert_eq!(char_at_column("", 3), 0);
+    }
+
+    #[test]
+    fn a_wide_character_takes_two_columns() {
+        // `日` is columns 1 and 2, so a click on either is on it.
+        assert_eq!(char_at_column("a日b", 1), 1);
+        assert_eq!(char_at_column("a日b", 2), 1);
+        assert_eq!(char_at_column("a日b", 3), 2);
     }
 }

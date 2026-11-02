@@ -114,6 +114,10 @@ const WHEEL_LINES: isize = 3;
 #[derive(Default)]
 pub struct PaneAreas {
     pub table: Rect,
+    /// The search box.
+    pub search: Rect,
+    /// The filter box. Empty while it is not drawn, so a stale rectangle can't catch a click.
+    pub filter: Rect,
     /// The table's rows, below its header. Empty while no rows are drawn.
     pub table_rows: Rect,
     /// The checkbox column of `table_rows`.

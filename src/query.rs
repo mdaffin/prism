@@ -30,7 +30,9 @@ mod tests {
 
     #[test]
     fn one_author_qualifier_names_one_author() {
-        assert!(names_one_author("is:pr state:open author:app/renovate label:deps"));
+        assert!(names_one_author(
+            "is:pr state:open author:app/renovate label:deps"
+        ));
         assert!(names_one_author("author:alice"));
     }
 
