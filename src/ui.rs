@@ -41,6 +41,9 @@ const REVIEW_WIDTH: u16 = 11;
 /// Fits `app/renovate` and a typical login; a longer one is cut.
 const AUTHOR_WIDTH: u16 = 16;
 
+/// The columns between two buttons.
+const BUTTON_GAP: u16 = 2;
+
 /// The width of the checks pane's status column, which fits `… pending` and a space.
 const CHECK_STATUS_WIDTH: u16 = 10;
 
@@ -114,16 +117,17 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     );
 }
 
-/// The popup over the table that the mode asks for, if any.
-fn draw_dialog(app: &App, frame: &mut Frame, area: Rect) {
-    match &app.mode {
+/// The popup over the table that the mode asks for, if any. Records where its buttons are.
+fn draw_dialog(app: &mut App, frame: &mut Frame, area: Rect) {
+    let buttons = match &app.mode {
         Mode::Confirm(confirm) => confirm_dialog(confirm, app.dry_run, frame, area),
         Mode::ConfirmOpen(confirm) => open_dialog(confirm, frame, area),
         Mode::Help => help_popup(frame, area),
         Mode::Running(batch) => running_popup(batch, app.dry_run, spinner(app), frame, area),
         Mode::Results(summary) => results_popup(summary, app.dry_run, frame, area),
-        Mode::Loading | Mode::List => {}
-    }
+        Mode::Loading | Mode::List => Vec::new(),
+    };
+    app.drawn.buttons = buttons;
 }
 
 /// The hints of the modes other than the list, for the end of the status line. The list's are
@@ -344,7 +348,7 @@ fn pr_row<'a>(row: &'a app::Row, selected: bool, author: bool, columns: Option<&
     }
 }
 
-fn confirm_dialog(confirm: &Confirm, dry_run: bool, frame: &mut Frame, area: Rect) {
+fn confirm_dialog(confirm: &Confirm, dry_run: bool, frame: &mut Frame, area: Rect) -> Vec<Rect> {
     let mut lines: Vec<Line> = confirm
         .prs
         .iter()
@@ -375,7 +379,8 @@ fn confirm_dialog(confirm: &Confirm, dry_run: bool, frame: &mut Frame, area: Rec
     }
     footer.push(Line::default());
     let labels = confirm.choices().iter().map(|choice| choice.label());
-    footer.push(button_row(labels, confirm.choice));
+    let buttons = button_row(labels, confirm.choice);
+    footer.push(buttons.line);
 
     let title = format!("Review {}", count(confirm.prs.len(), "PR"));
     // One PR per line: long titles are cut off rather than wrapped.
@@ -385,14 +390,16 @@ fn confirm_dialog(confirm: &Confirm, dry_run: bool, frame: &mut Frame, area: Rec
         lines,
         wrap: false,
         footer,
+        buttons: buttons.widths,
     };
-    popup(frame, area, dialog);
+    popup(frame, area, dialog)
 }
 
-fn open_dialog(confirm: &ConfirmOpen, frame: &mut Frame, area: Rect) {
+fn open_dialog(confirm: &ConfirmOpen, frame: &mut Frame, area: Rect) -> Vec<Rect> {
     let lines = vec![Line::from(pr_list(&confirm.numbers))];
     let highlighted = if confirm.open { 0 } else { 1 };
-    let footer = vec![Line::default(), button_row(["Open", "Cancel"], highlighted)];
+    let buttons = button_row(["Open", "Cancel"], highlighted);
+    let footer = vec![Line::default(), buttons.line];
     let title = format!(
         "Open {} in the browser?",
         count(confirm.numbers.len(), "PR")
@@ -403,11 +410,12 @@ fn open_dialog(confirm: &ConfirmOpen, frame: &mut Frame, area: Rect) {
         lines,
         wrap: true,
         footer,
+        buttons: buttons.widths,
     };
-    popup(frame, area, dialog);
+    popup(frame, area, dialog)
 }
 
-fn help_popup(frame: &mut Frame, area: Rect) {
+fn help_popup(frame: &mut Frame, area: Rect) -> Vec<Rect> {
     let mut lines = Vec::new();
     for (pane, title) in keys::GROUPS {
         let mut group = keys::group(pane).peekable();
@@ -420,18 +428,26 @@ fn help_popup(frame: &mut Frame, area: Rect) {
         lines.push(Line::from(title).bold());
         lines.extend(group.map(|help| Line::from(format!("{:<16} {}", help.keys, help.action))));
     }
-    let footer = vec![Line::default(), Line::from("[ OK ]".reversed()).centered()];
+    let buttons = button_row(["OK"], 0);
+    let footer = vec![Line::default(), buttons.line];
     let help = Popup {
         title: "Keys".to_string(),
         dry_run: false,
         lines,
         wrap: false,
         footer,
+        buttons: buttons.widths,
     };
-    popup(frame, area, help);
+    popup(frame, area, help)
 }
 
-fn running_popup(batch: &Batch, dry_run: bool, spinner: &str, frame: &mut Frame, area: Rect) {
+fn running_popup(
+    batch: &Batch,
+    dry_run: bool,
+    spinner: &str,
+    frame: &mut Frame,
+    area: Rect,
+) -> Vec<Rect> {
     let (finished, total) = batch.progress();
     let progress = format!("{spinner} {finished}/{total} done");
     let step = if batch.is_merging() {
@@ -454,8 +470,9 @@ fn running_popup(batch: &Batch, dry_run: bool, spinner: &str, frame: &mut Frame,
         lines,
         wrap: true,
         footer,
+        buttons: Vec::new(),
     };
-    popup(frame, area, running);
+    popup(frame, area, running)
 }
 
 fn item_style(status: &ItemStatus) -> Style {
@@ -468,7 +485,7 @@ fn item_style(status: &ItemStatus) -> Style {
     }
 }
 
-fn results_popup(summary: &Summary, dry_run: bool, frame: &mut Frame, area: Rect) {
+fn results_popup(summary: &Summary, dry_run: bool, frame: &mut Frame, area: Rect) -> Vec<Rect> {
     let mut lines = vec![Line::from(format!(
         "Approved: {}/{}",
         summary.approved, summary.total
@@ -512,7 +529,8 @@ fn results_popup(summary: &Summary, dry_run: bool, frame: &mut Frame, area: Rect
             .yellow(),
         );
     }
-    let footer = vec![Line::default(), Line::from("[ OK ]".reversed()).centered()];
+    let buttons = button_row(["OK"], 0);
+    let footer = vec![Line::default(), buttons.line];
     // Errors can be long, so they wrap.
     let results = Popup {
         title: "Results".to_string(),
@@ -520,8 +538,9 @@ fn results_popup(summary: &Summary, dry_run: bool, frame: &mut Frame, area: Rect
         lines,
         wrap: true,
         footer,
+        buttons: buttons.widths,
     };
-    popup(frame, area, results);
+    popup(frame, area, results)
 }
 
 /// What a popup shows.
@@ -534,18 +553,21 @@ struct Popup<'a> {
     wrap: bool,
     /// Lines pinned to the bottom, such as buttons.
     footer: Vec<Line<'a>>,
+    /// The widths of the buttons on the last footer line, which `button_row` drew centred.
+    buttons: Vec<u16>,
 }
 
 /// Draws a bordered popup in the middle of `area`. The footer lines are pinned to the bottom so
 /// they stay visible even when `lines` doesn't fit. Wrapped lines are sized by estimate, so with
-/// `wrap` the popup may cut off the end of `lines`.
-fn popup(frame: &mut Frame, area: Rect, popup: Popup) {
+/// `wrap` the popup may cut off the end of `lines`. Returns where its buttons were drawn.
+fn popup(frame: &mut Frame, area: Rect, popup: Popup) -> Vec<Rect> {
     let Popup {
         mut title,
         dry_run,
         lines,
         wrap,
         footer,
+        buttons,
     } = popup;
     if dry_run {
         title.push_str(" [DRY RUN]");
@@ -584,6 +606,25 @@ fn popup(frame: &mut Frame, area: Rect, popup: Popup) {
     frame.render_widget(block, area);
     frame.render_widget(content, content_area);
     frame.render_widget(Paragraph::new(footer), footer_area);
+    button_areas(&buttons, footer_area)
+}
+
+/// Where the centred buttons of a row of the given widths are, on the last row of `footer`.
+fn button_areas(widths: &[u16], footer: Rect) -> Vec<Rect> {
+    if widths.is_empty() || footer.is_empty() {
+        return Vec::new();
+    }
+    let total = widths.iter().sum::<u16>() + BUTTON_GAP * (widths.len() as u16 - 1);
+    let mut x = footer.x + footer.width.saturating_sub(total) / 2;
+    let y = footer.bottom() - 1;
+    widths
+        .iter()
+        .map(|&width| {
+            let area = Rect::new(x, y, width, 1);
+            x += width + BUTTON_GAP;
+            area
+        })
+        .collect()
 }
 
 /// The colour of a row's checks. The checks of a closed or merged PR no longer matter, so they
@@ -603,18 +644,31 @@ fn pr_list(numbers: &[u64]) -> String {
 }
 
 /// A row of buttons, centred, with the one at `highlighted` reversed.
-fn button_row<'a>(labels: impl IntoIterator<Item = &'a str>, highlighted: usize) -> Line<'static> {
-    let mut buttons = Line::default();
+fn button_row<'a>(labels: impl IntoIterator<Item = &'a str>, highlighted: usize) -> ButtonRow {
+    let mut line = Line::default();
+    let mut widths = Vec::new();
     for (i, label) in labels.into_iter().enumerate() {
+        if i > 0 {
+            line.push_span(" ".repeat(usize::from(BUTTON_GAP)));
+        }
         let label = format!("[ {label} ]");
-        buttons.push_span(if i == highlighted {
+        widths.push(label.chars().count() as u16);
+        line.push_span(if i == highlighted {
             label.reversed()
         } else {
             label.into()
         });
-        buttons.push_span("  ");
     }
-    buttons.centered()
+    ButtonRow {
+        line: line.centered(),
+        widths,
+    }
+}
+
+/// A row of buttons and the width of each, for working out where they were drawn.
+struct ButtonRow {
+    line: Line<'static>,
+    widths: Vec<u16>,
 }
 
 /// Green for passing, yellow for pending or no checks, red for failing or a conflict.
@@ -1833,6 +1887,165 @@ mod tests {
         assert!(app.typing == Typing::Nothing);
     }
 
+    /// The centre of the dialog's `index`th button, as last drawn.
+    fn button(app: &App, index: usize) -> Position {
+        let area = app.drawn.buttons[index];
+        Position::new(area.x + area.width / 2, area.y)
+    }
+
+    fn click_button(app: &mut App, index: usize) {
+        let position = button(app, index);
+        click(app, position);
+    }
+
+    /// An app with the confirm dialog open for two PRs, drawn.
+    fn app_confirming() -> App {
+        let mut app = app_with(vec![
+            pr(1, "Bump alpha", "OPEN", ""),
+            pr(2, "Bump beta", "OPEN", ""),
+        ]);
+        press(&mut app, " j ");
+        ctrl_g(&mut app);
+        assert!(matches!(app.mode, Mode::Confirm(_)));
+        draw(&mut app, 160, 40);
+        app
+    }
+
+    /// An app with the dialog that asks before opening six PRs open, drawn.
+    fn app_confirming_open() -> App {
+        let mut app = app_with((1..=6).map(|n| pr(n, "Bump", "OPEN", "")).collect());
+        for _ in 0..6 {
+            press(&mut app, " j");
+        }
+        app.update(Msg::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('o'),
+            crossterm::event::KeyModifiers::CONTROL,
+        )));
+        assert!(matches!(app.mode, Mode::ConfirmOpen(_)));
+        draw(&mut app, 160, 40);
+        app
+    }
+
+    #[test]
+    fn the_buttons_are_recorded_where_they_are_drawn() {
+        let mut app = app_confirming();
+        let buffer = draw(&mut app, 160, 40);
+        let drawn: Vec<String> = app
+            .drawn
+            .buttons
+            .iter()
+            .map(|area| {
+                (area.x..area.right())
+                    .map(|x| buffer[(x, area.y)].symbol())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(drawn, ["[ Approve ]", "[ Approve & merge ]", "[ Cancel ]"]);
+    }
+
+    #[test]
+    fn clicking_approve_or_approve_and_merge_starts_the_batch() {
+        for (index, merge) in [(0, false), (1, true)] {
+            let mut app = app_confirming();
+            click_button(&mut app, index);
+            let Mode::Running(batch) = &app.mode else {
+                panic!("button {index} did not start the batch");
+            };
+            assert_eq!(batch.merge, merge);
+            assert_eq!(app.approvals_to_run(), [1, 2]);
+        }
+    }
+
+    #[test]
+    fn clicking_cancel_closes_the_confirm_dialog() {
+        let mut app = app_confirming();
+        click_button(&mut app, 2);
+        assert!(matches!(app.mode, Mode::List));
+        assert!(app.approvals_to_run().is_empty());
+    }
+
+    #[test]
+    fn clicking_open_or_cancel_answers_the_open_dialog() {
+        let mut app = app_confirming_open();
+        click_button(&mut app, 0);
+        assert!(matches!(app.mode, Mode::List));
+        assert_eq!(app.opens_to_run(), [1, 2, 3, 4, 5, 6]);
+
+        let mut app = app_confirming_open();
+        click_button(&mut app, 1);
+        assert!(matches!(app.mode, Mode::List));
+        assert!(app.opens_to_run().is_empty());
+    }
+
+    #[test]
+    fn clicking_ok_closes_the_help_and_results_popups() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        press(&mut app, "?");
+        draw(&mut app, 160, 40);
+        assert_eq!(app.drawn.buttons.len(), 1);
+        click_button(&mut app, 0);
+        assert!(matches!(app.mode, Mode::List));
+
+        let mut app = app_confirming();
+        click_button(&mut app, 0);
+        // `q` cancels the running batch, which shows the results.
+        press(&mut app, "q");
+        assert!(matches!(app.mode, Mode::Results(_)));
+        draw(&mut app, 160, 40);
+        click_button(&mut app, 0);
+        assert!(matches!(app.mode, Mode::List));
+    }
+
+    #[test]
+    fn a_click_on_the_dialog_but_not_a_button_or_outside_it_does_nothing() {
+        let mut app = app_confirming();
+        let first = app.drawn.buttons[0];
+        // The row above the buttons is inside the dialog; (0, 0) is outside it, on the title.
+        for position in [Position::new(first.x, first.y - 1), Position::new(0, 0)] {
+            click(&mut app, position);
+            let Mode::Confirm(confirm) = &app.mode else {
+                panic!("the dialog closed");
+            };
+            assert_eq!(confirm.choice, 0);
+        }
+        // Between two buttons.
+        let gap = app.drawn.buttons[0].right();
+        click(&mut app, Position::new(gap, first.y));
+        assert!(matches!(app.mode, Mode::Confirm(_)));
+        // Nor does a click behind it reach the panes.
+        let diff = Position::new(app.drawn.areas.diff.x + 2, app.drawn.areas.diff.y + 1);
+        click(&mut app, diff);
+        assert!(app.focus == Pane::Table);
+    }
+
+    #[test]
+    fn the_wheel_over_a_button_does_nothing() {
+        let mut app = app_confirming();
+        let position = button(&app, 0);
+        wheel(&mut app, position, true);
+        assert!(matches!(app.mode, Mode::Confirm(_)));
+    }
+
+    #[test]
+    fn a_click_does_nothing_while_a_batch_runs() {
+        let mut app = app_confirming();
+        click_button(&mut app, 0);
+        draw(&mut app, 160, 40);
+        assert!(app.drawn.buttons.is_empty());
+        for position in [Position::new(80, 20), Position::new(0, 0)] {
+            click(&mut app, position);
+            assert!(matches!(app.mode, Mode::Running(_)));
+        }
+    }
+
+    #[test]
+    fn no_buttons_are_recorded_once_the_dialog_closes() {
+        let mut app = app_confirming();
+        assert!(!app.drawn.buttons.is_empty());
+        press(&mut app, "q");
+        draw(&mut app, 160, 40);
+        assert!(app.drawn.buttons.is_empty());
+    }
     #[test]
     fn the_wheel_is_ignored_while_a_box_is_edited() {
         let mut app = app_with_long_panes();

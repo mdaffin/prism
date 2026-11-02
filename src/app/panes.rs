@@ -91,6 +91,9 @@ pub struct Drawn {
     pub page: u16,
     /// Where each pane was drawn, for the mouse.
     pub areas: PaneAreas,
+    /// Where the open dialog's buttons are, in the order they are drawn. Empty when no dialog with
+    /// buttons is open, so a stale rectangle can't catch a click.
+    pub buttons: Vec<Rect>,
     pub comment_layout: CommentLayout,
     pub checks_layout: ChecksLayout,
 }
@@ -101,6 +104,7 @@ impl Default for Drawn {
             // Before the first draw, a page is a row.
             page: 1,
             areas: PaneAreas::default(),
+            buttons: Vec::new(),
             comment_layout: CommentLayout::default(),
             checks_layout: ChecksLayout::default(),
         }

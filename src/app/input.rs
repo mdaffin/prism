@@ -28,11 +28,15 @@ fn char_at_column(text: &str, column: usize) -> usize {
 }
 
 impl App {
-    /// The mouse is ignored while a dialog is open. While a box is being edited only a click does
-    /// anything: on a box it moves the cursor or switches to the other box, and anywhere else it
-    /// leaves the box, keeping its text, and then does what it does on any other day.
+    /// While a dialog is open only a click on one of its buttons does anything. While a box is being
+    /// edited only a click does anything: on a box it moves the cursor or switches to the other
+    /// box, and anywhere else it leaves the box, keeping its text, and then does what it does on
+    /// any other day.
     pub(super) fn on_mouse(&mut self, mouse: MouseEvent) {
         if !matches!(self.mode, Mode::Loading | Mode::List) {
+            if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                self.click_button(Position::new(mouse.column, mouse.row));
+            }
             return;
         }
         let position = Position::new(mouse.column, mouse.row);
@@ -81,6 +85,32 @@ impl App {
             MouseEventKind::ScrollLeft => self.scroll_sideways(pane, -SIDEWAYS_COLUMNS),
             MouseEventKind::ScrollDown => self.wheel(pane, 1),
             MouseEventKind::ScrollUp => self.wheel(pane, -1),
+            _ => {}
+        }
+    }
+
+    /// Presses the dialog's button under `position`, if there is one: what Enter does with that
+    /// button highlighted.
+    fn click_button(&mut self, position: Position) {
+        let Some(index) = self
+            .drawn
+            .buttons
+            .iter()
+            .position(|button| button.contains(position))
+        else {
+            return;
+        };
+        match &mut self.mode {
+            Mode::Confirm(confirm) => {
+                confirm.choice = index;
+                self.on_key(KeyCode::Enter.into());
+            }
+            Mode::ConfirmOpen(confirm) => {
+                confirm.open = index == 0;
+                self.on_key(KeyCode::Enter.into());
+            }
+            // Enter does not close these, but Esc and `q` do, and OK says the same.
+            Mode::Help | Mode::Results(_) => self.mode = Mode::List,
             _ => {}
         }
     }
