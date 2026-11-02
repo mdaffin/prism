@@ -81,6 +81,28 @@ impl Pane {
     }
 }
 
+/// What the view found out as it drew, which `update` needs to act on what is on screen.
+pub struct Drawn {
+    /// The rows a PgUp/PgDn moves in the focused pane.
+    pub page: u16,
+    /// Where each pane was drawn, for the mouse.
+    pub areas: PaneAreas,
+    pub comment_layout: CommentLayout,
+    pub checks_layout: ChecksLayout,
+}
+
+impl Default for Drawn {
+    fn default() -> Self {
+        Self {
+            // Before the first draw, a page is a row.
+            page: 1,
+            areas: PaneAreas::default(),
+            comment_layout: CommentLayout::default(),
+            checks_layout: ChecksLayout::default(),
+        }
+    }
+}
+
 /// The lines that a notch of the wheel scrolls a pane.
 const WHEEL_LINES: isize = 3;
 
@@ -173,7 +195,7 @@ impl App {
     /// Up/Down in the checks pane: moves the highlight to another check and scrolls the view to
     /// keep it on screen.
     pub(super) fn step_checks(&mut self, by: isize) {
-        let count = self.checks_layout.count;
+        let count = self.drawn.checks_layout.count;
         let Some(last) = count.checked_sub(1) else {
             return;
         };
@@ -184,7 +206,7 @@ impl App {
     /// Highlights check `n`, and scrolls the view if it is off screen. The first check also shows
     /// the conflict row above it.
     pub(super) fn pick_check(&mut self, n: usize) {
-        let layout = &self.checks_layout;
+        let layout = &self.drawn.checks_layout;
         self.scroll.check = n;
         let row = n + layout.first;
         let top = usize::from(self.scroll.checks);
@@ -204,7 +226,7 @@ impl App {
     /// comment's header is on screen, and scrolls a line at a time until then, so a comment
     /// taller than the pane is read in full before moving on.
     pub(super) fn step_comments(&mut self, by: isize) {
-        let layout = &self.comment_layout;
+        let layout = &self.drawn.comment_layout;
         if layout.items.is_empty() {
             return;
         }
@@ -239,7 +261,7 @@ impl App {
     /// that Space toggles what is being read: the topmost one if it went off the top, the
     /// bottommost if it went off the bottom. A page or a jump doesn't do this.
     pub(super) fn keep_comment_on_screen(&mut self) {
-        let layout = &self.comment_layout;
+        let layout = &self.drawn.comment_layout;
         let Some(&(last_start, last_height)) = layout.items.last() else {
             return;
         };
@@ -265,12 +287,12 @@ impl App {
     /// A click on a check's row highlights it. A click on the header, the conflict row or below
     /// the last check does nothing more than focus the pane.
     pub(super) fn click_check(&mut self, position: Position) {
-        let area = self.areas.checks;
+        let area = self.drawn.areas.checks;
         // The pane's border is the first row and the table's header the second.
         let Some(row) = position.y.checked_sub(area.y + 2) else {
             return;
         };
-        let layout = &self.checks_layout;
+        let layout = &self.drawn.checks_layout;
         let row = usize::from(row);
         if row >= layout.viewport {
             return;
@@ -284,13 +306,13 @@ impl App {
     /// A click on a comment's header highlights it and expands or collapses it. A click on a
     /// body, or below the last comment, does nothing more than focus the pane.
     pub(super) fn click_comment(&mut self, position: Position) {
-        let area = self.areas.comments;
+        let area = self.drawn.areas.comments;
         // The pane's border is the first row, and the rows below it are the document.
         let Some(row) = position.y.checked_sub(area.y + 1) else {
             return;
         };
         let row = usize::from(row);
-        let layout = &self.comment_layout;
+        let layout = &self.drawn.comment_layout;
         if row >= layout.viewport {
             return;
         }
@@ -303,7 +325,7 @@ impl App {
 
     /// Expands or collapses the highlighted comment.
     pub(super) fn toggle_comment(&mut self) {
-        let Some(last) = self.comment_layout.items.len().checked_sub(1) else {
+        let Some(last) = self.drawn.comment_layout.items.len().checked_sub(1) else {
             return;
         };
         let current = self.scroll.comment.min(last);
@@ -314,7 +336,7 @@ impl App {
 
     /// PgUp/PgDn: a page in the focused pane.
     pub(super) fn page_focused(&mut self, direction: isize) {
-        self.move_focused(direction * self.page as isize);
+        self.move_focused(direction * self.drawn.page as isize);
     }
 
     /// Home/End: the first or last item of the table or the comments pane, and the top or bottom
@@ -323,17 +345,17 @@ impl App {
         match self.focus {
             Pane::Table => self.highlight(if end { usize::MAX } else { 0 }),
             Pane::Checks => {
-                if let Some(last) = self.checks_layout.count.checked_sub(1) {
+                if let Some(last) = self.drawn.checks_layout.count.checked_sub(1) {
                     self.pick_check(if end { last } else { 0 });
                 }
             }
             Pane::Comments => {
-                let Some(last) = self.comment_layout.items.len().checked_sub(1) else {
+                let Some(last) = self.drawn.comment_layout.items.len().checked_sub(1) else {
                     return;
                 };
                 let n = if end { last } else { 0 };
                 // The view pulls the scroll back so the pane isn't left past its end.
-                let start = self.comment_layout.items[n].0;
+                let start = self.drawn.comment_layout.items[n].0;
                 self.scroll.comment = n;
                 self.scroll.comments = u16::try_from(start).unwrap_or(u16::MAX);
             }

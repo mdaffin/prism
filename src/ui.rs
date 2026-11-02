@@ -130,14 +130,14 @@ const CHECKBOX_WIDTH: u16 = 3;
 /// The table of PRs in a bordered pane, or a message in its place while there are none.
 fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
     let table_block = pane_block("Pull requests", app.focus == Pane::Table);
-    app.areas.table = area;
-    app.areas.table_rows = Rect::default();
-    app.areas.table_checkboxes = Rect::default();
+    app.drawn.areas.table = area;
+    app.drawn.areas.table_rows = Rect::default();
+    app.drawn.areas.table_checkboxes = Rect::default();
     let table_area = table_block.inner(area);
     frame.render_widget(table_block, area);
     if app.focus == Pane::Table {
         // One row of the table is its header.
-        app.page = table_area.height.saturating_sub(2).max(1);
+        app.drawn.page = table_area.height.saturating_sub(2).max(1);
     }
 
     match app.mode {
@@ -221,16 +221,16 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
             }
             frame.render_stateful_widget(table, table_area, &mut app.table);
             // The header is one row.
-            app.areas.table_rows = Rect {
+            app.drawn.areas.table_rows = Rect {
                 y: table_area.y + 1,
                 height: table_area.height.saturating_sub(1),
                 ..table_area
             };
-            app.areas.table_checkboxes = Rect {
+            app.drawn.areas.table_checkboxes = Rect {
                 width: CHECKBOX_WIDTH,
-                ..app.areas.table_rows
+                ..app.drawn.areas.table_rows
             };
-            app.areas.table_offset = app.table.offset();
+            app.drawn.areas.table_offset = app.table.offset();
         }
     }
 }
@@ -545,12 +545,12 @@ fn max_scroll(content_rows: usize, area_rows: u16) -> u16 {
 }
 
 fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
-    app.areas.checks = area;
-    app.checks_layout = ChecksLayout::default();
+    app.drawn.areas.checks = area;
+    app.drawn.checks_layout = ChecksLayout::default();
     let block = pane_block("Checks", app.focus == Pane::Checks);
     let inner = block.inner(area);
     if app.focus == Pane::Checks {
-        app.page = inner.height.saturating_sub(2).max(1);
+        app.drawn.page = inner.height.saturating_sub(2).max(1);
     }
     frame.render_widget(block, area);
     let Some(row) = app.highlighted() else {
@@ -583,7 +583,7 @@ fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
         .header(Row::new(["Status", "Check"]).bold());
     let mut state = TableState::default().with_offset(usize::from(scroll));
     frame.render_stateful_widget(table, inner, &mut state);
-    app.checks_layout = ChecksLayout {
+    app.drawn.checks_layout = ChecksLayout {
         count,
         first,
         viewport: usize::from(inner.height.saturating_sub(1)),
@@ -603,8 +603,8 @@ fn styled_check_row<'a>(state: CheckState, name: &'a str) -> Row<'a> {
 /// The comments of the highlighted PR, as one scrolling document of headers that expand to show
 /// the comment under them.
 fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
-    app.areas.comments = area;
-    app.comment_layout = CommentLayout::default();
+    app.drawn.areas.comments = area;
+    app.drawn.comment_layout = CommentLayout::default();
     let block = pane_block("Comments", app.focus == Pane::Comments);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -678,9 +678,9 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     frame.render_widget(pane.scroll((scroll, 0)), inner);
 
     if app.focus == Pane::Comments {
-        app.page = inner.height.saturating_sub(1).max(1);
+        app.drawn.page = inner.height.saturating_sub(1).max(1);
     }
-    app.comment_layout = CommentLayout {
+    app.drawn.comment_layout = CommentLayout {
         items,
         viewport: usize::from(inner.height),
     };
@@ -690,11 +690,11 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
 }
 
 fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
-    app.areas.diff = area;
+    app.drawn.areas.diff = area;
     let block = pane_block("Diff", app.focus == Pane::Diff);
     let inner = block.inner(area);
     if app.focus == Pane::Diff {
-        app.page = inner.height.saturating_sub(1).max(1);
+        app.drawn.page = inner.height.saturating_sub(1).max(1);
     }
     let diff = app
         .highlighted()
@@ -763,11 +763,11 @@ fn pull_request(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn description(app: &mut App, frame: &mut Frame, area: Rect) {
-    app.areas.description = area;
+    app.drawn.areas.description = area;
     // The block's inner area doesn't depend on its title.
     let inner = pane_block("", false).inner(area);
     if app.focus == Pane::Description {
-        app.page = inner.height.saturating_sub(1).max(1);
+        app.drawn.page = inner.height.saturating_sub(1).max(1);
     }
     let width = usize::from(inner.width);
     let mut widest = 0;
@@ -1182,11 +1182,11 @@ mod tests {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         draw(&mut app, 160, 40);
         let panes = [
-            (Pane::Checks, app.areas.checks),
-            (Pane::Comments, app.areas.comments),
-            (Pane::Description, app.areas.description),
-            (Pane::Diff, app.areas.diff),
-            (Pane::Table, app.areas.table),
+            (Pane::Checks, app.drawn.areas.checks),
+            (Pane::Comments, app.drawn.areas.comments),
+            (Pane::Description, app.drawn.areas.description),
+            (Pane::Diff, app.drawn.areas.diff),
+            (Pane::Table, app.drawn.areas.table),
         ];
         for (pane, area) in panes {
             // The border counts as part of the pane, so click on it and inside it.
@@ -1260,7 +1260,7 @@ mod tests {
     fn the_wheel_scrolls_the_pane_under_the_pointer_without_moving_focus() {
         let mut app = app_with_long_panes();
         let inside = |area: Rect| Position::new(area.x + 2, area.y + 1);
-        let areas = &app.areas;
+        let areas = &app.drawn.areas;
         let at = Points {
             table: inside(areas.table),
             checks: inside(areas.checks),
@@ -1300,7 +1300,7 @@ mod tests {
         let buffer = draw(&mut app, 160, 40);
         assert_eq!(app.scroll.check, 2);
         // The first row under the header is check 0; the highlight is on the third.
-        let checks = app.areas.checks;
+        let checks = app.drawn.areas.checks;
         let reversed = |row: u16| {
             buffer[(checks.x + 2, checks.y + 2 + row)]
                 .modifier
@@ -1402,7 +1402,7 @@ mod tests {
     #[test]
     fn a_click_on_a_comment_header_highlights_and_toggles_it() {
         let mut app = app_with_long_panes();
-        let comments = app.areas.comments;
+        let comments = app.drawn.areas.comments;
         let header = |row: u16| Position::new(comments.x + 2, comments.y + 1 + row);
 
         // All collapsed: the headers are on consecutive rows.
@@ -1426,13 +1426,13 @@ mod tests {
     #[test]
     fn a_click_on_a_header_in_a_scrolled_pane_finds_the_right_comment() {
         let mut app = app_with_long_panes();
-        let comments = app.areas.comments;
+        let comments = app.drawn.areas.comments;
         click(&mut app, Position::new(comments.x + 2, comments.y + 1));
         assert!(app.scroll.comments_open.contains(&0));
         draw(&mut app, 160, 40);
         // Scroll to the end, where the pane's scroll has been clamped, so the second comment's
         // header is some way down the pane.
-        let second = app.comment_layout.items[1].0;
+        let second = app.drawn.comment_layout.items[1].0;
         app.scroll.comments = u16::MAX;
         draw(&mut app, 160, 40);
         let row = u16::try_from(second).unwrap() - app.scroll.comments;
@@ -1445,7 +1445,7 @@ mod tests {
     #[test]
     fn a_click_on_a_check_highlights_it_in_a_scrolled_pane() {
         let mut app = app_with_long_panes();
-        let checks = app.areas.checks;
+        let checks = app.drawn.areas.checks;
         // The first row under the header, then after scrolling the same row is a later check.
         click(&mut app, Position::new(checks.x + 2, checks.y + 3));
         assert_eq!(app.scroll.check, 1);
@@ -1463,7 +1463,7 @@ mod tests {
     #[test]
     fn the_wheel_is_ignored_in_a_dialog() {
         let mut app = app_with_long_panes();
-        let diff = Position::new(app.areas.diff.x + 2, app.areas.diff.y + 1);
+        let diff = Position::new(app.drawn.areas.diff.x + 2, app.drawn.areas.diff.y + 1);
         press(&mut app, "?");
         wheel(&mut app, diff, true);
         assert_eq!(app.scroll.diff, 0);
@@ -1486,7 +1486,7 @@ mod tests {
         press(&mut app, "feven");
         app.update(Msg::Key(KeyCode::Enter.into()));
         draw(&mut app, 160, 40);
-        let rows = app.areas.table_rows;
+        let rows = app.drawn.areas.table_rows;
         click(&mut app, Position::new(rows.x + 5, rows.y + 2));
         assert_eq!(app.table.selected(), Some(2));
         assert_eq!(app.highlighted().unwrap().pr.number, 6);
@@ -1496,9 +1496,9 @@ mod tests {
             press(&mut app, "j");
         }
         draw(&mut app, 160, 40);
-        let offset = app.areas.table_offset;
+        let offset = app.drawn.areas.table_offset;
         assert!(offset > 0);
-        let rows = app.areas.table_rows;
+        let rows = app.drawn.areas.table_rows;
         click(&mut app, Position::new(rows.x + 5, rows.y));
         assert_eq!(app.table.selected(), Some(offset));
         assert_eq!(
@@ -1514,7 +1514,7 @@ mod tests {
             pr(2, "Bump beta", "OPEN", ""),
         ]);
         draw(&mut app, 160, 30);
-        let rows = app.areas.table_rows;
+        let rows = app.drawn.areas.table_rows;
         // The checkbox of the second row, while the first is highlighted.
         click(&mut app, Position::new(rows.x + 1, rows.y + 1));
         assert_eq!(app.selected, HashSet::from([2]));
@@ -1546,7 +1546,7 @@ mod tests {
             pr(2, "Bump beta", "OPEN", ""),
         ]);
         draw(&mut app, 160, 30);
-        let rows = app.areas.table_rows;
+        let rows = app.drawn.areas.table_rows;
         click(&mut app, Position::new(rows.x + 5, rows.y + 1));
         assert_eq!(app.table.selected(), Some(1));
         click(&mut app, Position::new(rows.x + 5, rows.y - 1));
@@ -1558,7 +1558,7 @@ mod tests {
     fn the_mouse_is_ignored_in_a_dialog_or_a_box() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         draw(&mut app, 160, 40);
-        let diff = Position::new(app.areas.diff.x + 2, app.areas.diff.y + 1);
+        let diff = Position::new(app.drawn.areas.diff.x + 2, app.drawn.areas.diff.y + 1);
         press(&mut app, "?");
         click(&mut app, diff);
         assert!(app.focus == Pane::Table);

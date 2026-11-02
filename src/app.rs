@@ -17,7 +17,7 @@ mod input;
 mod panes;
 mod work;
 
-pub use panes::{ChecksLayout, CommentLayout, Pane, PaneAreas, Scroll};
+pub use panes::{ChecksLayout, CommentLayout, Drawn, Pane, Scroll};
 pub use work::{Details, Diff, Fetch};
 use work::forget_failed;
 
@@ -65,12 +65,8 @@ pub struct App {
     pub focus: Pane,
     /// How far the panes are scrolled, and the comment picked.
     pub scroll: Scroll,
-    /// The rows a PgUp/PgDn moves in the focused pane, set by the view as it draws.
-    pub page: u16,
-    /// Where the view drew each pane, set as it draws, for the mouse.
-    pub areas: PaneAreas,
-    pub comment_layout: CommentLayout,
-    pub checks_layout: ChecksLayout,
+    /// What the view found out as it drew: set by it, read by `update` and the mouse.
+    pub drawn: Drawn,
     /// The numbers of the PRs marked with Space.
     pub selected: HashSet<u64>,
     /// What to show above the status bar.
@@ -307,10 +303,7 @@ impl App {
             table: TableState::default(),
             focus: Pane::Table,
             scroll: Scroll::default(),
-            page: 1,
-            areas: PaneAreas::default(),
-            comment_layout: CommentLayout::default(),
-            checks_layout: ChecksLayout::default(),
+            drawn: Drawn::default(),
             errors: Errors::default(),
             opens_to_run: Vec::new(),
             pages_to_run: Vec::new(),

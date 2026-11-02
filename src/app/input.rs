@@ -20,7 +20,7 @@ impl App {
             return;
         }
         let position = Position::new(mouse.column, mouse.row);
-        let Some(pane) = self.areas.at(position) else {
+        let Some(pane) = self.drawn.areas.at(position) else {
             return;
         };
         match mouse.kind {
@@ -31,15 +31,15 @@ impl App {
                     Pane::Checks => self.click_check(position),
                     _ => {}
                 }
-                if self.areas.table_rows.contains(position) {
-                    let row = usize::from(position.y - self.areas.table_rows.y);
+                if self.drawn.areas.table_rows.contains(position) {
+                    let row = usize::from(position.y - self.drawn.areas.table_rows.y);
                     // Below the last row there is nothing to click.
-                    let index = self.areas.table_offset + row;
+                    let index = self.drawn.areas.table_offset + row;
                     if let Some(&row) = self.visible.get(index) {
                         // A click on the checkbox highlights the row too, so its diff can be
                         // read before moving on to the next.
                         self.highlight(index);
-                        if self.areas.table_checkboxes.contains(position) {
+                        if self.drawn.areas.table_checkboxes.contains(position) {
                             self.toggle(self.rows[row].pr.number);
                         }
                     }

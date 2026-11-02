@@ -429,7 +429,7 @@ fn app_with_check_pages() -> App {
     let mut app = App::new(String::new(), "is:pr".to_string(), false);
     let (id, _) = app.list_to_fetch().unwrap();
     app.update(Msg::PrsLoaded(id, Ok(vec![pr])));
-    app.checks_layout = ChecksLayout {
+    app.drawn.checks_layout = ChecksLayout {
         count: 3,
         first: 0,
         viewport: 5,
@@ -474,7 +474,7 @@ fn o_opens_the_highlighted_comment_and_falls_back_to_the_pr() {
     }))
     .unwrap();
     app.update(Msg::DetailsLoaded(1, Ok(details)));
-    app.comment_layout = CommentLayout {
+    app.drawn.comment_layout = CommentLayout {
         items: vec![(0, 1), (1, 1)],
         viewport: 5,
     };
@@ -1084,7 +1084,7 @@ fn focus(app: &mut App, pane: Pane) {
 #[test]
 fn tab_cycles_focus_and_arrows_act_on_the_focused_pane() {
     let mut app = app_with_rows(3);
-    app.page = 5;
+    app.drawn.page = 5;
     assert!(app.focus == Pane::Table);
 
     // The table moves its highlight; a page is clamped to the last row.
@@ -1095,7 +1095,7 @@ fn tab_cycles_focus_and_arrows_act_on_the_focused_pane() {
 
     key(&mut app, KeyCode::Tab);
     assert!(app.focus == Pane::Checks);
-    app.checks_layout = ChecksLayout {
+    app.drawn.checks_layout = ChecksLayout {
         count: 4,
         first: 0,
         viewport: 2,
@@ -1108,7 +1108,7 @@ fn tab_cycles_focus_and_arrows_act_on_the_focused_pane() {
     // In the comments pane the arrows go comment by comment, and a page scrolls.
     key(&mut app, KeyCode::Tab);
     assert!(app.focus == Pane::Comments);
-    app.comment_layout = CommentLayout {
+    app.drawn.comment_layout = CommentLayout {
         items: vec![(0, 1), (1, 1), (2, 1)],
         viewport: 5,
     };
@@ -1152,7 +1152,7 @@ fn tab_cycles_focus_and_arrows_act_on_the_focused_pane() {
 fn down_and_up_scroll_a_tall_comment_before_moving_to_the_next() {
     let mut app = app_with_rows(1);
     // A one line comment, an open one ten lines tall, and another one line comment.
-    app.comment_layout = CommentLayout {
+    app.drawn.comment_layout = CommentLayout {
         items: vec![(0, 1), (1, 10), (11, 1)],
         viewport: 5,
     };
@@ -1180,7 +1180,7 @@ fn down_and_up_scroll_a_tall_comment_before_moving_to_the_next() {
     press(&mut app, "k");
     assert_eq!(state(&app), (0, 0));
     // A page scrolls the view and leaves the highlight where it was, even off screen.
-    app.page = 4;
+    app.drawn.page = 4;
     app.scroll.comment = 0;
     app.scroll.comments = 0;
     key(&mut app, KeyCode::PageDown);
@@ -1197,7 +1197,7 @@ fn down_and_up_scroll_a_tall_comment_before_moving_to_the_next() {
 #[test]
 fn the_wheel_steps_through_the_comments_like_down_and_up() {
     let mut app = app_with_rows(1);
-    app.comment_layout = CommentLayout {
+    app.drawn.comment_layout = CommentLayout {
         items: vec![(0, 1), (1, 10), (11, 1)],
         viewport: 5,
     };
@@ -1222,7 +1222,7 @@ fn home_and_end_jump_to_the_first_and_last_item_or_the_ends_of_a_pane() {
     assert_eq!(app.table.selected(), Some(0));
 
     // In the comments the highlight goes to the first or last comment, with the view.
-    app.comment_layout = CommentLayout {
+    app.drawn.comment_layout = CommentLayout {
         items: vec![(0, 1), (1, 10), (11, 1)],
         viewport: 5,
     };
@@ -1242,7 +1242,7 @@ fn home_and_end_jump_to_the_first_and_last_item_or_the_ends_of_a_pane() {
     key(&mut app, KeyCode::End);
     assert_eq!(app.scroll.diff, u16::MAX);
     // In the checks too, and the view follows the highlight.
-    app.checks_layout = ChecksLayout {
+    app.drawn.checks_layout = ChecksLayout {
         count: 5,
         first: 0,
         viewport: 3,
@@ -1258,7 +1258,7 @@ fn home_and_end_jump_to_the_first_and_last_item_or_the_ends_of_a_pane() {
 fn up_and_down_move_the_checks_highlight_and_keep_it_on_screen() {
     let mut app = app_with_rows(1);
     // A conflict row above five checks, three rows high.
-    app.checks_layout = ChecksLayout {
+    app.drawn.checks_layout = ChecksLayout {
         count: 5,
         first: 1,
         viewport: 3,
@@ -1288,7 +1288,7 @@ fn up_and_down_move_the_checks_highlight_and_keep_it_on_screen() {
 #[test]
 fn enter_and_space_expand_the_highlighted_comment_instead_of_reviewing() {
     let mut app = app_with_rows(2);
-    app.comment_layout = CommentLayout {
+    app.drawn.comment_layout = CommentLayout {
         items: vec![(0, 1), (1, 1)],
         viewport: 5,
     };
