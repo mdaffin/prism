@@ -121,7 +121,7 @@ fn start_work(
             Msg::DiffLoaded(number, gh.pr_diff(number).await)
         });
     }
-    for number in app.refreshes_to_run() {
+    for number in app.refreshes_to_fetch() {
         spawn(gh, tx, async move |gh| {
             Msg::PrRefreshed(number, gh.pr(number).await)
         });

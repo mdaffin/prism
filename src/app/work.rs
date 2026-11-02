@@ -76,7 +76,7 @@ pub struct StatusFetch {
 
 impl App {
     /// Rows to refresh now, up to [`MAX_REFRESHES`] at once. The caller must start them.
-    pub fn refreshes_to_run(&mut self) -> Vec<u64> {
+    pub fn refreshes_to_fetch(&mut self) -> Vec<u64> {
         let free = MAX_REFRESHES.saturating_sub(self.refreshing.len());
         let numbers: Vec<u64> = self
             .to_refresh
@@ -89,12 +89,12 @@ impl App {
     /// PRs to open in the browser, one after another so the tabs come in table order. The caller
     /// must start them.
     pub fn opens_to_run(&mut self) -> Vec<u64> {
-        std::mem::take(&mut self.opens_to_run)
+        std::mem::take(&mut self.prs_to_open)
     }
 
     /// The pages to open in the browser now. The caller must open them.
     pub fn pages_to_run(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.pages_to_run)
+        std::mem::take(&mut self.pages_to_open)
     }
 
     /// The epoch of the running batch, which the results of its actions carry back.

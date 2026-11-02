@@ -73,9 +73,9 @@ pub struct App {
     /// What to show above the status bar.
     pub errors: Errors,
     /// PRs to open in the browser, in order.
-    opens_to_run: Vec<u64>,
+    prs_to_open: Vec<u64>,
     /// Pages (a check's or a comment's) to open in the browser, in order.
-    pages_to_run: Vec<String>,
+    pages_to_open: Vec<String>,
     /// Details by PR number. An entry is added when its fetch starts, so a PR is fetched once.
     pub details: HashMap<u64, Fetch<Details>>,
     /// Diffs by PR number. An entry is added when its fetch starts, so a PR is fetched once.
@@ -306,8 +306,8 @@ impl App {
             scroll: Scroll::default(),
             drawn: Drawn::default(),
             errors: Errors::default(),
-            opens_to_run: Vec::new(),
-            pages_to_run: Vec::new(),
+            prs_to_open: Vec::new(),
+            pages_to_open: Vec::new(),
             selected: HashSet::new(),
             details: HashMap::new(),
             diffs: HashMap::new(),
@@ -682,7 +682,7 @@ impl App {
         match page {
             Some(Ok(url)) => {
                 self.errors.opens.clear();
-                self.pages_to_run.push(url);
+                self.pages_to_open.push(url);
             }
             Some(Err(message)) => {
                 self.errors.opens.clear();
@@ -720,7 +720,7 @@ impl App {
                 open: true,
             });
         } else {
-            self.opens_to_run = numbers;
+            self.prs_to_open = numbers;
         }
     }
 

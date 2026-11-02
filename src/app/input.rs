@@ -78,7 +78,7 @@ impl App {
                 KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => confirm.open = true,
                 KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => confirm.open = false,
                 KeyCode::Enter if confirm.open => {
-                    self.opens_to_run = std::mem::take(&mut confirm.numbers);
+                    self.prs_to_open = std::mem::take(&mut confirm.numbers);
                     self.mode = Mode::List;
                 }
                 KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::List,

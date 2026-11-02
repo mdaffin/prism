@@ -728,7 +728,7 @@ fn q_while_merging_cancels_the_merges_not_yet_started() {
     assert_eq!(summary.merged, Some((1, 4)));
     assert_eq!(summary.interrupted, [2]);
     assert_eq!(summary.cancelled, 2);
-    assert_eq!(app.refreshes_to_run(), [1, 2, 3, 4]);
+    assert_eq!(app.refreshes_to_fetch(), [1, 2, 3, 4]);
 }
 
 #[test]
@@ -739,7 +739,7 @@ fn the_last_approval_shows_results_and_refreshes_the_batch() {
     approve(&mut app, 1, Ok(()));
     approve(&mut app, 3, Err(color_eyre::eyre::eyre!("no\npermission")));
     assert!(matches!(app.mode, Mode::Running(_)));
-    assert!(app.refreshes_to_run().is_empty());
+    assert!(app.refreshes_to_fetch().is_empty());
 
     approve(&mut app, 2, Ok(()));
     let Mode::Results(summary) = &app.mode else {
@@ -754,7 +754,7 @@ fn the_last_approval_shows_results_and_refreshes_the_batch() {
     assert!(app.selected.is_empty());
     // Only the batch's rows are fetched again, not the whole search.
     assert_eq!(app.list_to_fetch(), None);
-    assert_eq!(app.refreshes_to_run(), [1, 2, 3]);
+    assert_eq!(app.refreshes_to_fetch(), [1, 2, 3]);
 
     key(&mut app, KeyCode::Char('q'));
     assert!(matches!(app.mode, Mode::List));
@@ -842,7 +842,7 @@ fn approve_and_merge_merges_approved_prs_one_at_a_time() {
         ]
     );
     assert!(app.selected.is_empty());
-    assert_eq!(app.refreshes_to_run(), [1, 2, 3, 4]);
+    assert_eq!(app.refreshes_to_fetch(), [1, 2, 3, 4]);
 }
 
 #[test]
@@ -864,7 +864,7 @@ fn refreshed_rows_update_in_place() {
     let mut app = app_with_rows(3);
     app.table.select(Some(1));
     app.to_refresh = vec![1, 2, 3];
-    assert_eq!(app.refreshes_to_run(), [1, 2, 3]);
+    assert_eq!(app.refreshes_to_fetch(), [1, 2, 3]);
     assert!(app.refreshing());
 
     // A merged PR would sort last, but the rows keep their order.
@@ -896,7 +896,7 @@ fn refreshed_rows_update_in_place() {
 fn refresh_failures_are_listed_few_at_a_time_after_a_search_failure() {
     let mut app = app_with_rows(5);
     app.to_refresh = (1..=5).collect();
-    app.refreshes_to_run();
+    app.refreshes_to_fetch();
     app.update(Msg::PrRefreshed(1, Err(color_eyre::eyre::eyre!("a\nb"))));
     for number in 2..=5 {
         app.update(Msg::PrRefreshed(
@@ -927,10 +927,10 @@ fn refresh_failures_are_listed_few_at_a_time_after_a_search_failure() {
 fn refreshes_run_at_most_four_at_once() {
     let mut app = app_with_rows(6);
     app.to_refresh = (1..=6).collect();
-    assert_eq!(app.refreshes_to_run(), [1, 2, 3, 4]);
-    assert!(app.refreshes_to_run().is_empty());
+    assert_eq!(app.refreshes_to_fetch(), [1, 2, 3, 4]);
+    assert!(app.refreshes_to_fetch().is_empty());
     app.update(Msg::PrRefreshed(1, Ok(pr(1, "OPEN"))));
-    assert_eq!(app.refreshes_to_run(), [5]);
+    assert_eq!(app.refreshes_to_fetch(), [5]);
 }
 
 #[test]
