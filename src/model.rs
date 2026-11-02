@@ -189,6 +189,14 @@ pub fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// The first line of `text` that isn't blank, such as the headline of an error message.
+pub fn first_line(text: &str) -> &str {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default()
+}
+
 /// Removes HTML comments and runs of blank lines from a PR or comment body.
 pub fn clean_body(body: Option<&str>) -> String {
     let body = body.unwrap_or_default().replace("\r\n", "\n");
@@ -525,6 +533,13 @@ mod tests {
         assert_eq!(review_label(decision("CHANGES_REQUESTED")), "✗ changes");
         assert_eq!(review_label(decision("REVIEW_REQUIRED")), "· needed");
         assert_eq!(review_label(decision("")), "· needed");
+    }
+
+    #[test]
+    fn the_first_line_skips_blank_ones() {
+        assert_eq!(first_line("\n  headline  \nrest"), "headline");
+        assert_eq!(first_line("one"), "one");
+        assert_eq!(first_line(" \n"), "");
     }
 
     #[test]

@@ -773,6 +773,7 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
             return;
         }
         Some(Some(Fetch::Failed(error))) => {
+            let error = model::first_line(error);
             let text = Text::from(format!("Failed to load details: {error}")).red();
             frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), inner);
             return;
@@ -872,6 +873,8 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
         .highlighted()
         .and_then(|row| app.diffs.get(&row.pr.number));
     let mut scroll = 0;
+    // A failure is a message, so it wraps; a diff is cut off at the pane's edge.
+    let mut wrap = false;
     let text = match diff {
         None if app.highlighted().is_none() => Text::default(),
         // A PR waiting for a free fetch slot has no entry yet.
@@ -891,9 +894,17 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
                     .collect::<Vec<_>>(),
             )
         }
-        Some(Fetch::Failed(error)) => Text::from(format!("Failed to load diff: {error}")).red(),
+        Some(Fetch::Failed(error)) => {
+            wrap = true;
+            let error = model::first_line(error);
+            Text::from(format!("Failed to load diff: {error}")).red()
+        }
     };
-    frame.render_widget(Paragraph::new(text).block(block), area);
+    let mut pane = Paragraph::new(text).block(block);
+    if wrap {
+        pane = pane.wrap(Wrap { trim: false });
+    }
+    frame.render_widget(pane, area);
     app.scroll.diff = scroll;
 }
 
@@ -945,6 +956,7 @@ fn description(app: &mut App, frame: &mut Frame, area: Rect) {
                 model::crop_tables(body, width, x)
             }
             Some(Fetch::Failed(error)) => {
+                let error = model::first_line(error);
                 Text::from(format!("Failed to load details: {error}")).red()
             }
         },
@@ -1917,6 +1929,48 @@ mod tests {
         assert!(bar.starts_with("Copied the URL | Enter, o: Open"), "{bar}");
         press(&mut app, "k");
         assert!(!status_bar(&mut app, 160).contains("Copied"));
+    }
+
+    /// What a failed `gh pr view` gives: a one-line message, then more.
+    fn gh_failure() -> color_eyre::Report {
+        crate::gh::GhError {
+            command: "gh pr view 1 --json headRefName,comments".to_string(),
+            output: "GraphQL: Could not resolve to a PullRequest with the number of 1.\nmore detail that is not for the pane".to_string(),
+        }
+        .into()
+    }
+
+    #[test]
+    fn a_failed_details_fetch_shows_gh_s_first_line_in_the_comments_and_description() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        app.details_loaded(1, Err(gh_failure()));
+        let screen = lines(&draw(&mut app, 160, 40)).join("\n");
+        // Once in each of the Comments and Description panes.
+        let message = "Failed to load details: GraphQL: Could not resolve to a PullRequest";
+        assert_eq!(screen.matches(message).count(), 2, "{screen}");
+        assert!(!screen.contains("gh pr view"), "{screen}");
+        assert!(!screen.contains("more detail"), "{screen}");
+    }
+
+    #[test]
+    fn a_failed_diff_shows_gh_s_first_line_and_wraps() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        app.diff_loaded(1, Err(gh_failure()));
+        // Narrow, so the message needs more than one row of the diff pane.
+        let screen = lines(&draw(&mut app, 80, 40));
+        let diff = app.drawn.areas.diff;
+        let pane: Vec<String> = screen[usize::from(diff.y)..usize::from(diff.y + diff.height)]
+            .iter()
+            .map(|line| line.chars().skip(usize::from(diff.x)).collect())
+            .collect();
+        let pane = pane.join("\n");
+        assert!(pane.contains("Failed to load diff: GraphQL"), "{pane}");
+        // The end of the first line is there, on a later row, and nothing after it.
+        assert!(pane.contains("number of 1."), "{pane}");
+        assert!(
+            !pane.contains("more detail") && !pane.contains("gh pr view"),
+            "{pane}"
+        );
     }
 
     #[test]

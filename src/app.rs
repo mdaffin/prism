@@ -11,7 +11,7 @@ use tui_input::Input;
 use crate::batch::{
     Batch, BatchItem, Choice, Confirm, ConfirmPr, ItemStatus, Summary, auto_merge, finished_status,
 };
-use crate::gh::{Pr, PrDetails, PrState, PrStatus, StatusUpdate};
+use crate::gh::{GhError, Pr, PrDetails, PrState, PrStatus, StatusUpdate};
 use crate::model::{self, CheckState, Checks, one_line};
 
 mod input;
@@ -171,6 +171,15 @@ pub enum Typing {
     Search,
     /// The filter box.
     Filter,
+}
+
+/// What to keep of a failed fetch: for a `gh` command, what `gh` said, without the command. The
+/// panes show its first line; the rest is there for a view of the whole message.
+fn failure_text(error: &color_eyre::Report) -> String {
+    match error.downcast_ref::<GhError>() {
+        Some(gh) => gh.output.clone(),
+        None => error.to_string(),
+    }
 }
 
 /// What `o` opens for the highlighted item of a pane.
@@ -519,7 +528,7 @@ impl App {
             Msg::DetailsLoaded(number, id, _) if !is_current(&self.details, number, id) => {}
             Msg::DiffLoaded(number, id, _) if !is_current(&self.diffs, number, id) => {}
             Msg::DetailsLoaded(number, _, Err(e)) => {
-                self.details.insert(number, Fetch::Failed(e.to_string()));
+                self.details.insert(number, Fetch::Failed(failure_text(&e)));
             }
             Msg::DetailsLoaded(number, _, Ok(details)) => {
                 let body = model::render_markdown(&model::clean_body(details.body.as_deref()));
@@ -540,7 +549,7 @@ impl App {
                 );
             }
             Msg::DiffLoaded(number, _, Err(e)) => {
-                self.diffs.insert(number, Fetch::Failed(e.to_string()));
+                self.diffs.insert(number, Fetch::Failed(failure_text(&e)));
             }
             Msg::DiffLoaded(number, _, Ok(diff)) => {
                 // A tab would be drawn as a single cell. Parsing here rather than when drawing
