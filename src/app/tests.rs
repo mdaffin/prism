@@ -137,9 +137,9 @@ fn visible_numbers(app: &App) -> Vec<u64> {
 }
 
 #[test]
-fn the_filter_matches_each_visible_column_without_case() {
+fn the_filter_matches_each_visible_column_in_any_case() {
     let mut app = app_with_titles();
-    press(&mut app, "fBUMP");
+    press(&mut app, "fbump");
     assert_eq!(visible_numbers(&app), [1, 2]);
     for (text, expected) in [
         ("#3", vec![3]),
@@ -152,6 +152,35 @@ fn the_filter_matches_each_visible_column_without_case() {
         press(&mut app, text);
         assert_eq!(visible_numbers(&app), expected, "{text}");
     }
+}
+
+#[test]
+fn the_filter_is_fuzzy_with_smart_case_and_every_term_must_match() {
+    let mut app = app_with_titles();
+    for (text, expected) in [
+        ("bmp", vec![1, 2]),
+        ("bmpl", vec![1]),
+        ("Bump", vec![1, 2]),
+        ("BUMP", vec![]),
+        ("bump alpha", vec![1]),
+        ("alpha 1", vec![1]),
+        ("zzz", vec![]),
+        ("", vec![1, 2, 3]),
+    ] {
+        key(&mut app, KeyCode::Esc);
+        press(&mut app, "f");
+        press(&mut app, text);
+        assert_eq!(visible_numbers(&app), expected, "{text}");
+    }
+}
+
+#[test]
+fn the_filter_is_fuzzy_across_the_author() {
+    let mut prs = vec![pr(1, "OPEN"), pr(2, "OPEN")];
+    prs[1].author.login = "app/renovate".to_string();
+    let mut app = app_with(prs);
+    press(&mut app, "frnv");
+    assert_eq!(visible_numbers(&app), [2]);
 }
 
 #[test]

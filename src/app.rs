@@ -273,18 +273,19 @@ impl Row {
         }
     }
 
-    /// Whether any column contains `text`, which must be lowercase. The author counts even when
-    /// its column is hidden, which is only when every row has the same one.
-    fn matches(&self, text: &str, columns: Option<&Regex>) -> bool {
-        [
+    /// Whether the filter matches in some column for each of its terms. The author counts even
+    /// when its column is hidden, which is only when every row has the same one.
+    fn matches(&self, filter: &mut model::Filter, title_columns: Option<&Regex>) -> bool {
+        let cells: Vec<String> = [
             format!("#{}", self.pr.number),
             self.checks_label().to_string(),
             model::review_label(self.pr.review_decision).to_string(),
             self.pr.author.login.clone(),
         ]
         .into_iter()
-        .chain(self.title_cells(columns))
-        .any(|column| column.to_lowercase().contains(text))
+        .chain(self.title_cells(title_columns))
+        .collect();
+        filter.matches(&cells)
     }
 
     /// The cells that replace the title in the table: the title itself, or what each group of
@@ -493,12 +494,12 @@ impl App {
     /// visible, else the first row is.
     fn refilter(&mut self) {
         let before = self.highlighted().map(|row| row.pr.number);
-        let text = self.filter.value().to_lowercase();
+        let mut filter = model::Filter::new(self.filter.value());
         self.visible = self
             .rows
             .iter()
             .enumerate()
-            .filter(|(_, row)| row.matches(&text, self.columns.as_ref()))
+            .filter(|(_, row)| row.matches(&mut filter, self.columns.as_ref()))
             .map(|(i, _)| i)
             .collect();
         let position = before.and_then(|number| {

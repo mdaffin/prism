@@ -1253,6 +1253,21 @@ mod tests {
     }
 
     #[test]
+    fn a_fuzzy_filter_shows_the_rows_it_matches() {
+        let mut app = app_with(vec![
+            by("alice", 1, "Bump alpha"),
+            by("app/renovate", 2, "Bump beta"),
+            by("bob", 3, "Update gamma"),
+        ]);
+        press(&mut app, "frnv");
+        let screen = lines(&draw(&mut app, 200, 30));
+
+        assert!(screen.iter().any(|l| l.contains("Bump beta")));
+        assert!(!screen.iter().any(|l| l.contains("Bump alpha")));
+        assert!(!screen.iter().any(|l| l.contains("Update gamma")));
+    }
+
+    #[test]
     fn draws_the_filter_box_and_the_filtered_rows() {
         let mut app = app_with(vec![
             pr(1, "Bump alpha", "OPEN", ""),
