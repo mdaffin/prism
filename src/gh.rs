@@ -15,7 +15,7 @@ use crate::cli::MergeMethod;
 
 /// Fields requested from `gh pr list --json`: only what the table needs, so it renders sooner.
 const LIST_FIELDS: &str =
-    "number,title,state,statusCheckRollup,mergeable,reviewDecision,updatedAt,url";
+    "number,title,state,statusCheckRollup,mergeable,reviewDecision,updatedAt,url,author";
 
 /// Fields requested by the timed refresh: what can change under a row that is already listed.
 const STATUS_FIELDS: &str = "number,state,statusCheckRollup,mergeable,reviewDecision,updatedAt";
@@ -280,6 +280,7 @@ pub struct Pr {
     /// When the PR last changed, as GitHub reports it. A change means its details and diff may
     /// have changed too.
     pub updated_at: String,
+    pub author: Author,
 }
 
 impl Pr {
@@ -393,7 +394,9 @@ pub struct Comment {
     pub url: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+/// Who wrote a PR or a comment. A bot's login has the `app/` prefix that `author:` takes in a
+/// query.
+#[derive(Debug, Clone, Deserialize)]
 pub struct Author {
     pub login: String,
 }
@@ -454,6 +457,7 @@ mod tests {
         "mergeable": "MERGEABLE",
         "reviewDecision": "",
         "url": "https://example.test/pull/12",
+        "author": {"login": "alice"},
         "updatedAt": "2026-01-02T03:04:06Z"
       },
       {
@@ -464,6 +468,7 @@ mod tests {
         "mergeable": "UNKNOWN",
         "reviewDecision": "APPROVED",
         "url": "https://example.test/pull/13",
+        "author": {"is_bot": true, "login": "app/renovate"},
         "updatedAt": "2026-01-02T03:04:07Z"
       }
     ]"#;
@@ -511,6 +516,7 @@ mod tests {
           "mergeable": "MERGEABLE",
           "reviewDecision": "",
           "url": "https://example.test/pull/1",
+          "author": {"login": "alice"},
           "updatedAt": "2026-01-02T03:04:06Z"
         }]"#;
         let prs: Vec<Pr> = serde_json::from_str(json).unwrap();

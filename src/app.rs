@@ -273,12 +273,14 @@ impl Row {
         }
     }
 
-    /// Whether any visible column contains `text`, which must be lowercase.
+    /// Whether any column contains `text`, which must be lowercase. The author counts even when
+    /// its column is hidden, as the app does not know how wide the table is.
     fn matches(&self, text: &str, columns: Option<&Regex>) -> bool {
         [
             format!("#{}", self.pr.number),
             self.checks_label().to_string(),
             model::review_label(self.pr.review_decision).to_string(),
+            self.pr.author.login.clone(),
         ]
         .into_iter()
         .chain(self.title_cells(columns))
@@ -798,6 +800,12 @@ impl App {
             Pane::Comments => self.toggle_comment(),
             Pane::Description | Pane::Diff => {}
         }
+    }
+
+    /// Whether the table has an Author column: not when the search names one author, as every row
+    /// would show the same name.
+    pub fn shows_author(&self) -> bool {
+        !crate::query::names_one_author(&self.submitted_query)
     }
 
     /// The page that `o` opens for the highlighted item of the focused pane, for the status bar.

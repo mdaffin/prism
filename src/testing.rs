@@ -23,6 +23,7 @@ pub fn pr_with(
         "mergeable": mergeable,
         "reviewDecision": review,
         "url": format!("https://example.test/pull/{number}"),
+        "author": {"login": "alice"},
         "updatedAt": "2026-01-01T00:00:00Z",
     }))
     .unwrap()

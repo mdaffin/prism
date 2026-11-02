@@ -38,6 +38,10 @@ const MAX_POPUP_WIDTH: u16 = 90;
 const NUMBER_WIDTH: u16 = 7;
 const CHECKS_WIDTH: u16 = 12;
 const REVIEW_WIDTH: u16 = 11;
+/// Fits `app/renovate` and a typical login; a longer one is cut.
+const AUTHOR_WIDTH: u16 = 16;
+/// The narrowest the title columns together may get before the Author column makes way for them.
+const MIN_TITLE_WIDTH: u16 = 30;
 
 /// The width of the checks pane's status column, which fits `… pending` and a space.
 const CHECK_STATUS_WIDTH: u16 = 10;
@@ -265,10 +269,14 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
         | Mode::Help
         | Mode::Running(_)
         | Mode::Results(_) => {
+            // Narrow terminals lose the Author column before the title is cut.
+            let fixed = CHECKBOX_WIDTH + NUMBER_WIDTH + CHECKS_WIDTH + REVIEW_WIDTH;
+            let author =
+                app.shows_author() && table_area.width >= fixed + AUTHOR_WIDTH + MIN_TITLE_WIDTH;
             // Borrowing the fields rather than calling `visible_rows` leaves `app.table` free.
             let rows = app.visible.iter().map(|&i| &app.rows[i]).map(|row| {
                 let selected = app.selected.contains(&row.pr.number);
-                pr_row(row, selected, app.columns.as_ref())
+                pr_row(row, selected, author, app.columns.as_ref())
             });
             // The groups of the column regex share the space the title had.
             let titles = match &app.columns {
@@ -282,11 +290,13 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
                 Constraint::Length(REVIEW_WIDTH),
             ]
             .into_iter()
+            .chain(author.then_some(Constraint::Length(AUTHOR_WIDTH)))
             .chain(titles.iter().map(|_| Constraint::Fill(1)))
             .collect::<Vec<_>>();
             let header = ["", "#", "Checks", "Review"]
                 .map(str::to_string)
                 .into_iter()
+                .chain(author.then(|| "Author".to_string()))
                 .chain(titles);
             let mut table = Table::new(rows, widths)
                 .header(Row::new(header).bold())
@@ -312,7 +322,7 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
 }
 
 /// A PR's row of the table. A closed or merged PR is dimmed.
-fn pr_row<'a>(row: &'a app::Row, selected: bool, columns: Option<&Regex>) -> Row<'a> {
+fn pr_row<'a>(row: &'a app::Row, selected: bool, author: bool, columns: Option<&Regex>) -> Row<'a> {
     let mark = if selected { "[x]" } else { "[ ]" };
     let checks = Cell::new(row.checks_label()).style(checks_style(row));
     let cells = Row::new(
@@ -323,6 +333,7 @@ fn pr_row<'a>(row: &'a app::Row, selected: bool, columns: Option<&Regex>) -> Row
             Cell::new(model::review_label(row.pr.review_decision)),
         ]
         .into_iter()
+        .chain(author.then(|| Cell::new(row.pr.author.login.as_str())))
         .chain(row.title_cells(columns).into_iter().map(Cell::new)),
     );
     if row.pr.state == PrState::Open {
@@ -1172,6 +1183,87 @@ mod tests {
                 .unwrap_or_else(|| panic!("no dialog row for {label}"));
             assert_eq!(buffer[position].fg, colour, "{label}");
         }
+    }
+
+    /// A PR by `login`, and an app that has loaded these PRs for `query`.
+    fn by(login: &str, number: u64, title: &str) -> Pr {
+        let mut pr = pr(number, title, "OPEN", "");
+        pr.author.login = login.to_string();
+        pr
+    }
+
+    fn app_for_query(query: &str, prs: Vec<Pr>) -> App {
+        let mut app = App::new("PRs".to_string(), query.to_string(), false);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(id, Ok(prs)));
+        app
+    }
+
+    #[test]
+    fn draws_the_author_of_each_pr() {
+        let mut app = app_with(vec![
+            by("alice", 1, "Bump alpha"),
+            by("bob", 2, "Bump beta"),
+        ]);
+        let screen = lines(&draw(&mut app, 200, 30));
+
+        assert!(screen.iter().any(|l| l.contains("Author")));
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("#1") && l.contains("alice"))
+        );
+        assert!(screen.iter().any(|l| l.contains("#2") && l.contains("bob")));
+    }
+
+    #[test]
+    fn draws_a_bot_the_way_the_query_spells_it() {
+        let mut app = app_with(vec![by("app/renovate", 1, "Bump alpha")]);
+        let screen = lines(&draw(&mut app, 200, 30));
+
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("#1") && l.contains("app/renovate"))
+        );
+    }
+
+    #[test]
+    fn hides_the_author_column_when_the_query_names_one_author() {
+        let mut app = app_for_query(
+            "is:pr author:app/renovate",
+            vec![by("app/renovate", 1, "Bump alpha")],
+        );
+        let screen = lines(&draw(&mut app, 200, 30));
+
+        assert!(!screen.iter().any(|l| l.contains("Author")));
+        assert!(
+            !screen
+                .iter()
+                .any(|l| l.contains("[ ]") && l.contains("app/renovate"))
+        );
+        assert!(
+            screen
+                .iter()
+                .any(|l| l.contains("#1") && l.contains("Bump alpha"))
+        );
+    }
+
+    #[test]
+    fn a_search_term_does_not_hide_the_author_column() {
+        let mut app = app_for_query("is:pr alice", vec![by("alice", 1, "Bump alpha")]);
+        let screen = lines(&draw(&mut app, 200, 30));
+
+        assert!(screen.iter().any(|l| l.contains("Author")));
+    }
+
+    #[test]
+    fn a_narrow_table_drops_the_author_before_cutting_the_title() {
+        let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
+        let screen = lines(&draw(&mut app, 120, 30));
+
+        assert!(!screen.iter().any(|l| l.contains("Author")));
+        assert!(screen.iter().any(|l| l.contains("Bump alpha")));
     }
 
     #[test]

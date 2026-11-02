@@ -155,6 +155,15 @@ fn the_filter_matches_each_visible_column_without_case() {
 }
 
 #[test]
+fn the_filter_matches_an_author() {
+    let mut prs = vec![pr(1, "OPEN"), pr(2, "OPEN"), pr(3, "OPEN")];
+    prs[1].author.login = "app/renovate".to_string();
+    let mut app = app_with(prs);
+    press(&mut app, "frenovate");
+    assert_eq!(visible_numbers(&app), [2]);
+}
+
+#[test]
 fn the_filter_matches_closed_and_merged_as_drawn() {
     let mut app = App::new(String::new(), "is:pr".to_string(), false);
     let (id, _) = app.list_to_fetch().unwrap();
@@ -459,6 +468,7 @@ fn app_with_check_pages() -> App {
         "mergeable": "MERGEABLE",
         "reviewDecision": "",
         "url": "https://example.test/pull/1",
+        "author": {"login": "alice"},
         "updatedAt": "2026-01-01T00:00:00Z",
     }))
     .unwrap();
