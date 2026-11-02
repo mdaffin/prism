@@ -50,7 +50,7 @@ pub struct ChecksLayout {
 }
 
 /// The panes that can have focus. Tab cycles through them in this order.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pane {
     Table,
     Checks,
@@ -239,7 +239,9 @@ impl App {
         let top = usize::from(self.scroll.comments);
         let bottom = top + layout.viewport;
         let current = self.scroll.comment.min(layout.items.len() - 1);
-        let next = current.checked_add_signed(by).filter(|&n| n < layout.items.len());
+        let next = current
+            .checked_add_signed(by)
+            .filter(|&n| n < layout.items.len());
         // A header the wheel has scrolled past counts as reached, so the highlight can catch up.
         let reached = |n: usize| {
             let start = layout.items[n].0;

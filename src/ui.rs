@@ -306,10 +306,7 @@ fn confirm_dialog(confirm: &Confirm, dry_run: bool, frame: &mut Frame, area: Rec
 fn open_dialog(confirm: &ConfirmOpen, frame: &mut Frame, area: Rect) {
     let lines = vec![Line::from(pr_list(&confirm.numbers))];
     let highlighted = if confirm.open { 0 } else { 1 };
-    let footer = vec![
-        Line::default(),
-        button_row(["Open", "Cancel"], highlighted),
-    ];
+    let footer = vec![Line::default(), button_row(["Open", "Cancel"], highlighted)];
     let title = format!(
         "Open {} in the browser?",
         count(confirm.numbers.len(), "PR")
@@ -658,8 +655,11 @@ fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
         .scroll
         .checks
         .min(max_scroll(rows.len(), inner.height.saturating_sub(1)));
-    let table = Table::new(rows, [Constraint::Length(CHECK_STATUS_WIDTH), Constraint::Fill(1)])
-        .header(Row::new(["Status", "Check"]).bold());
+    let table = Table::new(
+        rows,
+        [Constraint::Length(CHECK_STATUS_WIDTH), Constraint::Fill(1)],
+    )
+    .header(Row::new(["Status", "Check"]).bold());
     let mut state = TableState::default().with_offset(usize::from(scroll));
     frame.render_stateful_widget(table, inner, &mut state);
     app.drawn.checks_layout = ChecksLayout {
@@ -727,10 +727,7 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     );
     let total = items.last().map_or(0, |&(start, height)| start + height);
     let pane = Paragraph::new(Text::from(document)).wrap(Wrap { trim: false });
-    let scroll = app
-        .scroll
-        .comments
-        .min(max_scroll(total, inner.height));
+    let scroll = app.scroll.comments.min(max_scroll(total, inner.height));
     frame.render_widget(pane.scroll((scroll, 0)), inner);
 
     set_page(app, Pane::Comments, inner.height, 1);
@@ -905,7 +902,14 @@ mod tests {
     use crate::testing::{app_with, pr_with, press};
 
     fn pr(number: u64, title: &str, state: &str, review: &str) -> Pr {
-        pr_with(number, title, state, review, "MERGEABLE", serde_json::json!([]))
+        pr_with(
+            number,
+            title,
+            state,
+            review,
+            "MERGEABLE",
+            serde_json::json!([]),
+        )
     }
 
     /// Draws the app on a screen of this size, as the real terminal would show it.
@@ -978,7 +982,14 @@ mod tests {
     }
 
     fn pr_checked(number: u64, mergeable: &str, checks: Vec<serde_json::Value>) -> Pr {
-        pr_with(number, &format!("PR {number}"), "OPEN", "", mergeable, checks.into())
+        pr_with(
+            number,
+            &format!("PR {number}"),
+            "OPEN",
+            "",
+            mergeable,
+            checks.into(),
+        )
     }
 
     /// Five open PRs, one in each state. The table puts them in this order: passing first, then
@@ -1493,7 +1504,10 @@ mod tests {
         draw(&mut app, 160, 40);
         let row = u16::try_from(second).unwrap() - app.scroll.comments;
         assert!(row > 0);
-        click(&mut app, Position::new(comments.x + 2, comments.y + 1 + row));
+        click(
+            &mut app,
+            Position::new(comments.x + 2, comments.y + 1 + row),
+        );
         assert_eq!(app.scroll.comment, 1);
         assert!(app.scroll.comments_open.contains(&1));
     }

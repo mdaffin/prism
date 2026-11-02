@@ -320,13 +320,73 @@ fn ctrl_o(app: &mut App) {
     )));
 }
 
+fn ctrl_g(app: &mut App) {
+    app.update(Msg::Key(KeyEvent::new(
+        KeyCode::Char('g'),
+        KeyModifiers::CONTROL,
+    )));
+}
+
+const PANES: [Pane; 5] = [
+    Pane::Table,
+    Pane::Checks,
+    Pane::Comments,
+    Pane::Description,
+    Pane::Diff,
+];
+
 #[test]
-fn ctrl_o_opens_the_highlighted_pr_when_none_are_selected() {
-    let mut app = app_with_rows(3);
-    press(&mut app, "j");
-    ctrl_o(&mut app);
-    assert_eq!(app.opens_to_run(), [2]);
-    assert!(app.opens_to_run().is_empty());
+fn ctrl_o_and_ctrl_g_do_nothing_when_none_are_selected() {
+    for pane in PANES {
+        let mut app = app_with_rows(3);
+        app.focus = pane;
+        press(&mut app, "j");
+        ctrl_o(&mut app);
+        ctrl_g(&mut app);
+        assert!(app.opens_to_run().is_empty(), "{pane:?}");
+        assert!(matches!(app.mode, Mode::List), "{pane:?}");
+    }
+}
+
+#[test]
+fn ctrl_o_opens_the_selection_from_every_pane() {
+    for pane in PANES {
+        let mut app = app_with_rows(3);
+        press(&mut app, " jj ");
+        app.focus = pane;
+        ctrl_o(&mut app);
+        assert_eq!(app.opens_to_run(), [1, 3], "{pane:?}");
+    }
+}
+
+#[test]
+fn ctrl_g_reviews_the_selection_from_every_pane() {
+    for pane in PANES {
+        let mut app = app_with_rows(3);
+        press(&mut app, " jj ");
+        app.focus = pane;
+        ctrl_g(&mut app);
+        let Mode::Confirm(confirm) = &app.mode else {
+            panic!("no review dialog from {pane:?}");
+        };
+        let reviewed: Vec<u64> = confirm.prs.iter().map(|pr| pr.number).collect();
+        assert_eq!(reviewed, [1, 3], "{pane:?}");
+    }
+}
+
+#[test]
+fn ctrl_a_and_ctrl_r_work_from_every_pane() {
+    for pane in PANES {
+        let mut app = app_with(vec![
+            pr_with_checks(1, "passing"),
+            pr_with_checks(2, "pending"),
+        ]);
+        app.focus = pane;
+        ctrl_a(&mut app);
+        assert_eq!(app.selected, HashSet::from([1]), "{pane:?}");
+        ctrl_r(&mut app);
+        assert!(app.list_to_fetch().is_some(), "{pane:?}");
+    }
 }
 
 #[test]
@@ -455,7 +515,10 @@ fn o_opens_the_highlighted_comment_and_falls_back_to_the_pr() {
     };
     focus(&mut app, Pane::Comments);
     press(&mut app, "o");
-    assert_eq!(app.pages_to_run(), ["https://example.test/pull/1#issuecomment-1"]);
+    assert_eq!(
+        app.pages_to_run(),
+        ["https://example.test/pull/1#issuecomment-1"]
+    );
     // The second comment has no URL, so the PR opens.
     press(&mut app, "jo");
     assert!(app.pages_to_run().is_empty());
@@ -1290,7 +1353,6 @@ fn scroll_goes_back_to_the_top_when_the_highlight_moves() {
     key(&mut app, KeyCode::Down);
     assert_eq!(app.scroll.description, 1);
 }
-
 
 fn limited_app(limit: u32) -> App {
     App::new("PRs".to_string(), "is:pr".to_string(), false).with_limit(limit)

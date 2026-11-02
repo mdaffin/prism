@@ -142,7 +142,8 @@ impl App {
     fn on_list_key(&mut self, key: KeyEvent) {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
-                KeyCode::Char('o') => self.open_in_browser(),
+                KeyCode::Char('o') => self.open_selected(),
+                KeyCode::Char('g') => self.review_selected(),
                 KeyCode::Char('a') => self.select_passing(),
                 KeyCode::Char('r') => self.refresh_list(),
                 _ => {}
@@ -163,8 +164,12 @@ impl App {
             KeyCode::BackTab => self.focus = self.focus.previous(),
             KeyCode::Down | KeyCode::Char('j') => self.step_focused(1),
             KeyCode::Up | KeyCode::Char('k') => self.step_focused(-1),
-            KeyCode::Right | KeyCode::Char('l') => self.scroll_sideways(self.focus, SIDEWAYS_COLUMNS),
-            KeyCode::Left | KeyCode::Char('h') => self.scroll_sideways(self.focus, -SIDEWAYS_COLUMNS),
+            KeyCode::Right | KeyCode::Char('l') => {
+                self.scroll_sideways(self.focus, SIDEWAYS_COLUMNS)
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                self.scroll_sideways(self.focus, -SIDEWAYS_COLUMNS)
+            }
             KeyCode::PageDown => self.page_focused(1),
             KeyCode::PageUp => self.page_focused(-1),
             KeyCode::Home => self.jump_focused(false),

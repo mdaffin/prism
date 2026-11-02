@@ -66,9 +66,10 @@ pub const KEYS: &[KeyHelp] = &[
     ),
     key(
         "Ctrl-O",
-        "Open the selected or highlighted PRs in the browser",
+        "Open the selected PRs in the browser, from any pane",
         None,
     ),
+    key("Ctrl-G", "Review the selected PRs, from any pane", None),
     key(
         "Ctrl-A",
         "Select every visible PR with passing checks",

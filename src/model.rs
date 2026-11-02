@@ -209,10 +209,7 @@ pub fn render_markdown(body: &str) -> Text<'static> {
                     .into_iter()
                     .map(|span| Span::styled(span.content.into_owned(), span.style))
                     .collect();
-                Line {
-                    spans,
-                    ..line
-                }
+                Line { spans, ..line }
             })
             .collect::<Vec<_>>(),
     )
@@ -545,7 +542,9 @@ mod tests {
 
     #[test]
     fn cropping_moves_only_table_lines() {
-        let text = render_markdown("A paragraph of prose.\n\n| Name | Value |\n|---|---|\n| alpha | 123456789 |");
+        let text = render_markdown(
+            "A paragraph of prose.\n\n| Name | Value |\n|---|---|\n| alpha | 123456789 |",
+        );
         let widest = widest_table(&text);
         assert!(widest > 10);
         let plain = |text: &Text| text.lines.iter().map(Line::to_string).collect::<Vec<_>>();
@@ -553,7 +552,10 @@ mod tests {
         let cropped = plain(&crop_tables(&text, 10, 2));
         for (before, cropped) in before.iter().zip(&cropped) {
             if before.starts_with(['┌', '│', '├', '└']) {
-                assert_eq!(cropped, &before.chars().skip(2).take(10).collect::<String>());
+                assert_eq!(
+                    cropped,
+                    &before.chars().skip(2).take(10).collect::<String>()
+                );
             } else {
                 assert_eq!(cropped, before);
             }
@@ -562,10 +564,20 @@ mod tests {
 
     #[test]
     fn markdown_keeps_details_tags_and_shows_image_alt_text() {
-        let text = render_markdown("<details>\n<summary>Notes</summary>\n\n![badge](https://example.com/b.svg)\n\n</details>");
+        let text = render_markdown(
+            "<details>\n<summary>Notes</summary>\n\n![badge](https://example.com/b.svg)\n\n</details>",
+        );
         let plain: Vec<String> = text.lines.iter().map(Line::to_string).collect();
-        assert!(plain.contains(&"<summary>Notes</summary>".to_string()), "{plain:?}");
-        assert!(plain.iter().any(|l| l.contains("badge") && !l.contains("example.com")), "{plain:?}");
+        assert!(
+            plain.contains(&"<summary>Notes</summary>".to_string()),
+            "{plain:?}"
+        );
+        assert!(
+            plain
+                .iter()
+                .any(|l| l.contains("badge") && !l.contains("example.com")),
+            "{plain:?}"
+        );
     }
 
     const BUMP: &str = r"Bump (?<container>.+?)(?: from \S+)? to (?<version>\S+)$";

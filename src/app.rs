@@ -19,8 +19,8 @@ mod panes;
 mod work;
 
 pub use panes::{ChecksLayout, CommentLayout, Drawn, Pane, Scroll, to_u16};
-pub use work::{Details, Diff, Fetch};
 use work::forget_failed;
+pub use work::{Details, Diff, Fetch};
 
 /// The most failed row refreshes, and the most failed opens, to list above the status bar.
 const MAX_LISTED_ERRORS: usize = 3;
@@ -722,6 +722,20 @@ impl App {
         let comments = &loaded.details.comments;
         let last = comments.len().checked_sub(1)?;
         comments[self.scroll.comment.min(last)].url.clone()
+    }
+
+    /// Ctrl-O: opens the selected PRs, from any pane. With none selected it does nothing.
+    fn open_selected(&mut self) {
+        if !self.selected.is_empty() {
+            self.open_in_browser();
+        }
+    }
+
+    /// Ctrl-G: reviews the selected PRs, from any pane. With none selected it does nothing.
+    fn review_selected(&mut self) {
+        if !self.selected.is_empty() {
+            self.open_confirm();
+        }
     }
 
     /// Opens the selected PRs in the browser, or the highlighted one if none are selected, in

@@ -93,9 +93,7 @@ impl Gh {
     /// `gh pr view` for one PR with these `--json` fields.
     async fn view_json<T: DeserializeOwned>(&self, number: u64, fields: &str) -> Result<T> {
         let number = number.to_string();
-        let stdout = self
-            .run(&["pr", "view", &number, "--json", fields])
-            .await?;
+        let stdout = self.run(&["pr", "view", &number, "--json", fields]).await?;
         Ok(serde_json::from_slice(&stdout)?)
     }
 

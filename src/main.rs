@@ -151,7 +151,9 @@ fn start_work(
             for page in pages {
                 // `open::that` waits for the launcher to exit, so keep it off the UI's runtime.
                 let result = tokio::task::spawn_blocking(move || open::that(page)).await;
-                let result = result.map_err(Into::into).and_then(|r| r.map_err(Into::into));
+                let result = result
+                    .map_err(Into::into)
+                    .and_then(|r| r.map_err(Into::into));
                 let _ = tx.send(Msg::PageOpened(result));
             }
         });
