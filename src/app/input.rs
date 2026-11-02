@@ -56,6 +56,7 @@ impl App {
                 self.focus = pane;
                 match pane {
                     Pane::Comments => self.click_comment(position),
+                    Pane::Description => self.click_description(position),
                     Pane::Checks => self.click_check(position),
                     _ => {}
                 }

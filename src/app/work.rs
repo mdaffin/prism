@@ -8,6 +8,7 @@ use ratatui::text::Text;
 use super::{App, Mode, RefreshId};
 use crate::batch::{ItemStatus, auto_merge};
 use crate::gh::{PrDetails, PrState};
+use crate::model::Markdown;
 
 /// The most detail fetches to run at once.
 const MAX_DETAIL_FETCHES: usize = 4;
@@ -38,9 +39,9 @@ pub struct Details {
     pub details: PrDetails,
     /// The body with HTML comments and extra blank lines removed, rendered as markdown once here
     /// rather than on every draw.
-    pub body: Text<'static>,
+    pub body: Markdown,
     /// Each comment's body, rendered the same way and in the same order as `details.comments`.
-    pub comment_bodies: Vec<Text<'static>>,
+    pub comment_bodies: Vec<Markdown>,
 }
 
 /// A PR's diff with gh's colours.

@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use ratatui::layout::{Position, Rect};
 
 use super::{App, toggle};
+use crate::model::LinkSpan;
 
 /// Rows scrolled off the top of the checks, description, comments and diff panes. They go back to
 /// the top when the highlight moves. The view clamps them to the content it draws.
@@ -100,6 +101,10 @@ pub struct Drawn {
     pub buttons: Vec<Rect>,
     pub comment_layout: CommentLayout,
     pub checks_layout: ChecksLayout,
+    /// The links of each line the description and the comments drew, in columns of that line, so
+    /// a click can find the one under it. Empty while a pane is not drawn.
+    pub description_links: Vec<Vec<LinkSpan>>,
+    pub comment_links: Vec<Vec<LinkSpan>>,
 }
 
 impl Default for Drawn {
@@ -111,6 +116,8 @@ impl Default for Drawn {
             buttons: Vec::new(),
             comment_layout: CommentLayout::default(),
             checks_layout: ChecksLayout::default(),
+            description_links: Vec::new(),
+            comment_links: Vec::new(),
         }
     }
 }
@@ -326,10 +333,39 @@ impl App {
         }
     }
 
+    /// A click on a link in the description opens it.
+    pub(super) fn click_description(&mut self, position: Position) {
+        let area = self.drawn.areas.description;
+        let scroll = self.scroll.description;
+        if let Some(url) = link_at(&self.drawn.description_links, area, scroll, position) {
+            self.open_link(url);
+        }
+    }
+
+    /// Queues a link for the browser. A PR's author writes its body, and a system opens other
+    /// kinds of link as well, such as `file:` and the schemes of installed apps, so only web
+    /// links are opened.
+    fn open_link(&mut self, url: String) {
+        self.errors.opens.clear();
+        if is_web_url(&url) {
+            self.pages_to_open.push(url);
+        } else {
+            let shown: String = url.chars().take(60).collect();
+            let message = format!("Not opening {shown}: only http and https links are opened");
+            self.errors.opens.push(message);
+        }
+    }
+
     /// A click on a comment's header highlights it and expands or collapses it. A click on a
     /// body, or below the last comment, does nothing more than focus the pane.
     pub(super) fn click_comment(&mut self, position: Position) {
         let area = self.drawn.areas.comments;
+        let scroll = self.scroll.comments;
+        // A link in an open comment opens, rather than the comment toggling.
+        if let Some(url) = link_at(&self.drawn.comment_links, area, scroll, position) {
+            self.open_link(url);
+            return;
+        }
         // The pane's border is the first row, and the rows below it are the document.
         let Some(row) = position.y.checked_sub(area.y + 1) else {
             return;
@@ -408,6 +444,30 @@ impl App {
 fn scrolled(from: u16, by: isize) -> u16 {
     let by = by.clamp(i16::MIN.into(), i16::MAX.into()) as i16;
     from.saturating_add_signed(by)
+}
+
+/// The URL of the link drawn at `position` in a pane at `area` (its border included) whose lines
+/// were scrolled `scroll` lines, given the links of each line.
+fn link_at(links: &[Vec<LinkSpan>], area: Rect, scroll: u16, position: Position) -> Option<String> {
+    // The text is inside the border.
+    let x = position.x.checked_sub(area.x + 1)?;
+    let y = position.y.checked_sub(area.y + 1)?;
+    if x >= area.width.saturating_sub(2) || y >= area.height.saturating_sub(2) {
+        return None;
+    }
+    let line = links.get(usize::from(y) + usize::from(scroll))?;
+    let x = usize::from(x);
+    let link = line.iter().find(|link| link.start <= x && x < link.end)?;
+    Some(link.url.clone())
+}
+
+/// Whether a link goes to a web page.
+fn is_web_url(url: &str) -> bool {
+    let scheme_end = url.find("://").unwrap_or(0);
+    matches!(
+        &url[..scheme_end].to_ascii_lowercase()[..],
+        "http" | "https"
+    )
 }
 
 /// `n`, or `u16::MAX` if it is too big.

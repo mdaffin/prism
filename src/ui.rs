@@ -1047,6 +1047,7 @@ fn styled_check_row<'a>(state: CheckState, name: String) -> Row<'a> {
 fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     app.drawn.areas.comments = area;
     app.drawn.comment_layout = CommentLayout::default();
+    app.drawn.comment_links = Vec::new();
     let block = pane_block("Comments", app.focus == Pane::Comments);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1076,12 +1077,12 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     let width = usize::from(inner.width);
     let widest = (0..comments.len())
         .filter(|i| app.scroll.comments_open.contains(i))
-        .map(|i| model::widest_table(&bodies[i]))
+        .map(|i| model::widest_table(&bodies[i].text))
         .max()
         .unwrap_or(0);
     let x = usize::from(app.scroll.comment_x).min(widest.saturating_sub(width));
 
-    let (document, items) = comment_document(
+    let (document, items, links) = comment_document(
         comments,
         bodies,
         &app.scroll.comments_open,
@@ -1090,7 +1091,8 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
         x,
     );
     let total = items.last().map_or(0, |&(start, height)| start + height);
-    let pane = Paragraph::new(Text::from(document)).wrap(Wrap { trim: false });
+    // Already wrapped, so the links can be found from where they are drawn.
+    let pane = Paragraph::new(Text::from(document));
     let scroll = app.scroll.comments.min(max_scroll(total, inner.height));
     frame.render_widget(pane.scroll((scroll, 0)), inner);
     scrollbar(
@@ -1106,6 +1108,7 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
         items,
         viewport: usize::from(inner.height),
     };
+    app.drawn.comment_links = links;
     app.scroll.comment = selected;
     app.scroll.comment_x = to_u16(x);
     app.scroll.comments = scroll;
@@ -1116,16 +1119,21 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
 /// what `update` steps through.
 fn comment_document(
     comments: &[Comment],
-    bodies: &[Text<'static>],
+    bodies: &[model::Markdown],
     open: &HashSet<usize>,
     selected: usize,
     width: u16,
     x: usize,
-) -> (Vec<Line<'static>>, Vec<(usize, usize)>) {
+) -> (
+    Vec<Line<'static>>,
+    Vec<(usize, usize)>,
+    Vec<Vec<model::LinkSpan>>,
+) {
     let now = jiff::Timestamp::now();
+    let width = usize::from(width);
     let mut document = Vec::new();
+    let mut links = Vec::new();
     let mut items = Vec::with_capacity(comments.len());
-    let mut total = 0;
     for (i, comment) in comments.iter().enumerate() {
         let is_open = open.contains(&i);
         let author = comment
@@ -1140,19 +1148,20 @@ fn comment_document(
         if i == selected {
             header = header.reversed();
         }
-        let mut lines = vec![header];
+        let start = document.len();
+        let (rows, row_links) = model::wrap_line(&header, &[], width);
+        document.extend(rows);
+        links.extend(row_links);
         if is_open {
-            lines.extend(model::crop_tables(&bodies[i], usize::from(width), x).lines);
-            lines.push(Line::default());
+            let laid = model::layout_markdown(&bodies[i], width, x);
+            document.extend(laid.lines);
+            links.extend(laid.links);
+            document.push(Line::default());
+            links.push(Vec::new());
         }
-        let height = Paragraph::new(Text::from(lines.clone()))
-            .wrap(Wrap { trim: false })
-            .line_count(width);
-        items.push((total, height));
-        total += height;
-        document.extend(lines);
+        items.push((start, document.len() - start));
     }
-    (document, items)
+    (document, items, links)
 }
 
 fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -1253,24 +1262,26 @@ fn pull_request(app: &App, frame: &mut Frame, area: Rect) {
 
 fn description(app: &mut App, frame: &mut Frame, area: Rect) {
     app.drawn.areas.description = area;
+    app.drawn.description_links = Vec::new();
     // The block's inner area doesn't depend on its title.
     let inner = pane_block("", false).inner(area);
     set_page(app, Pane::Description, inner.height, 1);
     let width = usize::from(inner.width);
     let mut widest = 0;
     let mut x = 0;
-    let text = match app.highlighted() {
-        None => Text::default(),
+    let laid = match app.highlighted() {
+        None => model::Laid::default(),
         Some(row) => match app.details.get(&row.pr.number) {
-            None | Some(Fetch::Loading(_)) => Text::from("Loading…"),
+            None | Some(Fetch::Loading(_)) => model::layout_plain(&Text::from("Loading…"), width),
             Some(Fetch::Loaded(Details { body, .. })) => {
-                widest = model::widest_table(body);
+                widest = model::widest_table(&body.text);
                 x = usize::from(app.scroll.description_x).min(widest.saturating_sub(width));
-                model::crop_tables(body, width, x)
+                model::layout_markdown(body, width, x)
             }
             Some(Fetch::Failed(error)) => {
                 let error = model::first_line(error);
-                Text::from(format!("Failed to load details: {error}")).red()
+                let text = Text::from(format!("Failed to load details: {error}")).red();
+                model::layout_plain(&text, width)
             }
         },
     };
@@ -1281,10 +1292,11 @@ fn description(app: &mut App, frame: &mut Frame, area: Rect) {
         "Description"
     };
     let block = pane_block(title, app.focus == Pane::Description);
-    let pane = Paragraph::new(text).wrap(Wrap { trim: false });
-    let lines = pane.line_count(inner.width);
+    let lines = laid.lines.len();
     let scroll = app.scroll.description.min(max_scroll(lines, inner.height));
-    frame.render_widget(pane.scroll((scroll, 0)).block(block), area);
+    // Already wrapped, so the links can be found from where they are drawn.
+    let pane = Paragraph::new(Text::from(laid.lines)).scroll((scroll, 0));
+    frame.render_widget(pane.block(block), area);
     scrollbar(
         frame,
         area,
@@ -1293,6 +1305,7 @@ fn description(app: &mut App, frame: &mut Frame, area: Rect) {
         usize::from(scroll),
     );
     app.scroll.description = scroll;
+    app.drawn.description_links = laid.links;
 }
 
 #[cfg(test)]
@@ -2772,6 +2785,183 @@ mod tests {
         let at_end = horizontal_thumb(&buffer, diff);
         assert_eq!(at_end.last(), Some(&(diff.right() - 2)));
         assert!(at_end.first() > Some(&(diff.x + 1)));
+    }
+
+    /// An app whose first PR has this description and, if given, one comment with this body.
+    fn app_with_bodies(body: &str, comment: Option<&str>) -> App {
+        let comments: Vec<serde_json::Value> = comment
+            .map(|body| {
+                serde_json::json!({
+                    "author": {"login": "someone"},
+                    "createdAt": "2026-01-02T03:00:00Z",
+                    "body": body,
+                    "url": "https://example.test/c",
+                })
+            })
+            .into_iter()
+            .collect();
+        let details = serde_json::from_value(serde_json::json!({
+            "headRefName": "branch",
+            "body": body,
+            "comments": comments,
+            "additions": 1,
+            "deletions": 1,
+        }))
+        .unwrap();
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        app.details_loaded(1, Ok(details));
+        app
+    }
+
+    /// Clicks the first place `text` is drawn on screen, and returns the pages queued.
+    fn click_text(app: &mut App, width: u16, text: &str) -> Vec<String> {
+        let buffer = draw(app, width, 40);
+        let position = find(&buffer, text).unwrap_or_else(|| panic!("{text} is not drawn"));
+        click(app, position);
+        app.pages_to_run()
+    }
+
+    #[test]
+    fn a_click_on_a_link_in_the_description_opens_it_and_focuses_the_pane() {
+        for text in ["the notes", "a.example/n"] {
+            let mut app = app_with_bodies("Read [the notes](https://a.example/n) please.", None);
+            assert_eq!(
+                click_text(&mut app, 200, text),
+                ["https://a.example/n"],
+                "{text}"
+            );
+            assert!(app.focus == Pane::Description);
+        }
+    }
+
+    #[test]
+    fn a_click_on_a_bare_url_opens_it() {
+        let mut app = app_with_bodies("See https://a.example/bare, thanks.", None);
+        assert_eq!(
+            click_text(&mut app, 200, "a.example/bare"),
+            ["https://a.example/bare"]
+        );
+    }
+
+    #[test]
+    fn a_click_on_text_that_is_not_a_link_does_nothing() {
+        let mut app = app_with_bodies("Read [the notes](https://a.example/n) please.", None);
+        assert!(click_text(&mut app, 200, "please").is_empty());
+        assert!(app.errors.text().is_none());
+    }
+
+    #[test]
+    fn a_link_is_found_in_a_scrolled_description() {
+        let body = format!(
+            "{}\n\n[far down](https://a.example/far)",
+            vec!["line"; 80].join("\n\n")
+        );
+        let mut app = app_with_bodies(&body, None);
+        draw(&mut app, 200, 40);
+        focus(&mut app, Pane::Description);
+        key(&mut app, KeyCode::End);
+        assert_eq!(
+            click_text(&mut app, 200, "far down"),
+            ["https://a.example/far"]
+        );
+    }
+
+    #[test]
+    fn a_url_that_wraps_over_several_rows_opens_from_any_of_them() {
+        let url = "https://a.example/a/very/long/path/that/cannot/fit/on/one/row";
+        let mut app = app_with_bodies(&format!("[{url}]({url})"), None);
+        // The pane is under 60 columns wide.
+        let buffer = draw(&mut app, 100, 40);
+        let description = app.drawn.areas.description;
+        assert!(find(&buffer, url).is_none(), "it is wrapped");
+        // Every row inside the pane that has text is the link.
+        let mut clicked = 0;
+        for row in 1..description.height - 1 {
+            let text = pane_row(&buffer, description, row - 1);
+            if text.trim().is_empty() {
+                continue;
+            }
+            click(
+                &mut app,
+                Position::new(description.x + 2, description.y + row),
+            );
+            assert_eq!(app.pages_to_run(), [url], "row {row}: {text}");
+            clicked += 1;
+        }
+        assert!(clicked > 2);
+    }
+
+    #[test]
+    fn a_link_in_a_table_still_opens_when_the_table_is_scrolled_sideways() {
+        let body = "| Package | Change |\n|---|---|\n| [lib](https://a.example/l) | a long cell to make the table wider than the pane it is in |";
+        let mut app = app_with_bodies(body, None);
+        draw(&mut app, 100, 40);
+        focus(&mut app, Pane::Description);
+        assert_eq!(click_text(&mut app, 100, "lib"), ["https://a.example/l"]);
+        key(&mut app, KeyCode::Right);
+        draw(&mut app, 100, 40);
+        assert!(app.scroll.description_x > 0);
+        assert_eq!(
+            click_text(&mut app, 100, "a.example/l"),
+            ["https://a.example/l"]
+        );
+    }
+
+    #[test]
+    fn a_click_on_a_link_in_an_open_comment_opens_it_without_toggling_the_comment() {
+        let mut app = app_with_bodies("desc", Some("Look at [this](https://a.example/c1) one."));
+        draw(&mut app, 200, 40);
+        focus(&mut app, Pane::Comments);
+        press(&mut app, " ");
+        assert_eq!(click_text(&mut app, 200, "this"), ["https://a.example/c1"]);
+        assert!(app.scroll.comments_open.contains(&0), "still open");
+    }
+
+    #[test]
+    fn a_click_on_a_comments_header_still_toggles_it_and_a_collapsed_comment_has_no_links() {
+        let mut app = app_with_bodies("desc", Some("Look at [this](https://a.example/c1) one."));
+        let buffer = draw(&mut app, 200, 40);
+        assert!(find(&buffer, "this").is_none());
+        let header = find(&buffer, "@someone").unwrap();
+        click(&mut app, header);
+        assert!(app.scroll.comments_open.contains(&0));
+        assert!(app.pages_to_run().is_empty());
+    }
+
+    #[test]
+    fn a_link_that_is_not_http_or_https_is_not_opened_and_says_why() {
+        for url in [
+            "file:///etc/passwd",
+            "FILE:///etc/passwd",
+            "vscode://open/x",
+            "javascript:alert(1)",
+            "../relative",
+            "mailto:a@b.example",
+        ] {
+            let mut app = app_with_bodies(&format!("[local thing]({url}) here"), None);
+            assert!(click_text(&mut app, 200, "local thing").is_empty(), "{url}");
+            let error = app.errors.text().unwrap_or_default();
+            assert!(error.contains("only http and https"), "{url}: {error}");
+        }
+        // Whatever the case of the scheme, a web link is fine.
+        let mut app = app_with_bodies("[the notes](HTTPS://a.example/n)", None);
+        assert_eq!(
+            click_text(&mut app, 200, "the notes"),
+            ["HTTPS://a.example/n"]
+        );
+    }
+
+    #[test]
+    fn clicks_do_nothing_with_links_when_the_details_have_not_loaded() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        let buffer = draw(&mut app, 200, 40);
+        let description = app.drawn.areas.description;
+        assert!(find(&buffer, "Loading").is_some());
+        click(
+            &mut app,
+            Position::new(description.x + 2, description.y + 1),
+        );
+        assert!(app.pages_to_run().is_empty());
     }
     #[test]
     fn the_wheel_is_ignored_while_a_box_is_edited() {
