@@ -87,9 +87,10 @@ Press `?` in the program for the full list.
 | `Left` `Right` / `h` `l` | Scroll the tables in a description or comment sideways. |
 | `Space` | Toggle selection of the highlighted PR. |
 | `Ctrl-A` | Select every visible PR with passing checks. |
-| `Enter` | Review the selected PRs, or the highlighted one. In the comments, expand or collapse the highlighted comment. |
-| `o` | Open the highlighted check or comment on GitHub. Elsewhere, open the PR. |
-| `Ctrl-O` | Open the selected or highlighted PRs in the browser. Asks first for more than five. |
+| `Enter` | Act on the highlighted item: review the PR in the table, expand or collapse a comment, open a check. Nothing in the description and diff. |
+| `o` | Open the highlighted item: the PR in the table, a check or a comment on GitHub. Nothing in the description and diff. |
+| `Ctrl-G` | Review the selected PRs, from any pane. |
+| `Ctrl-O` | Open the selected PRs in the browser, from any pane. Asks first for more than five. |
 | `Ctrl-R` | Run the query again, keeping the selection. |
 | `Esc` | Clear the filter, then the selection. |
 | `q` | Quit, close a dialog, or cancel a running batch. |

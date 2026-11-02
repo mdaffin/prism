@@ -899,7 +899,7 @@ mod tests {
     use super::*;
     use crate::app::Msg;
     use crate::gh::Pr;
-    use crate::testing::{app_with, pr_with, press};
+    use crate::testing::{app_with, ctrl_g, pr_with, press};
 
     fn pr(number: u64, title: &str, state: &str, review: &str) -> Pr {
         pr_with(
@@ -1059,7 +1059,7 @@ mod tests {
         let mut app = one_of_each();
         // Select everything, then open the dialog.
         press(&mut app, " j j j j ");
-        app.update(Msg::Key(KeyCode::Enter.into()));
+        ctrl_g(&mut app);
         let buffer = draw(&mut app, 160, 40);
         for (label, colour) in [
             ("✓ passing", Color::Green),
@@ -1156,7 +1156,7 @@ mod tests {
     fn shows_each_pr_of_a_running_batch_and_what_cancelling_did() {
         let mut app = app_with((1..=6).map(|n| pr(n, "Bump alpha", "OPEN", "")).collect());
         press(&mut app, " j j j j j ");
-        app.update(Msg::Key(KeyCode::Enter.into()));
+        ctrl_g(&mut app);
         app.update(Msg::Key(KeyCode::Enter.into()));
         // Four approvals run at once; two wait.
         assert_eq!(app.approvals_to_run().len(), 4);

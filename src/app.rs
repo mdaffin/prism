@@ -670,29 +670,33 @@ impl App {
         }
     }
 
-    /// The selected rows in table order, or the highlighted row if none are selected.
-    fn targets(&self) -> Vec<&Row> {
-        if self.selected.is_empty() {
-            self.highlighted().into_iter().collect()
-        } else {
-            self.rows
-                .iter()
-                .filter(|row| self.selected.contains(&row.pr.number))
-                .collect()
-        }
+    /// The numbers of the selected PRs, in table order.
+    fn selected_numbers(&self) -> Vec<u64> {
+        self.rows
+            .iter()
+            .map(|row| row.pr.number)
+            .filter(|number| self.selected.contains(number))
+            .collect()
     }
 
-    /// `o`: opens what the focused pane is showing. A check or a comment opens its own page; in
-    /// the other panes it is Ctrl-O. A missing page is reported, except that a comment without
-    /// one falls back to its PR.
+    /// `o` and, in the checks pane, Enter: opens the highlighted item of the focused pane. The
+    /// table opens its highlighted PR, a check or a comment its own page, and the description and
+    /// the diff nothing. A missing page is reported, except that a comment without one falls back
+    /// to its PR.
     fn open_focused(&mut self) {
         let page = match self.focus {
+            Pane::Table => {
+                let numbers = self.highlighted().map(|row| row.pr.number);
+                self.errors.opens.clear();
+                self.prs_to_open = numbers.into_iter().collect();
+                return;
+            }
             Pane::Checks => Some(
                 self.highlighted_check_url()
                     .ok_or("The highlighted check has no page"),
             ),
             Pane::Comments => self.highlighted_comment_url().map(Ok),
-            _ => None,
+            Pane::Description | Pane::Diff => return,
         };
         match page {
             Some(Ok(url)) => {
@@ -703,7 +707,26 @@ impl App {
                 self.errors.opens.clear();
                 self.errors.opens.push(message.to_string());
             }
-            None => self.open_in_browser(),
+            None => {
+                let number = self.highlighted().map(|row| row.pr.number);
+                self.errors.opens.clear();
+                self.prs_to_open = number.into_iter().collect();
+            }
+        }
+    }
+
+    /// Enter: acts on the highlighted item of the focused pane. The table reviews its highlighted
+    /// PR, the comments expand or collapse the highlighted comment, the checks open it, and the
+    /// description and the diff do nothing.
+    fn enter_focused(&mut self) {
+        match self.focus {
+            Pane::Table => {
+                let numbers = self.highlighted().map(|row| row.pr.number);
+                self.open_confirm(numbers.into_iter().collect());
+            }
+            Pane::Checks => self.open_focused(),
+            Pane::Comments => self.toggle_comment(),
+            Pane::Description | Pane::Diff => {}
         }
     }
 
@@ -726,22 +749,20 @@ impl App {
 
     /// Ctrl-O: opens the selected PRs, from any pane. With none selected it does nothing.
     fn open_selected(&mut self) {
-        if !self.selected.is_empty() {
-            self.open_in_browser();
+        let numbers = self.selected_numbers();
+        if !numbers.is_empty() {
+            self.open_in_browser(numbers);
         }
     }
 
     /// Ctrl-G: reviews the selected PRs, from any pane. With none selected it does nothing.
     fn review_selected(&mut self) {
-        if !self.selected.is_empty() {
-            self.open_confirm();
-        }
+        self.open_confirm(self.selected_numbers());
     }
 
-    /// Opens the selected PRs in the browser, or the highlighted one if none are selected, in
-    /// table order. Asks first when there are more than [`MAX_OPEN_WITHOUT_ASKING`].
-    fn open_in_browser(&mut self) {
-        let numbers: Vec<u64> = self.targets().iter().map(|row| row.pr.number).collect();
+    /// Opens these PRs in the browser. Asks first when there are more than
+    /// [`MAX_OPEN_WITHOUT_ASKING`].
+    fn open_in_browser(&mut self, numbers: Vec<u64>) {
         self.errors.opens.clear();
         if numbers.len() > MAX_OPEN_WITHOUT_ASKING {
             self.mode = Mode::ConfirmOpen(ConfirmOpen {
@@ -753,10 +774,13 @@ impl App {
         }
     }
 
-    /// Opens the confirm dialog for the selected PRs, or the highlighted one if none are
-    /// selected, in table order.
-    fn open_confirm(&mut self) {
-        let rows = self.targets();
+    /// Opens the confirm dialog for these PRs, in table order.
+    fn open_confirm(&mut self, numbers: Vec<u64>) {
+        let rows: Vec<&Row> = self
+            .rows
+            .iter()
+            .filter(|row| numbers.contains(&row.pr.number))
+            .collect();
         if rows.is_empty() {
             return;
         }

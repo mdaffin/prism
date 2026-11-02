@@ -56,12 +56,12 @@ pub const KEYS: &[KeyHelp] = &[
     key("Space", "Toggle selection", None),
     key(
         "Enter",
-        "Review the selected PRs, or the highlighted one",
+        "Act on the highlighted item: review the PR in the table, expand or collapse a comment, open a check",
         Some("Review"),
     ),
     key(
         "o",
-        "Open what the pane shows: a check's or comment's page, else the PR(s) like Ctrl-O",
+        "Open the highlighted item: the PR in the table, a check's or a comment's page. Nothing in the description and diff",
         None,
     ),
     key(

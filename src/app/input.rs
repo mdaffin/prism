@@ -174,11 +174,9 @@ impl App {
             KeyCode::PageUp => self.page_focused(-1),
             KeyCode::Home => self.jump_focused(false),
             KeyCode::End => self.jump_focused(true),
-            KeyCode::Enter | KeyCode::Char(' ') if self.focus == Pane::Comments => {
-                self.toggle_comment()
-            }
+            KeyCode::Char(' ') if self.focus == Pane::Comments => self.toggle_comment(),
             KeyCode::Char(' ') => self.toggle_selected(),
-            KeyCode::Enter => self.open_confirm(),
+            KeyCode::Enter => self.enter_focused(),
             _ => {}
         }
     }

@@ -1,7 +1,7 @@
 use super::work::StatusFetch;
 use super::*;
 use crate::gh::{PrStatus, ReviewDecision};
-use crate::testing::{app_with, pr_with, press};
+use crate::testing::{app_with, ctrl_g, pr_with, press};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 fn pr(number: u64, state: &str) -> Pr {
@@ -235,7 +235,7 @@ fn hidden_selected_prs_stay_selected_and_are_reviewed() {
     assert_eq!(app.selected, HashSet::from([1, 3]));
     assert_eq!(app.hidden_selected(), 2);
 
-    key(&mut app, KeyCode::Enter);
+    ctrl_g(&mut app);
     assert_eq!(confirm_numbers(&app), [1, 3]);
 }
 
@@ -316,13 +316,6 @@ fn ctrl_a_adds_to_the_selection_and_only_from_visible_rows() {
 fn ctrl_o(app: &mut App) {
     app.update(Msg::Key(KeyEvent::new(
         KeyCode::Char('o'),
-        KeyModifiers::CONTROL,
-    )));
-}
-
-fn ctrl_g(app: &mut App) {
-    app.update(Msg::Key(KeyEvent::new(
-        KeyCode::Char('g'),
         KeyModifiers::CONTROL,
     )));
 }
@@ -526,21 +519,70 @@ fn o_opens_the_highlighted_comment_and_falls_back_to_the_pr() {
 }
 
 #[test]
-fn o_opens_the_pr_from_the_table_the_description_and_the_diff() {
-    let mut app = app_with_rows(2);
-    press(&mut app, "j");
-    for pane in [Pane::Table, Pane::Description, Pane::Diff] {
-        focus(&mut app, pane);
-        press(&mut app, "o");
-        assert_eq!(app.opens_to_run(), [2]);
-    }
-    // Like Ctrl-O, it opens the selected PRs when there are some.
-    press(&mut app, " ");
-    focus(&mut app, Pane::Table);
-    press(&mut app, "kk");
+fn o_in_the_table_opens_only_the_highlighted_pr() {
+    let mut app = app_with_rows(3);
+    press(&mut app, " j");
     press(&mut app, "o");
     assert_eq!(app.opens_to_run(), [2]);
     assert!(app.pages_to_run().is_empty());
+}
+
+#[test]
+fn o_does_nothing_in_the_description_and_the_diff() {
+    let mut app = app_with_rows(2);
+    press(&mut app, " j");
+    for pane in [Pane::Description, Pane::Diff] {
+        focus(&mut app, pane);
+        press(&mut app, "o");
+        assert!(app.opens_to_run().is_empty(), "{pane:?}");
+        assert!(app.pages_to_run().is_empty(), "{pane:?}");
+    }
+}
+
+#[test]
+fn enter_in_the_checks_opens_the_highlighted_check_like_o() {
+    let mut app = app_with_check_pages();
+    focus(&mut app, Pane::Checks);
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.pages_to_run(), ["https://example.test/job"]);
+    assert!(matches!(app.mode, Mode::List));
+
+    // The second check has no page.
+    press(&mut app, "j");
+    key(&mut app, KeyCode::Enter);
+    assert!(app.pages_to_run().is_empty());
+    assert_eq!(
+        app.errors.text().as_deref(),
+        Some("The highlighted check has no page")
+    );
+}
+
+#[test]
+fn enter_does_nothing_in_the_description_and_the_diff() {
+    let mut app = app_with_rows(2);
+    press(&mut app, " ");
+    for pane in [Pane::Description, Pane::Diff] {
+        focus(&mut app, pane);
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::List), "{pane:?}");
+        assert!(app.opens_to_run().is_empty(), "{pane:?}");
+        assert!(app.pages_to_run().is_empty(), "{pane:?}");
+    }
+}
+
+#[test]
+fn enter_in_the_comments_expands_the_highlighted_comment() {
+    let mut app = app_with_rows(1);
+    app.drawn.comment_layout = CommentLayout {
+        items: vec![(0, 1), (1, 1)],
+        viewport: 5,
+    };
+    focus(&mut app, Pane::Comments);
+    key(&mut app, KeyCode::Enter);
+    assert!(app.scroll.comments_open.contains(&0));
+    assert!(matches!(app.mode, Mode::List));
+    key(&mut app, KeyCode::Enter);
+    assert!(!app.scroll.comments_open.contains(&0));
 }
 
 #[test]
@@ -597,11 +639,11 @@ fn enter_confirms_the_highlighted_pr_when_none_are_selected() {
 }
 
 #[test]
-fn enter_confirms_the_selected_prs_in_table_order() {
+fn enter_confirms_only_the_highlighted_pr_even_with_a_selection() {
     let mut app = app_with_rows(3);
     press(&mut app, " jj ");
     key(&mut app, KeyCode::Enter);
-    assert_eq!(confirm_numbers(&app), [1, 3]);
+    assert_eq!(confirm_numbers(&app), [3]);
 }
 
 #[test]
@@ -621,7 +663,7 @@ fn closed_and_merged_prs_are_left_out() {
     let prs = vec![pr(1, "OPEN"), pr(2, "CLOSED"), pr(3, "MERGED")];
     let mut app = app_with(prs);
     press(&mut app, " j j ");
-    key(&mut app, KeyCode::Enter);
+    ctrl_g(&mut app);
     assert_eq!(confirm_numbers(&app), [1]);
     assert_eq!(confirm(&app).left_out, [2, 3]);
 
@@ -669,7 +711,7 @@ fn start_approving(app: &mut App, count: usize) {
     for _ in 0..count {
         press(app, " j");
     }
-    key(app, KeyCode::Enter);
+    ctrl_g(app);
     key(app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::Running(_)));
 }
@@ -851,7 +893,7 @@ fn start_approving_and_merging() -> App {
     let mut app = app_with(prs);
     assert_eq!(numbers(&app), [1, 2, 3, 4]);
     press(&mut app, " j j j ");
-    key(&mut app, KeyCode::Enter);
+    ctrl_g(&mut app);
     key(&mut app, KeyCode::Right);
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::Running(_)));

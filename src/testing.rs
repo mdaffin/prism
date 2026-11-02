@@ -1,6 +1,6 @@
 //! Helpers shared by the tests of `app` and `ui`.
 
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
 
 use crate::app::{App, Msg};
@@ -40,4 +40,12 @@ pub fn press(app: &mut App, keys: &str) {
     for c in keys.chars() {
         app.update(Msg::Key(KeyCode::Char(c).into()));
     }
+}
+
+/// Presses Ctrl-G, which reviews the selected PRs.
+pub fn ctrl_g(app: &mut App) {
+    app.update(Msg::Key(KeyEvent::new(
+        KeyCode::Char('g'),
+        KeyModifiers::CONTROL,
+    )));
 }
