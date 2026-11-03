@@ -17,7 +17,7 @@ use crate::app::{
     to_u16,
 };
 use crate::batch::{Batch, Confirm, ItemStatus, Summary};
-use crate::gh::{Comment, PrState};
+use crate::gh::{Approvers, Comment, PrState, Reviewer, Verdict};
 use crate::keys;
 use crate::model::{self, CheckState};
 
@@ -42,6 +42,11 @@ const MIN_LOWER_ROWS: u16 = 6;
 
 /// The rows of the Pull request box: the border, the title and the summary line.
 const PULL_REQUEST_ROWS: u16 = 4;
+
+/// The most rows the approvers pane takes, its border included, and the fewest. In between it fits
+/// its lines, if the room allows.
+const MAX_APPROVERS_ROWS: u16 = 8;
+const MIN_APPROVERS_ROWS: u16 = 3;
 
 /// The widest a popup gets, however wide the terminal is.
 const MAX_POPUP_WIDTH: u16 = 90;
@@ -78,17 +83,27 @@ struct PaneLayout {
     /// The search and filter boxes and the table.
     list: Rect,
     checks: Rect,
+    /// Above the diff.
+    approvers: Rect,
     comments: Rect,
     pull_request: Rect,
     description: Rect,
     diff: Rect,
 }
 
+/// The approvers over the diff, in `area`. The approvers get `wanted` rows, but never more than a
+/// third of the area.
+fn approvers_over_diff(area: Rect, wanted: u16) -> [Rect; 2] {
+    let rows = wanted.min(area.height / 3);
+    Layout::vertical([Constraint::Length(rows), Constraint::Fill(1)]).areas(area)
+}
+
 /// With room, the list is above the checks and comments on the left and the PR's details are on
 /// the right. In a narrow terminal that would leave the table too little width, so the list takes
 /// the full width on top. Under it, what is read most gets the space: the description beside the
-/// diff, with the checks and comments in a short row at the bottom.
-fn pane_layout(body: Rect) -> PaneLayout {
+/// diff, with the checks and comments in a short row at the bottom. The approvers are in the
+/// details, above the diff, and take `approvers_rows` if they can.
+fn pane_layout(body: Rect, approvers_rows: u16) -> PaneLayout {
     let halves = |area| Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).areas(area);
     if body.width >= WIDE_LAYOUT_MIN_WIDTH {
         let [left, detail] = halves(body);
@@ -98,15 +113,17 @@ fn pane_layout(body: Rect) -> PaneLayout {
             Constraint::Max(MAX_COMMENTS_ROWS),
         ])
         .areas(left);
-        let [pull_request, description, diff] = Layout::vertical([
+        let [pull_request, description, diff_pane] = Layout::vertical([
             Constraint::Length(PULL_REQUEST_ROWS),
             Constraint::Fill(1),
             Constraint::Fill(2),
         ])
         .areas(detail);
+        let [approvers, diff] = approvers_over_diff(diff_pane, approvers_rows);
         PaneLayout {
             list,
             checks,
+            approvers,
             comments,
             pull_request,
             description,
@@ -120,14 +137,16 @@ fn pane_layout(body: Rect) -> PaneLayout {
             Constraint::Length(lower_rows),
         ])
         .areas(body);
-        let [left, diff] = halves(details);
+        let [left, diff_pane] = halves(details);
         let [pull_request, description] =
             Layout::vertical([Constraint::Length(PULL_REQUEST_ROWS), Constraint::Fill(1)])
                 .areas(left);
+        let [approvers, diff] = approvers_over_diff(diff_pane, approvers_rows);
         let [checks, comments] = halves(lower);
         PaneLayout {
             list,
             checks,
+            approvers,
             comments,
             pull_request,
             description,
@@ -151,11 +170,12 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     let PaneLayout {
         list: top_area,
         checks: checks_area,
+        approvers: approvers_area,
         comments: comments_area,
         pull_request: pull_request_area,
         description: description_area,
         diff: diff_area,
-    } = pane_layout(body_area);
+    } = pane_layout(body_area, approvers_rows(app, body_area.width / 2));
     // The filter box is only there while it is being edited or has text in it.
     let filter_rows = if app.typing == Typing::Filter || !app.filter.value().is_empty() {
         INPUT_BOX_ROWS
@@ -198,6 +218,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
 
     pr_table(app, frame, table_area);
     checks(app, frame, checks_area);
+    approvers(app, frame, approvers_area);
     comments(app, frame, comments_area);
     pull_request(app, frame, pull_request_area);
     description(app, frame, description_area);
@@ -1134,6 +1155,115 @@ fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
     app.scroll.check = selected;
     app.scroll.checks = scroll;
     app.scroll.checks_x = to_u16(x);
+}
+
+/// What the approvers pane says about the highlighted PR: nothing without one, and otherwise who
+/// has reviewed and who has been asked to, one to a line, with a mark and a colour for how it
+/// stands, as in the checks pane, and what else is worth knowing.
+fn approvers_text(app: &App) -> Text<'static> {
+    match app.highlighted().map(|row| app.details.get(&row.pr.number)) {
+        None => Text::default(),
+        Some(None | Some(Fetch::Loading(_))) => Text::from("Loading…"),
+        Some(Some(Fetch::Failed(error))) => {
+            let error = model::first_line(error);
+            Text::from(format!("Failed to load details: {error}")).red()
+        }
+        Some(Some(Fetch::Loaded(Details { details, .. }))) => {
+            if details.approvers == Approvers::default() {
+                Text::from("No reviews or review requests.")
+            } else {
+                Text::from(approver_lines(&details.approvers))
+            }
+        }
+    }
+}
+
+/// The rows the approvers pane would like when it is `width` columns wide, border included: one
+/// for each line as wrapped, between [`MIN_APPROVERS_ROWS`] and [`MAX_APPROVERS_ROWS`].
+fn approvers_rows(app: &App, width: u16) -> u16 {
+    let inner = usize::from(width.saturating_sub(2));
+    let lines = model::layout_plain(&approvers_text(app), inner).lines.len();
+    (to_u16(lines) + 2).clamp(MIN_APPROVERS_ROWS, MAX_APPROVERS_ROWS)
+}
+
+/// The approvers pane, above the diff.
+fn approvers(app: &mut App, frame: &mut Frame, area: Rect) {
+    app.drawn.areas.approvers = area;
+    let block = pane_block("Approvers", app.focus == Pane::Approvers);
+    let inner = block.inner(area);
+    set_page(app, Pane::Approvers, inner.height, 1);
+    frame.render_widget(block, area);
+    let text = approvers_text(app);
+    // Wrapped here, as with the description, so the scrollbar knows how many rows there are.
+    let laid = model::layout_plain(&text, usize::from(inner.width));
+    let rows = laid.lines.len();
+    let scroll = app.scroll.approvers.min(max_scroll(rows, inner.height));
+    frame.render_widget(
+        Paragraph::new(Text::from(laid.lines)).scroll((scroll, 0)),
+        inner,
+    );
+    scrollbar(
+        frame,
+        area,
+        rows,
+        usize::from(inner.height),
+        usize::from(scroll),
+    );
+    app.scroll.approvers = scroll;
+}
+
+/// The approvers pane's lines: those who asked for changes, then those who approved, those whose
+/// review was dismissed, and then those still asked, code owners first.
+fn approver_lines(approvers: &Approvers) -> Vec<Line<'static>> {
+    let name = |reviewer: &Reviewer| match reviewer {
+        Reviewer::Person(login) => format!("@{login}"),
+        Reviewer::Team(slug) => slug.clone(),
+        Reviewer::Hidden => "a team or reviewer you can't see".to_string(),
+    };
+    let mut lines = Vec::new();
+    for verdict in [
+        Verdict::ChangesRequested,
+        Verdict::Approved,
+        Verdict::Dismissed,
+    ] {
+        for approval in approvers.approvals.iter().filter(|a| a.verdict == verdict) {
+            // A review of an older commit may not count, so it is yellow like a pending check.
+            let (mark, label, style) = match (verdict, approval.stale) {
+                (Verdict::ChangesRequested, _) => ("✗", "changes requested", Style::new().red()),
+                (Verdict::Approved, false) => ("✓", "approved", Style::new().green()),
+                (Verdict::Approved, true) => ("✓", "approved", Style::new().yellow()),
+                _ => ("○", "dismissed", Style::new().dim()),
+            };
+            let mut detail = vec![label.to_string()];
+            if approval.stale {
+                detail.push("on an older commit".to_string());
+            }
+            if !approval.for_teams.is_empty() {
+                detail.push(format!("for {}", approval.for_teams.join(", ")));
+            }
+            lines.push(Line::from(vec![
+                Span::styled(format!("{mark} "), style),
+                Span::raw(format!("{} · ", name(&approval.by))),
+                Span::styled(detail.join(" · "), style),
+            ]));
+        }
+    }
+    let code_owners = approvers.requests.iter().filter(|r| r.code_owner);
+    let others = approvers.requests.iter().filter(|r| !r.code_owner);
+    for request in code_owners.chain(others) {
+        let label = if request.code_owner {
+            "waiting · code owner"
+        } else {
+            "waiting"
+        };
+        let style = Style::new().yellow();
+        lines.push(Line::from(vec![
+            Span::styled("… ", style),
+            Span::raw(format!("{} · ", name(&request.of))),
+            Span::styled(label, style),
+        ]));
+    }
+    lines
 }
 
 /// A row of the checks pane, with its status coloured.
@@ -2147,6 +2277,173 @@ mod tests {
         assert!(app.scroll.description_x < at_end);
     }
 
+    /// Details with these approvals and requests (as JSON), and nothing else.
+    fn details_with_approvers(approvers: serde_json::Value) -> crate::gh::PrDetails {
+        serde_json::from_value(serde_json::json!({
+            "headRefName": "branch",
+            "body": "",
+            "comments": [],
+            "additions": 1,
+            "deletions": 1,
+            "approvers": approvers,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_approvers_pane_is_above_the_diff_in_both_layouts() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        for width in [200, 100] {
+            draw(&mut app, width, 40);
+            let areas = &app.drawn.areas;
+            let (approvers, description, diff) = (areas.approvers, areas.description, areas.diff);
+            // The diff is right under it, in the same columns.
+            assert_eq!((approvers.x, approvers.width), (diff.x, diff.width));
+            assert_eq!(approvers.bottom(), diff.y);
+            // Wide, the description is above it, in the same column. Narrow, it is beside it.
+            if width == 200 {
+                assert_eq!(approvers.y, description.bottom());
+                assert_eq!(approvers.x, description.x);
+            } else {
+                assert!(approvers.x >= description.right());
+            }
+            // With a line to say, it is as short as it can be.
+            assert_eq!(approvers.height, MIN_APPROVERS_ROWS);
+        }
+    }
+
+    #[test]
+    fn the_approvers_pane_grows_with_its_lines_up_to_a_limit() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        let requests = |n: usize| -> serde_json::Value {
+            (0..n)
+                .map(
+                    |i| serde_json::json!({"of": {"Person": format!("u{i}")}, "code_owner": false}),
+                )
+                .collect()
+        };
+        let mut heights = Vec::new();
+        for n in [2, 4, 30] {
+            app.details_loaded(
+                1,
+                Ok(details_with_approvers(
+                    serde_json::json!({"requests": requests(n)}),
+                )),
+            );
+            draw(&mut app, 200, 60);
+            heights.push(app.drawn.areas.approvers.height);
+        }
+        // Two rows of border, and then a line each, until the limit.
+        assert_eq!(heights, [4, 6, MAX_APPROVERS_ROWS]);
+    }
+
+    #[test]
+    fn a_short_terminal_keeps_most_of_the_details_for_the_description() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        let requests: serde_json::Value = (0..30)
+            .map(|i| serde_json::json!({"of": {"Person": format!("u{i}")}, "code_owner": false}))
+            .collect();
+        app.details_loaded(
+            1,
+            Ok(details_with_approvers(
+                serde_json::json!({"requests": requests}),
+            )),
+        );
+        draw(&mut app, 100, 24);
+        let areas = &app.drawn.areas;
+        assert!(areas.description.height >= areas.approvers.height);
+    }
+
+    #[test]
+    fn the_approvers_pane_marks_each_reviewer_by_how_it_stands() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        let details = details_with_approvers(serde_json::json!({
+            "approvals": [
+                {"by": {"Person": "alice"}, "verdict": "APPROVED", "stale": false,
+                 "for_teams": ["org/owners"]},
+                {"by": {"Person": "bob"}, "verdict": "APPROVED", "stale": true},
+                {"by": {"Person": "carol"}, "verdict": "CHANGES_REQUESTED", "stale": false},
+            ],
+            "requests": [
+                {"of": {"Team": "org/owners"}, "code_owner": true},
+                {"of": {"Person": "dave"}, "code_owner": false},
+                {"of": "Hidden", "code_owner": true},
+            ],
+        }));
+        app.details_loaded(1, Ok(details));
+        let buffer = draw(&mut app, 200, 60);
+        let screen = lines(&buffer);
+        let has = |text: &str| screen.iter().any(|line| line.contains(text));
+        assert!(has("Approvers"));
+        assert!(has("✗ @carol · changes requested"));
+        assert!(has("✓ @alice · approved · for org/owners"));
+        assert!(has("✓ @bob · approved · on an older commit"));
+        assert!(has("… org/owners · waiting · code owner"));
+        assert!(has("… @dave · waiting"));
+        // It is long, so it wraps in the narrow pane.
+        assert!(has("… a team or reviewer"));
+
+        // The colours are the checks pane's: red, green, and yellow for what may not count.
+        let colour = |text: &str| {
+            let at = find(&buffer, text).unwrap();
+            buffer[at].fg
+        };
+        assert_eq!(colour("✗ @carol"), Color::Red);
+        assert_eq!(colour("✓ @alice"), Color::Green);
+        assert_eq!(colour("✓ @bob"), Color::Yellow);
+        assert_eq!(colour("… @dave"), Color::Yellow);
+
+        // Changes requested come first, then approvals, and what is still asked comes last, the
+        // code owners before the rest.
+        let row = |text: &str| find(&buffer, text).unwrap().y;
+        assert!(row("@carol") < row("@alice") && row("@alice") < row("@bob"));
+        assert!(row("@bob") < row("org/owners · waiting"));
+        assert!(row("org/owners · waiting") < row("@dave"));
+    }
+
+    #[test]
+    fn the_approvers_pane_says_when_there_is_nothing_and_while_it_loads() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        let screen = lines(&draw(&mut app, 200, 40));
+        assert!(screen.iter().any(|line| line.contains("Loading…")));
+        app.details_loaded(1, Ok(details_with_approvers(serde_json::json!({}))));
+        let screen = lines(&draw(&mut app, 200, 40));
+        assert!(
+            screen
+                .iter()
+                .any(|line| line.contains("No reviews or review requests."))
+        );
+        app.details_loaded(1, Err(color_eyre::eyre::eyre!("boom")));
+        let screen = lines(&draw(&mut app, 200, 40));
+        assert!(
+            screen
+                .iter()
+                .any(|line| line.contains("Failed to load details: boom"))
+        );
+    }
+
+    #[test]
+    fn a_long_list_of_approvers_scrolls_with_a_scrollbar() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        let requests: Vec<_> = (0..30)
+            .map(|i| serde_json::json!({"of": {"Person": format!("user{i}")}, "code_owner": false}))
+            .collect();
+        app.details_loaded(
+            1,
+            Ok(details_with_approvers(
+                serde_json::json!({"requests": requests}),
+            )),
+        );
+        let buffer = draw(&mut app, 200, 40);
+        assert!(has_scrollbar(&buffer, app.drawn.areas.approvers));
+        assert!(find(&buffer, "@user0 ").is_some() && find(&buffer, "@user29 ").is_none());
+        focus(&mut app, Pane::Approvers);
+        key(&mut app, KeyCode::End);
+        let screen = lines(&draw(&mut app, 200, 40));
+        assert!(screen.iter().any(|line| line.contains("@user29 ")));
+        assert!(!screen.iter().any(|line| line.contains("@user0 ")));
+    }
+
     #[test]
     fn reviews_and_threads_are_headed_by_what_they_are_and_a_thread_shows_its_replies() {
         let mut app = app_with(vec![pr_checked(1, "MERGEABLE", vec![])]);
@@ -2634,7 +2931,7 @@ mod tests {
         assert_eq!(at_top.first(), Some(&(diff.y + 1)));
         assert!(at_top.last() < Some(&(diff.bottom() - 2)));
 
-        for _ in 0..4 {
+        for _ in 0..5 {
             key(&mut app, KeyCode::Tab);
         }
         key(&mut app, KeyCode::End);
@@ -2801,9 +3098,10 @@ mod tests {
         assert_eq!(areas.description.x, 0);
         assert!(areas.diff.x >= areas.description.right());
         assert_eq!(
-            areas.diff.y,
+            areas.approvers.y,
             areas.description.y.saturating_sub(PULL_REQUEST_ROWS)
         );
+        assert_eq!(areas.diff.y, areas.approvers.bottom());
         assert_eq!(areas.diff.bottom(), areas.description.bottom());
         // The checks and comments are side by side below them, a short row.
         assert_eq!(areas.checks.y, areas.description.bottom());
@@ -2852,6 +3150,7 @@ mod tests {
         draw(&mut app, 100, 40);
         for pane in [
             Pane::Checks,
+            Pane::Approvers,
             Pane::Comments,
             Pane::Description,
             Pane::Diff,
@@ -2860,6 +3159,7 @@ mod tests {
             let area = match pane {
                 Pane::Table => app.drawn.areas.table,
                 Pane::Checks => app.drawn.areas.checks,
+                Pane::Approvers => app.drawn.areas.approvers,
                 Pane::Comments => app.drawn.areas.comments,
                 Pane::Description => app.drawn.areas.description,
                 Pane::Diff => app.drawn.areas.diff,
@@ -3441,6 +3741,7 @@ mod tests {
             "Enter, Space: Expand | o: Open | y: Copy | ?: Help",
             "?: Help | /: Search",
             "?: Help | /: Search",
+            "?: Help | /: Search",
         ] {
             let screen = lines(&draw(&mut app, 200, 30));
             let bar = screen.last().unwrap();
@@ -3636,9 +3937,9 @@ mod tests {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         app.details_loaded(1, Err(gh_failure()));
         let screen = lines(&draw(&mut app, 200, 40)).join("\n");
-        // Once in each of the Comments and Description panes.
+        // Once in each of the Comments, Approvers and Description panes.
         let message = "Failed to load details: GraphQL: Could not resolve to a PullRequest";
-        assert_eq!(screen.matches(message).count(), 2, "{screen}");
+        assert_eq!(screen.matches(message).count(), 3, "{screen}");
         assert!(!screen.contains("gh pr view"), "{screen}");
         assert!(!screen.contains("more detail"), "{screen}");
     }

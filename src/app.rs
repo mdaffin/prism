@@ -813,7 +813,7 @@ impl App {
     /// the diff nothing. A missing page is reported, except that a comment without one falls back
     /// to its PR.
     fn open_focused(&mut self) {
-        if matches!(self.focus, Pane::Description | Pane::Diff) {
+        if matches!(self.focus, Pane::Approvers | Pane::Description | Pane::Diff) {
             return;
         }
         self.errors.opens.clear();
@@ -843,7 +843,7 @@ impl App {
                 Some(row) => (row.pr.url.clone(), "Copied the PR's URL"),
                 None => return,
             },
-            (Pane::Description | Pane::Diff, _) => return,
+            (Pane::Approvers | Pane::Description | Pane::Diff, _) => return,
         };
         self.text_to_copy = Some(text);
         self.note = Some(note.to_string());
@@ -860,7 +860,7 @@ impl App {
             }
             Pane::Checks => self.open_focused(),
             Pane::Comments => self.toggle_comment(),
-            Pane::Description | Pane::Diff => {}
+            Pane::Approvers | Pane::Description | Pane::Diff => {}
         }
     }
 
@@ -895,7 +895,7 @@ impl App {
                 let last = comments.len().checked_sub(1)?;
                 comments[self.scroll.comment.min(last)].url.clone()
             }
-            Pane::Table | Pane::Description | Pane::Diff => return None,
+            Pane::Table | Pane::Approvers | Pane::Description | Pane::Diff => return None,
         };
         Some(url.map_or(Page::Missing, Page::Url))
     }

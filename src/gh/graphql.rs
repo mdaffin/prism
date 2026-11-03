@@ -8,8 +8,9 @@ use serde::Deserialize;
 use serde::de::IgnoredAny;
 
 use super::{
-    Author, Check, CheckRun, Comment, CommentKind, Conclusion, ContextState, Mergeable, Pr,
-    PrDetails, PrState, PrStatus, Reply, ReviewDecision, RunStatus, StatusContext, Thread, Verdict,
+    Approval, Approvers, Author, Check, CheckRun, Comment, CommentKind, Conclusion, ContextState,
+    Mergeable, Pr, PrDetails, PrState, PrStatus, Reply, ReviewDecision, ReviewRequest, Reviewer,
+    RunStatus, StatusContext, Thread, Verdict,
 };
 
 /// The most nodes GitHub gives for one `first:`.
@@ -384,7 +385,8 @@ impl<T> Search<T> {
 
 /// The details of one PR: a page of its comments, from `$after` on, and the PR's own fields, which
 /// every page repeats. The reviews and review threads, up to 100 of each and 100 comments in a
-/// thread, come with the first page only (`$withReviews`), as they have no paging here. The
+/// thread, and who reviewed and who is asked (up to 50 of each), come with the first page only
+/// (`$withReviews`), as they have no paging here. The
 /// inline comments are taken from the threads alone: a review's own `comments` are the same ones.
 /// The repository is in `$owner` and `$name`.
 pub const DETAILS_QUERY: &str = r#"
@@ -392,9 +394,30 @@ query($owner: String!, $name: String!, $number: Int!, $after: String, $withRevie
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       headRefName
+      headRefOid
       body
       additions
       deletions
+      reviewRequests(first: 50) @include(if: $withReviews) {
+        nodes {
+          asCodeOwner
+          requestedReviewer {
+            __typename
+            ... on User { login }
+            ... on Bot { login }
+            ... on Mannequin { login }
+            ... on Team { combinedSlug }
+          }
+        }
+      }
+      latestOpinionatedReviews(first: 50) @include(if: $withReviews) {
+        nodes {
+          state
+          author { __typename login }
+          commit { oid }
+          onBehalfOf(first: 10) { nodes { combinedSlug } }
+        }
+      }
       comments(first: 100, after: $after) {
         pageInfo { hasNextPage endCursor }
         nodes { author { __typename login } createdAt body url }
@@ -434,6 +457,7 @@ struct DetailsRepository {
 #[serde(rename_all = "camelCase")]
 struct GqlDetails {
     head_ref_name: String,
+    head_ref_oid: String,
     body: Option<String>,
     additions: u64,
     deletions: u64,
@@ -443,6 +467,96 @@ struct GqlDetails {
     reviews: Option<Nodes<GqlReview>>,
     #[serde(default)]
     review_threads: Option<Nodes<GqlThread>>,
+    #[serde(default)]
+    review_requests: Option<Nodes<GqlReviewRequest>>,
+    #[serde(default)]
+    latest_opinionated_reviews: Option<Nodes<GqlApproval>>,
+}
+
+/// Who a review is asked of. `null` for a reviewer the account can't see.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "__typename")]
+enum GqlReviewer {
+    User {
+        login: String,
+    },
+    Bot {
+        login: String,
+    },
+    Mannequin {
+        login: String,
+    },
+    Team {
+        #[serde(rename = "combinedSlug")]
+        combined_slug: String,
+    },
+    /// Any other kind, such as an enterprise team.
+    #[serde(other)]
+    Other,
+}
+
+impl GqlReviewer {
+    fn into_reviewer(self) -> Reviewer {
+        match self {
+            Self::User { login } | Self::Mannequin { login } => Reviewer::Person(login),
+            Self::Bot { login } => Reviewer::Person(format!("app/{login}")),
+            Self::Team { combined_slug } => Reviewer::Team(combined_slug),
+            Self::Other => Reviewer::Hidden,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GqlReviewRequest {
+    as_code_owner: bool,
+    requested_reviewer: Option<GqlReviewer>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GqlApproval {
+    state: ReviewState,
+    author: Option<GqlActor>,
+    /// `null` for a commit that is gone.
+    commit: Option<GqlCommitId>,
+    #[serde(rename = "onBehalfOf")]
+    on_behalf_of: Nodes<GqlTeamId>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GqlCommitId {
+    oid: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GqlTeamId {
+    #[serde(rename = "combinedSlug")]
+    combined_slug: String,
+}
+
+impl GqlApproval {
+    /// The review as an approval, or `None` for one that says nothing about the PR.
+    fn into_approval(self, head: &str) -> Option<Approval> {
+        let verdict = match self.state {
+            ReviewState::Approved => Verdict::Approved,
+            ReviewState::ChangesRequested => Verdict::ChangesRequested,
+            ReviewState::Dismissed => Verdict::Dismissed,
+            ReviewState::Commented | ReviewState::Pending => return None,
+        };
+        Some(Approval {
+            by: self.author.map_or(Reviewer::Hidden, |actor| {
+                Reviewer::Person(login(Some(actor)))
+            }),
+            verdict,
+            stale: self.commit.is_some_and(|commit| commit.oid != head),
+            for_teams: self
+                .on_behalf_of
+                .nodes
+                .into_iter()
+                .map(|team| team.combined_slug)
+                .collect(),
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -604,12 +718,33 @@ impl DetailsData {
             .into_iter()
             .flat_map(|threads| threads.nodes);
         comments.extend(threads.filter_map(GqlThread::into_comment));
+        let head = pr.head_ref_oid;
+        let approvers = Approvers {
+            approvals: pr
+                .latest_opinionated_reviews
+                .into_iter()
+                .flat_map(|reviews| reviews.nodes)
+                .filter_map(|review| review.into_approval(&head))
+                .collect(),
+            requests: pr
+                .review_requests
+                .into_iter()
+                .flat_map(|requests| requests.nodes)
+                .map(|request| ReviewRequest {
+                    of: request
+                        .requested_reviewer
+                        .map_or(Reviewer::Hidden, GqlReviewer::into_reviewer),
+                    code_owner: request.as_code_owner,
+                })
+                .collect(),
+        };
         let details = PrDetails {
             head_ref_name: pr.head_ref_name,
             body: pr.body,
             comments,
             additions: pr.additions,
             deletions: pr.deletions,
+            approvers,
         };
         (details, next)
     }
@@ -897,7 +1032,7 @@ mod tests {
     fn details_page(has_next: bool, cursor: &str) -> DetailsData {
         let json = format!(
             r#"{{"repository": {{"pullRequest": {{
-              "headRefName": "renovate/example-lib-2.x",
+              "headRefName": "renovate/example-lib-2.x", "headRefOid": "head1",
               "body": "",
               "additions": 3,
               "deletions": 1,
@@ -947,7 +1082,7 @@ mod tests {
 
     /// A first page with a comment, then every kind of review and thread there is.
     const REVIEWED: &str = r#"{"repository": {"pullRequest": {
-      "headRefName": "b", "body": "", "additions": 1, "deletions": 1,
+      "headRefName": "b", "headRefOid": "head1", "body": "", "additions": 1, "deletions": 1,
       "comments": {
         "pageInfo": {"hasNextPage": false, "endCursor": null},
         "nodes": [{"author": {"__typename": "User", "login": "alice"},
@@ -1051,11 +1186,95 @@ mod tests {
     fn a_later_page_has_no_reviews_or_threads_and_still_parses() {
         // `@include(if: false)` leaves the keys out.
         let json = r#"{"repository": {"pullRequest": {
-          "headRefName": "b", "body": null, "additions": 1, "deletions": 1,
+          "headRefName": "b", "headRefOid": "head1", "body": null, "additions": 1, "deletions": 1,
           "comments": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}
         }}}"#;
         let data: DetailsData = serde_json::from_str(json).unwrap();
         let (details, next) = data.into_page();
         assert!(details.comments.is_empty() && next.is_none());
+    }
+
+    /// A PR at commit `head1` with every kind of reviewer and of review there is.
+    const APPROVERS: &str = r#"{"repository": {"pullRequest": {
+      "headRefName": "b", "headRefOid": "head1", "body": "", "additions": 1, "deletions": 1,
+      "comments": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []},
+      "reviewRequests": {"nodes": [
+        {"asCodeOwner": true, "requestedReviewer": {"__typename": "Team", "combinedSlug": "org/owners"}},
+        {"asCodeOwner": false, "requestedReviewer": {"__typename": "User", "login": "dave"}},
+        {"asCodeOwner": false, "requestedReviewer": {"__typename": "Bot", "login": "copilot"}},
+        {"asCodeOwner": true, "requestedReviewer": null},
+        {"asCodeOwner": false, "requestedReviewer": {"__typename": "EnterpriseTeam"}}
+      ]},
+      "latestOpinionatedReviews": {"nodes": [
+        {"state": "APPROVED", "author": {"__typename": "User", "login": "alice"},
+         "commit": {"oid": "head1"}, "onBehalfOf": {"nodes": [{"combinedSlug": "org/owners"}]}},
+        {"state": "APPROVED", "author": {"__typename": "User", "login": "bob"},
+         "commit": {"oid": "older"}, "onBehalfOf": {"nodes": []}},
+        {"state": "CHANGES_REQUESTED", "author": {"__typename": "User", "login": "carol"},
+         "commit": {"oid": "head1"}, "onBehalfOf": {"nodes": []}},
+        {"state": "DISMISSED", "author": null, "commit": null, "onBehalfOf": {"nodes": []}},
+        {"state": "COMMENTED", "author": {"__typename": "User", "login": "erin"},
+         "commit": {"oid": "head1"}, "onBehalfOf": {"nodes": []}},
+        {"state": "PENDING", "author": {"__typename": "User", "login": "me"},
+         "commit": {"oid": "head1"}, "onBehalfOf": {"nodes": []}}
+      ]}
+    }}}"#;
+
+    fn approvers() -> Approvers {
+        let data: DetailsData = serde_json::from_str(APPROVERS).unwrap();
+        data.into_page().0.approvers
+    }
+
+    #[test]
+    fn approvals_say_who_how_and_whether_the_commit_is_old() {
+        let approvals = approvers().approvals;
+        // A comment-only review and a pending one say nothing about the PR.
+        assert_eq!(approvals.len(), 4);
+        let person = |name: &str| Reviewer::Person(name.to_string());
+        assert_eq!(
+            approvals[0],
+            Approval {
+                by: person("alice"),
+                verdict: Verdict::Approved,
+                stale: false,
+                for_teams: vec!["org/owners".to_string()],
+            }
+        );
+        // The commit is not the head, so the approval is of older code.
+        assert!(approvals[1].stale && approvals[1].for_teams.is_empty());
+        assert_eq!(approvals[2].verdict, Verdict::ChangesRequested);
+        assert!(!approvals[2].stale);
+        // A deleted account and a commit that is gone: not a person, and not called stale.
+        assert_eq!(approvals[3].by, Reviewer::Hidden);
+        assert_eq!(approvals[3].verdict, Verdict::Dismissed);
+        assert!(!approvals[3].stale);
+    }
+
+    #[test]
+    fn requests_tell_a_team_from_a_person_and_keep_the_code_owner_mark() {
+        let requests = approvers().requests;
+        let summary: Vec<(Reviewer, bool)> =
+            requests.into_iter().map(|r| (r.of, r.code_owner)).collect();
+        assert_eq!(
+            summary,
+            [
+                (Reviewer::Team("org/owners".to_string()), true),
+                (Reviewer::Person("dave".to_string()), false),
+                (Reviewer::Person("app/copilot".to_string()), false),
+                // One the account can't see, and a kind that isn't known.
+                (Reviewer::Hidden, true),
+                (Reviewer::Hidden, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_later_page_has_no_approvers() {
+        let json = r#"{"repository": {"pullRequest": {
+          "headRefName": "b", "headRefOid": "head1", "body": null, "additions": 1, "deletions": 1,
+          "comments": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}
+        }}}"#;
+        let data: DetailsData = serde_json::from_str(json).unwrap();
+        assert_eq!(data.into_page().0.approvers, Approvers::default());
     }
 }

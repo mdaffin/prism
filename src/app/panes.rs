@@ -13,6 +13,7 @@ use crate::model::LinkSpan;
 #[derive(Default)]
 pub struct Scroll {
     pub checks: u16,
+    pub approvers: u16,
     /// Columns the checks' names are scrolled sideways. The view clamps it.
     pub checks_x: u16,
     pub description: u16,
@@ -61,16 +62,18 @@ pub enum Pane {
     Checks,
     Comments,
     Description,
+    Approvers,
     Diff,
 }
 
 impl Pane {
     /// Every pane, in the order Tab cycles through them.
-    const ORDER: [Pane; 5] = [
+    const ORDER: [Pane; 6] = [
         Pane::Table,
         Pane::Checks,
         Pane::Comments,
         Pane::Description,
+        Pane::Approvers,
         Pane::Diff,
     ];
 
@@ -142,6 +145,7 @@ pub struct PaneAreas {
     /// The position in `visible` of the first row drawn.
     pub table_offset: usize,
     pub checks: Rect,
+    pub approvers: Rect,
     pub comments: Rect,
     pub description: Rect,
     pub diff: Rect,
@@ -152,6 +156,7 @@ impl PaneAreas {
         match pane {
             Pane::Table => self.table,
             Pane::Checks => self.checks,
+            Pane::Approvers => self.approvers,
             Pane::Comments => self.comments,
             Pane::Description => self.description,
             Pane::Diff => self.diff,
@@ -188,6 +193,9 @@ impl App {
             Pane::Checks => {
                 self.scroll.checks = scrolled(self.scroll.checks, by);
             }
+            Pane::Approvers => {
+                self.scroll.approvers = scrolled(self.scroll.approvers, by);
+            }
             Pane::Comments => {
                 self.scroll.comments = scrolled(self.scroll.comments, by);
             }
@@ -201,10 +209,11 @@ impl App {
     }
 
     /// Scrolls a pane sideways: the table's columns, the checks' names, the diff, or the tables of
-    /// the description or the open comments.
+    /// the description or the open comments. The approvers wrap, so they have nothing to scroll.
     pub(super) fn scroll_sideways(&mut self, pane: Pane, by: isize) {
         let x = match pane {
             Pane::Table => &mut self.list_x,
+            Pane::Approvers => return,
             Pane::Checks => &mut self.scroll.checks_x,
             Pane::Description => &mut self.scroll.description_x,
             Pane::Comments => &mut self.scroll.comment_x,
@@ -418,6 +427,7 @@ impl App {
                 self.scroll.comment = n;
                 self.scroll.comments = to_u16(start);
             }
+            Pane::Approvers => self.scroll.approvers = if end { u16::MAX } else { 0 },
             Pane::Description => self.scroll.description = if end { u16::MAX } else { 0 },
             Pane::Diff => self.scroll.diff = if end { u16::MAX } else { 0 },
         }

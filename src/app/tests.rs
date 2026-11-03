@@ -1312,7 +1312,7 @@ fn diff_colours_become_styles() {
 
 /// Presses Tab until `pane` has focus.
 fn focus(app: &mut App, pane: Pane) {
-    for _ in 0..4 {
+    for _ in 0..5 {
         if app.focus == pane {
             return;
         }
@@ -1375,6 +1375,18 @@ fn tab_cycles_focus_and_arrows_act_on_the_focused_pane() {
     assert_eq!((app.scroll.checks, app.scroll.diff), (0, 0));
     key(&mut app, KeyCode::PageUp);
     assert_eq!(app.scroll.description, 0);
+
+    // The approvers, above the diff, scroll a line at a time.
+    key(&mut app, KeyCode::Tab);
+    assert!(app.focus == Pane::Approvers);
+    press(&mut app, "jj");
+    assert_eq!(app.scroll.approvers, 2);
+    key(&mut app, KeyCode::Up);
+    assert_eq!(app.scroll.approvers, 1);
+    key(&mut app, KeyCode::Home);
+    assert_eq!(app.scroll.approvers, 0);
+    // Left and right have nothing to scroll there.
+    press(&mut app, "l");
 
     key(&mut app, KeyCode::Tab);
     assert!(app.focus == Pane::Diff);

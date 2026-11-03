@@ -596,6 +596,52 @@ pub struct PrDetails {
     pub comments: Vec<Comment>,
     pub additions: u64,
     pub deletions: u64,
+    /// Who has reviewed the PR and who has been asked to.
+    #[cfg_attr(test, serde(default))]
+    pub approvers: Approvers,
+}
+
+/// Who a review was asked of, or who gave one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(test, derive(Deserialize))]
+pub enum Reviewer {
+    /// A person, or a bot, by login; a bot's has the `app/` prefix.
+    Person(String),
+    /// A team as `org/slug`.
+    Team(String),
+    /// A reviewer GitHub didn't say, such as a team the account can't see.
+    Hidden,
+}
+
+/// A person's latest review that said something: approved, asked for changes, or was dismissed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(test, derive(Deserialize))]
+pub struct Approval {
+    pub by: Reviewer,
+    pub verdict: Verdict,
+    /// Whether the PR has new commits since the review.
+    pub stale: bool,
+    /// The teams the review was given for, as `org/slug`. It is how a team's request is met.
+    #[cfg_attr(test, serde(default))]
+    pub for_teams: Vec<String>,
+}
+
+/// Someone a review is still asked of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(test, derive(Deserialize))]
+pub struct ReviewRequest {
+    pub of: Reviewer,
+    /// Whether it was asked for because of CODEOWNERS.
+    pub code_owner: bool,
+}
+
+/// The reviews of a PR, as the approvers pane shows them.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[cfg_attr(test, derive(Deserialize))]
+#[cfg_attr(test, serde(default))]
+pub struct Approvers {
+    pub approvals: Vec<Approval>,
+    pub requests: Vec<ReviewRequest>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
