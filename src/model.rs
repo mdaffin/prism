@@ -189,6 +189,8 @@ pub enum Sort {
     Title,
     /// Those still needing a review, then those with changes requested, then approved ones.
     Review,
+    /// A to Z by login, ignoring case.
+    Author,
     /// The longest since anything happened to it first.
     Updated,
 }
@@ -200,7 +202,8 @@ impl Sort {
             Self::Checks => Self::Number,
             Self::Number => Self::Title,
             Self::Title => Self::Review,
-            Self::Review => Self::Updated,
+            Self::Review => Self::Author,
+            Self::Author => Self::Updated,
             Self::Updated => Self::Checks,
         }
     }

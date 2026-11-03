@@ -310,6 +310,12 @@ impl Row {
                     Sort::Number => self.pr.number.cmp(&other.pr.number),
                     Sort::Title => cells(self).cmp(&cells(other)),
                     Sort::Review => review(self).cmp(&review(other)),
+                    Sort::Author => self
+                        .pr
+                        .author
+                        .login
+                        .to_lowercase()
+                        .cmp(&other.pr.author.login.to_lowercase()),
                     // Timestamps in this form sort as text.
                     Sort::Updated => self.pr.updated_at.cmp(&other.pr.updated_at),
                 };
@@ -512,12 +518,18 @@ impl App {
     }
 
     /// The title, with a note when the list was cut short, and one for a sort that has no column
-    /// of the table to mark.
+    /// of the table to mark: the update time, and the author when the column is hidden because
+    /// every PR has the same one.
     pub fn title(&self) -> String {
         let mut title = self.title.clone();
-        if self.sort == Sort::Updated {
+        let unmarked = match self.sort {
+            Sort::Updated => Some("updated"),
+            Sort::Author if !self.shows_author() => Some("author"),
+            _ => None,
+        };
+        if let Some(name) = unmarked {
             let arrow = if self.descending { '▼' } else { '▲' };
-            title.push_str(&format!(" · sorted by updated {arrow}"));
+            title.push_str(&format!(" · sorted by {name} {arrow}"));
         }
         if self.truncated {
             title.push_str(&format!(" - showing first {}, more exist", self.limit));
@@ -534,6 +546,10 @@ impl App {
     /// stays for the session and applies to every list that loads.
     pub(super) fn cycle_sort(&mut self) {
         self.sort = self.sort.next();
+        // With one author for every PR there is no author column, so nothing to sort by.
+        if self.sort == Sort::Author && !self.shows_author() {
+            self.sort = self.sort.next();
+        }
         self.descending = false;
         self.resort();
     }

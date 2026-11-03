@@ -79,7 +79,7 @@ pub const KEYS: &[KeyHelp] = &[
     key("f", "Filter the list as you type", None),
     key(
         "s",
-        "Sort the list by the next column (checks, number, title, review, then when it was updated); the header shows which, and ▲ or ▼ which way",
+        "Sort the list by the next column (checks, number, title, review, author, then when it was updated); the header shows which, and ▲ or ▼ which way",
         None,
     ),
     key("S", "Reverse the sort", None),

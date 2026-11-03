@@ -421,6 +421,7 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
                 }
             };
             titles[0] = marked(Sort::Title, &titles[0]);
+            let author_header = marked(Sort::Author, "Author");
             // With more than fits, the title columns take the width of their longest cell and the
             // table scrolls sideways; otherwise they share what is left.
             let title_widths = title_column_widths(app, &titles);
@@ -460,7 +461,7 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
                 marked(Sort::Review, "Review"),
             ]
             .into_iter()
-            .chain(author.then(|| "Author".to_string()))
+            .chain(author.then_some(author_header))
             .chain(titles);
             let mut table = Table::new(rows, widths)
                 .header(Row::new(header).bold())
@@ -515,9 +516,10 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
 }
 
 /// Where each sortable column's header is on screen, for a click: the number, checks and review
-/// columns, and one area for all the title columns, to the end of the table. The table is
+/// columns, the author if it is there, and one area for all the title columns, to the end of the
+/// table. The table is
 /// `full_width` columns wide, scrolled `x` columns past its frozen ones, as drawn above. The
-/// checkbox and the author have nothing to sort by.
+/// checkbox has nothing to sort by.
 fn header_hits(area: Rect, author: bool, full_width: u16, x: u16) -> Vec<(Rect, Sort)> {
     // The columns, in the table's own coordinates, with the one column between each.
     let number = (CHECKBOX_WIDTH + 1, NUMBER_WIDTH);
@@ -529,10 +531,12 @@ fn header_hits(area: Rect, author: bool, full_width: u16, x: u16) -> Vec<(Rect, 
         (number.0, number.0 + number.1, Sort::Number),
         (checks.0, checks.0 + checks.1, Sort::Checks),
         (review.0, review.0 + review.1, Sort::Review),
+        (after_review, after_review + AUTHOR_WIDTH, Sort::Author),
         (title_start, full_width, Sort::Title),
     ];
     columns
         .into_iter()
+        .filter(|(_, _, sort)| author || *sort != Sort::Author)
         .filter_map(|(start, end, sort)| {
             // The frozen columns stay; the rest move with the scroll, and can't go under them.
             let (start, end) = if end <= FROZEN_WIDTH {
@@ -1688,6 +1692,8 @@ mod tests {
         assert!(header(&mut app).contains("Title ▲"));
         press(&mut app, "s");
         assert!(header(&mut app).contains("Review ▲"));
+        press(&mut app, "s");
+        assert!(header(&mut app).contains("Author ▲"));
         // Nothing in the table to mark for the update time, so the title bar says it.
         press(&mut app, "s");
         let screen = lines(&draw(&mut app, 200, 30));
@@ -1724,7 +1730,13 @@ mod tests {
         let sorts: Vec<Sort> = header.iter().map(|(_, sort)| *sort).collect();
         assert_eq!(
             sorts,
-            [Sort::Number, Sort::Checks, Sort::Review, Sort::Title]
+            [
+                Sort::Number,
+                Sort::Checks,
+                Sort::Review,
+                Sort::Author,
+                Sort::Title
+            ]
         );
         // Each is on the header row, over its own text, and none overlap.
         let text_at = |area: &Rect| -> String {
@@ -1735,13 +1747,14 @@ mod tests {
         assert!(text_at(&header[0].0).trim().starts_with('#'));
         assert!(text_at(&header[1].0).trim().starts_with("Checks"));
         assert!(text_at(&header[2].0).trim().starts_with("Review"));
-        assert!(text_at(&header[3].0).trim().starts_with("Title"));
+        assert!(text_at(&header[3].0).trim().starts_with("Author"));
+        assert!(text_at(&header[4].0).trim().starts_with("Title"));
         for pair in header.windows(2) {
             assert!(pair[0].0.right() <= pair[1].0.x);
             assert_eq!(pair[0].0.y, pair[1].0.y);
         }
         // The title columns reach the end of the table.
-        let title = header[3].0;
+        let title = header[4].0;
         assert_eq!(title.right(), app.drawn.areas.table.right() - 1);
     }
 
@@ -1807,25 +1820,39 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_the_checkbox_or_author_header_does_not_sort() {
+    fn a_click_on_the_checkbox_header_does_not_sort_and_one_on_the_author_does() {
         let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
         draw(&mut app, 200, 30);
         let table = app.drawn.areas.table;
-        let header_y = table.y + 1;
         // The checkbox is the first column inside the border.
-        click(&mut app, Position::new(table.x + 1, header_y));
+        click(&mut app, Position::new(table.x + 1, table.y + 1));
         assert_eq!(app.sort(), (Sort::Checks, false));
-        // Between the review and the title is the author.
-        let review = app
+        for expected in [
+            (Sort::Author, false),
+            (Sort::Author, true),
+            (Sort::Checks, false),
+        ] {
+            click_header(&mut app, Sort::Author);
+            draw(&mut app, 200, 30);
+            assert_eq!(app.sort(), expected);
+        }
+    }
+
+    #[test]
+    fn there_is_no_author_header_to_click_when_the_search_names_one_author() {
+        let mut app = app_for_query("is:pr author:alice", vec![by("alice", 1, "Bump alpha")]);
+        draw(&mut app, 200, 30);
+        let sorts: Vec<Sort> = app
             .drawn
             .areas
             .table_header
             .iter()
-            .find(|(_, s)| *s == Sort::Review)
-            .unwrap()
-            .0;
-        click(&mut app, Position::new(review.right() + 3, header_y));
-        assert_eq!(app.sort(), (Sort::Checks, false));
+            .map(|(_, s)| *s)
+            .collect();
+        assert_eq!(
+            sorts,
+            [Sort::Number, Sort::Checks, Sort::Review, Sort::Title]
+        );
     }
 
     #[test]

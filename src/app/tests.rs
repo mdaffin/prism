@@ -2394,7 +2394,7 @@ fn the_list_starts_sorted_by_checks_and_s_goes_round_the_sorts() {
     assert_eq!(numbers(&app), [5, 1, 3, 2, 4, 6]);
     assert_eq!(app.sort(), (Sort::Checks, false));
     let mut seen = Vec::new();
-    for _ in 0..5 {
+    for _ in 0..6 {
         press(&mut app, "s");
         seen.push(app.sort());
     }
@@ -2404,6 +2404,7 @@ fn the_list_starts_sorted_by_checks_and_s_goes_round_the_sorts() {
             (Sort::Number, false),
             (Sort::Title, false),
             (Sort::Review, false),
+            (Sort::Author, false),
             (Sort::Updated, false),
             (Sort::Checks, false),
         ]
@@ -2469,6 +2470,70 @@ fn a_title_sort_goes_by_the_title_columns_and_follows_a_change_of_regex() {
     assert_eq!(app.highlighted().unwrap().pr.number, 1);
 }
 
+/// A PR by this author, with nothing else to tell it from the rest.
+fn by_author(number: u64, login: &str) -> Pr {
+    let mut pr = titled_for_sort(number, "t");
+    pr.author.login = login.to_string();
+    pr
+}
+
+#[test]
+fn the_author_sort_goes_by_login_ignoring_case_and_reverses() {
+    let mut app = app_with(vec![
+        by_author(1, "carol"),
+        by_author(2, "app/renovate"),
+        by_author(3, "Alice"),
+        by_author(4, "bob"),
+        by_author(5, "alice"),
+    ]);
+    press(&mut app, "ssss");
+    assert_eq!(app.sort(), (Sort::Author, false));
+    // `Alice` and `alice` together, in the order listed, then `app/renovate` as `al` is before `ap`.
+    assert_eq!(numbers(&app), [3, 5, 2, 4, 1]);
+    press(&mut app, "S");
+    // The other way round, with the two `alice`s still in the order listed.
+    assert_eq!(numbers(&app), [1, 4, 2, 3, 5]);
+}
+
+#[test]
+fn the_author_sort_is_left_out_of_the_cycle_when_every_pr_has_the_same_author() {
+    let mut app = App::new("PRs".to_string(), "is:pr author:alice".to_string(), false);
+    let (id, _) = app.list_to_fetch().unwrap();
+    app.update(Msg::PrsLoaded(id, Ok(vec![by_author(1, "alice")])));
+    let mut seen = Vec::new();
+    for _ in 0..5 {
+        press(&mut app, "s");
+        seen.push(app.sort().0);
+    }
+    assert_eq!(
+        seen,
+        [
+            Sort::Number,
+            Sort::Title,
+            Sort::Review,
+            Sort::Updated,
+            Sort::Checks
+        ]
+    );
+}
+
+#[test]
+fn a_sort_by_author_is_named_in_the_title_when_the_search_makes_its_column_go() {
+    // Sorted by author while the column is there; then a search for one author takes it away.
+    let mut app = app_with(vec![by_author(1, "bob"), by_author(2, "alice")]);
+    press(&mut app, "ssss");
+    assert_eq!(app.sort(), (Sort::Author, false));
+    assert_eq!(app.title(), "PRs");
+    press(&mut app, "/");
+    key(&mut app, KeyCode::Backspace);
+    press(&mut app, " author:alice");
+    key(&mut app, KeyCode::Enter);
+    let (id, _) = app.list_to_fetch().unwrap();
+    app.update(Msg::PrsLoaded(id, Ok(vec![by_author(2, "alice")])));
+    assert_eq!(app.sort(), (Sort::Author, false));
+    assert_eq!(app.title(), "PRs · sorted by author ▲");
+}
+
 fn titled_for_sort(number: u64, title: &str) -> Pr {
     pr_with(
         number,
@@ -2483,7 +2548,7 @@ fn titled_for_sort(number: u64, title: &str) -> Pr {
 #[test]
 fn only_a_sort_by_updated_is_named_in_the_title_as_it_has_no_column() {
     let mut app = app_to_sort();
-    for _ in 0..3 {
+    for _ in 0..4 {
         press(&mut app, "s");
         assert_eq!(app.title(), "PRs");
     }
@@ -2506,6 +2571,9 @@ fn each_sort_orders_the_open_prs_and_leaves_the_closed_ones_last() {
     press(&mut app, "s");
     // Those needing a review, in the order listed, then changes requested, then approved.
     assert_eq!(numbers(&app), [2, 1, 5, 4, 3, 6], "review");
+    press(&mut app, "s");
+    // They all have the same author, so the order they were listed in.
+    assert_eq!(numbers(&app), [4, 2, 5, 1, 3, 6], "author");
     press(&mut app, "s");
     // The longest since an update first.
     assert_eq!(numbers(&app), [3, 2, 1, 5, 4, 6], "updated");
@@ -2609,7 +2677,7 @@ fn a_row_refresh_keeps_the_place_it_was_listed_at() {
     app.update(Msg::PrRefreshed(4, Ok(refreshed)));
     // The refreshed PR stays where it was until the list is sorted again.
     assert_eq!(numbers(&app), [1, 2, 3, 4, 5, 6]);
-    press(&mut app, "ssss");
+    press(&mut app, "sssss");
     // Passing now, so it goes with the passing ones, in the order listed.
     assert_eq!(numbers(&app), [4, 5, 1, 3, 2, 6]);
 }
