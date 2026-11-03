@@ -21,7 +21,7 @@ mod input;
 mod panes;
 mod work;
 
-pub use panes::{ChecksLayout, CommentLayout, Drawn, Pane, Scroll, to_u16};
+pub use panes::{ChecksLayout, CommentLayout, Drawn, Pane, PopupView, Scroll, to_u16};
 pub use work::{Details, Diff, Fetch, FetchId, RepoNames};
 use work::{forget_failed, is_current, names_loaded};
 
@@ -226,8 +226,8 @@ pub enum Mode {
     Confirm(Confirm),
     /// Asking before opening many PRs in the browser.
     ConfirmOpen(ConfirmOpen),
-    /// Listing every key.
-    Help,
+    /// Listing every key, scrolled this many rows.
+    Help(usize),
     /// Choosing which columns to show: the position in `Column::ALL` of the highlighted one.
     PickColumns(usize),
     /// Approving PRs.

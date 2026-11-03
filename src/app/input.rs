@@ -35,8 +35,17 @@ impl App {
     /// any other day.
     pub(super) fn on_mouse(&mut self, mouse: MouseEvent) {
         if !matches!(self.mode, Mode::Loading | Mode::List) {
-            if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
-                self.click_button(Position::new(mouse.column, mouse.row));
+            match (mouse.kind, &mut self.mode) {
+                (MouseEventKind::Down(MouseButton::Left), _) => {
+                    self.click_button(Position::new(mouse.column, mouse.row));
+                }
+                (MouseEventKind::ScrollDown, Mode::Help(offset)) => {
+                    *offset = self.drawn.popup.wheeled(3)
+                }
+                (MouseEventKind::ScrollUp, Mode::Help(offset)) => {
+                    *offset = self.drawn.popup.wheeled(-3)
+                }
+                _ => {}
             }
             return;
         }
@@ -115,7 +124,7 @@ impl App {
                 self.on_key(KeyCode::Enter.into());
             }
             // Enter does not close these, but Esc and `q` do, and OK says the same.
-            Mode::Help | Mode::PickColumns(_) | Mode::Results(_) => self.mode = Mode::List,
+            Mode::Help(_) | Mode::PickColumns(_) | Mode::Results(_) => self.mode = Mode::List,
             _ => {}
         }
     }
@@ -169,9 +178,11 @@ impl App {
                 Some(false) => self.mode = Mode::List,
                 None => {}
             },
-            Mode::Help => {
+            Mode::Help(offset) => {
                 if matches!(key.code, KeyCode::Esc | KeyCode::Char('?' | 'q')) {
                     self.mode = Mode::List;
+                } else if let Some(to) = self.drawn.popup.scrolled_by(key.code) {
+                    *offset = to;
                 }
             }
             Mode::PickColumns(at) => {
@@ -301,7 +312,7 @@ impl App {
             KeyCode::Char('v') => self.mode = Mode::PickColumns(0),
             KeyCode::Char('s') => self.cycle_sort(),
             KeyCode::Char('S') => self.reverse_sort(),
-            KeyCode::Char('?') => self.mode = Mode::Help,
+            KeyCode::Char('?') => self.mode = Mode::Help(0),
             KeyCode::Char('o') => self.open_focused(),
             KeyCode::Char('y') => self.copy_focused(),
             KeyCode::Char('p') => self.toggle_refresh_paused(),

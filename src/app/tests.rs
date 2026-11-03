@@ -56,7 +56,7 @@ fn help_opens_with_question_mark_and_closes_again() {
     let mut app = app_with_rows(3);
     for close in [KeyCode::Esc, KeyCode::Char('?'), KeyCode::Char('q')] {
         press(&mut app, "?");
-        assert!(matches!(app.mode, Mode::Help));
+        assert!(matches!(app.mode, Mode::Help(_)));
         key(&mut app, close);
         assert!(matches!(app.mode, Mode::List));
     }

@@ -102,6 +102,8 @@ pub struct Drawn {
     /// Where the open dialog's buttons are, in the order they are drawn. Empty when no dialog with
     /// buttons is open, so a stale rectangle can't catch a click.
     pub buttons: Vec<Rect>,
+    /// How the open popup's lines are scrolled, as last drawn.
+    pub popup: PopupView,
     pub comment_layout: CommentLayout,
     pub checks_layout: ChecksLayout,
     /// The links of each line the description and the comments drew, in columns of that line, so
@@ -117,6 +119,7 @@ impl Default for Drawn {
             page: 1,
             areas: PaneAreas::default(),
             buttons: Vec::new(),
+            popup: PopupView::default(),
             comment_layout: CommentLayout::default(),
             checks_layout: ChecksLayout::default(),
             description_links: Vec::new(),
@@ -488,4 +491,39 @@ fn is_web_url(url: &str) -> bool {
 /// `n`, or `u16::MAX` if it is too big.
 pub fn to_u16(n: usize) -> u16 {
     u16::try_from(n).unwrap_or(u16::MAX)
+}
+
+/// How far a popup's text is scrolled and how much there is: the rows of text, how many fit, and
+/// the first one shown. The keys that scroll a popup work from it.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PopupView {
+    pub content: usize,
+    pub viewport: usize,
+    pub offset: usize,
+}
+
+impl PopupView {
+    /// Where `key` scrolls the popup to, if it is one that scrolls: Up/Down or `k`/`j` a row,
+    /// PgUp/PgDn a page, Home/End the ends.
+    pub fn scrolled_by(&self, key: crossterm::event::KeyCode) -> Option<usize> {
+        use crossterm::event::KeyCode;
+        let last = self.content.saturating_sub(self.viewport);
+        let page = self.viewport.saturating_sub(1).max(1);
+        let to = match key {
+            KeyCode::Up | KeyCode::Char('k') => self.offset.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => self.offset + 1,
+            KeyCode::PageUp => self.offset.saturating_sub(page),
+            KeyCode::PageDown => self.offset + page,
+            KeyCode::Home => 0,
+            KeyCode::End => last,
+            _ => return None,
+        };
+        Some(to.min(last))
+    }
+
+    /// Where the wheel, `by` rows (negative is up), scrolls the popup to.
+    pub fn wheeled(&self, by: isize) -> usize {
+        let last = self.content.saturating_sub(self.viewport);
+        self.offset.saturating_add_signed(by).min(last)
+    }
 }

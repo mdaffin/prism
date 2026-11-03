@@ -13,8 +13,8 @@ use regex::Regex;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{
-    self, App, ChecksLayout, CommentLayout, ConfirmOpen, Details, Fetch, Mode, Page, Pane, Typing,
-    to_u16,
+    self, App, ChecksLayout, CommentLayout, ConfirmOpen, Details, Fetch, Mode, Page, Pane,
+    PopupView, Typing, to_u16,
 };
 use crate::batch::{Batch, Confirm, ItemStatus, Summary};
 use crate::gh::{Approvers, Comment, PrState, Reviewer, Verdict};
@@ -241,16 +241,26 @@ pub fn view(app: &mut App, frame: &mut Frame) {
 
 /// The popup over the table that the mode asks for, if any. Records where its buttons are.
 fn draw_dialog(app: &mut App, frame: &mut Frame, area: Rect) {
+    let mut scrolled = None;
     let buttons = match &app.mode {
         Mode::Confirm(confirm) => confirm_dialog(confirm, app.dry_run, frame, area),
         Mode::ConfirmOpen(confirm) => open_dialog(confirm, frame, area),
-        Mode::Help => help_popup(frame, area),
+        Mode::Help(offset) => {
+            let (buttons, view) = help_popup(*offset, frame, area);
+            scrolled = Some(view);
+            buttons
+        }
         Mode::PickColumns(at) => columns_popup(app, *at, frame, area),
         Mode::Running(batch) => running_popup(batch, app.dry_run, spinner(app), frame, area),
         Mode::Results(summary) => results_popup(summary, app.dry_run, frame, area),
         Mode::Loading | Mode::List => Vec::new(),
     };
     app.drawn.buttons = buttons;
+    // Scrolled too far (the terminal grew, or End was pressed), it is brought back.
+    app.drawn.popup = scrolled.unwrap_or_default();
+    if let (Mode::Help(offset), Some(view)) = (&mut app.mode, scrolled) {
+        *offset = view.offset;
+    }
 }
 
 /// The hints of the modes other than the list, for the end of the status line. The list's are
@@ -258,7 +268,7 @@ fn draw_dialog(app: &mut App, frame: &mut Frame, area: Rect) {
 fn mode_hints(app: &App) -> Option<&'static str> {
     match &app.mode {
         Mode::Confirm(_) | Mode::ConfirmOpen(_) => Some(keys::CHOOSE_HINTS),
-        Mode::Help => Some(keys::HELP_HINTS),
+        Mode::Help(_) => Some(keys::HELP_HINTS),
         Mode::PickColumns(_) => Some(keys::PICK_COLUMNS_HINTS),
         Mode::Running(_) => Some(keys::RUNNING_HINTS),
         Mode::Results(_) => Some(keys::RESULTS_HINTS),
@@ -404,7 +414,7 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
         Mode::List
         | Mode::Confirm(_)
         | Mode::ConfirmOpen(_)
-        | Mode::Help
+        | Mode::Help(_)
         | Mode::PickColumns(_)
         | Mode::Running(_)
         | Mode::Results(_) => {
@@ -738,7 +748,7 @@ fn open_dialog(confirm: &ConfirmOpen, frame: &mut Frame, area: Rect) -> Vec<Rect
     popup(frame, area, dialog)
 }
 
-fn help_popup(frame: &mut Frame, area: Rect) -> Vec<Rect> {
+fn help_popup(offset: usize, frame: &mut Frame, area: Rect) -> (Vec<Rect>, PopupView) {
     let mut lines = Vec::new();
     for (pane, title) in keys::GROUPS {
         let mut group = keys::group(pane).peekable();
@@ -761,7 +771,7 @@ fn help_popup(frame: &mut Frame, area: Rect) -> Vec<Rect> {
         footer,
         buttons: buttons.widths,
     };
-    popup(frame, area, help)
+    popup_scrolled(frame, area, help, offset)
 }
 
 fn running_popup(
@@ -884,6 +894,18 @@ struct Popup<'a> {
 /// they stay visible even when `lines` doesn't fit. Wrapped lines are sized by estimate, so with
 /// `wrap` the popup may cut off the end of `lines`. Returns where its buttons were drawn.
 fn popup(frame: &mut Frame, area: Rect, popup: Popup) -> Vec<Rect> {
+    popup_scrolled(frame, area, popup, 0).0
+}
+
+/// Like [`popup`], with its lines scrolled `offset` rows (clamped), and a scrollbar down its right
+/// border while they don't all fit. Also returns how many rows there were and how many fit, for
+/// the keys that scroll it.
+fn popup_scrolled(
+    frame: &mut Frame,
+    area: Rect,
+    popup: Popup,
+    offset: usize,
+) -> (Vec<Rect>, PopupView) {
     let Popup {
         mut title,
         dry_run,
@@ -924,12 +946,25 @@ fn popup(frame: &mut Frame, area: Rect, popup: Popup) -> Vec<Rect> {
     if wrap {
         content = content.wrap(Wrap { trim: false });
     }
+    let viewport = usize::from(content_area.height);
+    let offset = offset.min(rows.saturating_sub(viewport));
     frame.buffer_mut().set_style(full, Modifier::DIM);
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
-    frame.render_widget(content, content_area);
+    frame.render_widget(content.scroll((to_u16(offset), 0)), content_area);
     frame.render_widget(Paragraph::new(footer), footer_area);
-    button_areas(&buttons, footer_area)
+    // The bar runs beside the lines only, not the footer.
+    let bar_area = Rect {
+        height: content_area.height + 2,
+        ..area
+    };
+    scrollbar(frame, bar_area, rows, viewport, offset);
+    let view = PopupView {
+        content: rows,
+        viewport,
+        offset,
+    };
+    (button_areas(&buttons, footer_area), view)
 }
 
 /// Where the centred buttons of a row of the given widths are, on the last row of `footer`.
@@ -3673,7 +3708,7 @@ mod tests {
         press(&mut app, "?");
         drag(&mut app, diff.x + 2, diff.y + 1);
 
-        assert!(matches!(app.mode, Mode::Help));
+        assert!(matches!(app.mode, Mode::Help(_)));
         assert!(app.selected.is_empty());
         assert_eq!(app.highlighted().unwrap().pr.number, 1);
         assert!(app.focus == Pane::Table);
@@ -4373,6 +4408,76 @@ mod tests {
             );
             app.update(Msg::Key(KeyCode::Tab.into()));
         }
+    }
+
+    #[test]
+    fn the_help_popup_scrolls_on_a_short_screen_with_its_button_pinned() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        press(&mut app, "?");
+        let screen = lines(&draw(&mut app, 200, 14)).join("\n");
+        // Too short for every key: the start is there, the end is not, and the bar says so.
+        assert!(screen.contains("Everywhere"), "{screen}");
+        assert!(
+            !screen.contains("Scroll the description's tables sideways"),
+            "{screen}"
+        );
+        assert!(screen.contains("OK"), "{screen}");
+        assert!(app.drawn.popup.content > app.drawn.popup.viewport);
+        let bar = |app: &mut App| -> usize {
+            let buffer = draw(app, 200, 14);
+            let area = buffer.area;
+            (0..area.height)
+                .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+                .filter(|&pos| buffer[pos].symbol() == "█")
+                .count()
+        };
+        assert!(bar(&mut app) > 0, "no scrollbar");
+
+        // End shows the last key, and the button is still there.
+        key(&mut app, KeyCode::End);
+        let screen = lines(&draw(&mut app, 200, 14)).join("\n");
+        assert!(
+            screen.contains("Scroll the description's tables sideways"),
+            "{screen}"
+        );
+        assert!(!screen.contains("Everywhere"), "{screen}");
+        assert!(screen.contains("OK"), "{screen}");
+        // Further down does nothing, and Home, PgDn and PgUp, Up and Down and the wheel move it.
+        key(&mut app, KeyCode::Down);
+        assert!(matches!(app.mode, Mode::Help(at) if at == app.drawn.popup.offset));
+        key(&mut app, KeyCode::Home);
+        draw(&mut app, 200, 14);
+        assert_eq!(app.drawn.popup.offset, 0);
+        key(&mut app, KeyCode::PageDown);
+        draw(&mut app, 200, 14);
+        let page = app.drawn.popup.offset;
+        assert_eq!(page, app.drawn.popup.viewport - 1);
+        key(&mut app, KeyCode::Up);
+        draw(&mut app, 200, 14);
+        assert_eq!(app.drawn.popup.offset, page - 1);
+        key(&mut app, KeyCode::PageUp);
+        draw(&mut app, 200, 14);
+        assert_eq!(app.drawn.popup.offset, 0);
+        wheel(&mut app, Position::new(100, 5), true);
+        draw(&mut app, 200, 14);
+        assert_eq!(app.drawn.popup.offset, 3);
+        wheel(&mut app, Position::new(100, 5), false);
+        draw(&mut app, 200, 14);
+        assert_eq!(app.drawn.popup.offset, 0);
+        // The popup still closes.
+        key(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::List));
+    }
+
+    #[test]
+    fn a_tall_help_popup_has_no_scrollbar() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        press(&mut app, "?");
+        draw(&mut app, 200, 90);
+        assert_eq!(app.drawn.popup.content, app.drawn.popup.viewport);
+        key(&mut app, KeyCode::End);
+        draw(&mut app, 200, 90);
+        assert_eq!(app.drawn.popup.offset, 0);
     }
 
     #[test]
