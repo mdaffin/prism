@@ -3856,8 +3856,6 @@ mod tests {
 
     #[test]
     fn a_drag_across_a_tables_box_copies_its_cells_with_tabs() {
-        let table =
-            "┌──────┬──────┐\n│ Name │ Val  │\n├──────┼──────┤\n│ a    │ 1    │\n└──────┴──────┘";
         // A table in Markdown is drawn with its box characters by the renderer.
         let md = "intro\n\n| Name | Val |\n|---|---|\n| a | 1 |\n\noutro";
         let mut app = app_with_text(md, "");
