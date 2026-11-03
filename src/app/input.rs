@@ -1,14 +1,11 @@
 //! Keys and mouse clicks, routed by what the app is showing.
 
-use crossterm::event::{
-    Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
-};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Position;
-use tui_input::backend::crossterm::EventHandler;
 use tui_input::{Input, InputRequest};
 use unicode_width::UnicodeWidthChar;
 
-use super::{App, Mode, Pane, Typing};
+use super::{App, Mode, Pane, Typing, editing};
 use crate::batch::on_confirm_key;
 use crate::model::Column;
 
@@ -271,7 +268,7 @@ impl App {
                 }
             }
             _ => {
-                self.query.handle_event(&Event::Key(key));
+                editing::edit(&mut self.query, key);
             }
         }
     }
@@ -283,7 +280,7 @@ impl App {
             KeyCode::Enter => self.typing = Typing::Nothing,
             KeyCode::Esc => self.clear_filter(),
             _ => {
-                self.filter.handle_event(&Event::Key(key));
+                editing::edit(&mut self.filter, key);
                 self.refilter();
             }
         }
@@ -296,7 +293,7 @@ impl App {
             KeyCode::Enter => self.apply_columns(),
             KeyCode::Esc => self.typing = Typing::Nothing,
             _ => {
-                self.columns_input.handle_event(&Event::Key(key));
+                editing::edit(&mut self.columns_input, key);
                 self.columns_error = None;
             }
         }

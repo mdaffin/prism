@@ -17,6 +17,7 @@ use crate::history::History;
 use crate::model::{self, CheckState, Checks, Column, Sort, one_line};
 
 mod completion;
+mod editing;
 mod input;
 mod panes;
 mod work;

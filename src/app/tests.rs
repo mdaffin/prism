@@ -2684,3 +2684,33 @@ fn a_row_refresh_keeps_the_place_it_was_listed_at() {
     // Passing now, so it goes with the passing ones, in the order listed.
     assert_eq!(numbers(&app), [4, 5, 1, 3, 2, 6]);
 }
+
+#[test]
+fn all_three_boxes_take_the_word_editing_keys() {
+    let alt = |code| Msg::Key(KeyEvent::new(code, KeyModifiers::ALT));
+    let mut app = app_with(vec![pr_with(
+        1,
+        "Bump alpha",
+        "OPEN",
+        "",
+        "MERGEABLE",
+        serde_json::json!([]),
+    )]);
+    // The search box: Alt-Backspace deletes the last word.
+    press(&mut app, "/");
+    app.query = Input::new("is:pr label:deps".to_string());
+    app.update(alt(KeyCode::Backspace));
+    assert_eq!(app.query.value(), "is:pr ");
+    app.update(Msg::Key(KeyCode::Esc.into()));
+    // The filter box: Alt-B then Alt-D deletes the word the cursor moved to.
+    press(&mut app, "fone two");
+    app.update(alt(KeyCode::Char('b')));
+    app.update(alt(KeyCode::Char('d')));
+    assert_eq!(app.filter.value(), "one ");
+    app.update(Msg::Key(KeyCode::Esc.into()));
+    // The columns box.
+    press(&mut app, "c");
+    app.columns_input = Input::new("(?<a>x) beta".to_string());
+    app.update(alt(KeyCode::Backspace));
+    assert_eq!(app.columns_input.value(), "(?<a>x) ");
+}
