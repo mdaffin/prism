@@ -75,7 +75,7 @@ impl App {
                     _ => {}
                 }
                 // A drag from here selects text, unless the press was on a link or a header.
-                if matches!(pane, Pane::Comments | Pane::Description) {
+                if matches!(pane, Pane::Comments | Pane::Description | Pane::Diff) {
                     self.begin_selection(pane, position);
                 }
                 if let Some(sort) = self.sort_at(position) {

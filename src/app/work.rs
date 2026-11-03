@@ -51,6 +51,8 @@ pub struct Diff {
     /// The columns of its widest line, worked out once when it loads, as a diff can be very long
     /// and the view needs it to scroll sideways.
     pub widest: usize,
+    /// Its lines as text, for selecting, made once when it loads.
+    pub rows: std::sync::Arc<Vec<super::selection::TextRow>>,
 }
 
 impl Diff {
@@ -61,7 +63,23 @@ impl Diff {
             .map(|line| line.width())
             .max()
             .unwrap_or(0);
-        Self { text, widest }
+        let rows = text
+            .lines
+            .iter()
+            .map(|line| super::selection::TextRow {
+                text: line
+                    .spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect(),
+                ..Default::default()
+            })
+            .collect();
+        Self {
+            text,
+            widest,
+            rows: std::sync::Arc::new(rows),
+        }
     }
 }
 

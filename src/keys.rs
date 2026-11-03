@@ -156,7 +156,7 @@ pub const KEYS: &[KeyHelp] = &[
     ),
     key(
         "Mouse drag",
-        "Select text in the description or an open comment and copy it when the button is released, or with y; Shift-drag (Option-drag in iTerm2) uses the terminal's own selection instead",
+        "Select text in the description, an open comment or the diff and copy it when the button is released, or with y; Shift-drag (Option-drag in iTerm2) uses the terminal's own selection instead",
         None,
     ),
     key(

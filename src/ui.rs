@@ -548,6 +548,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     }
     if app.pane_hidden(Pane::Diff) {
         app.drawn.areas.diff = Rect::default();
+        app.drawn.diff_text = TextView::default();
     } else {
         diff(app, frame, diff_area);
     }
@@ -2012,7 +2013,8 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     let view = TextView {
         inner,
         scroll: usize::from(scroll),
-        rows,
+        rows: std::sync::Arc::new(rows),
+        hscroll: 0,
     };
     highlight_selection(app, frame, Pane::Comments, &view);
     app.drawn.comment_text = view;
@@ -2119,6 +2121,7 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
     let block = pane_block("Diff", app.focus == Pane::Diff);
     let inner = block.inner(area);
     set_page(app, Pane::Diff, inner.height, 1);
+    app.drawn.diff_text = TextView::default();
     let diff = app
         .highlighted()
         .and_then(|row| app.diffs.get(&row.pr.number));
@@ -2126,6 +2129,8 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
     let mut x = 0;
     let mut widest = 0;
     let mut lines = 0;
+    // What a drag can select, once the diff is there: its lines, made when it loaded.
+    let mut rows = None;
     // A failure is a message, so it wraps; a diff is cut off at the pane's edge.
     let mut wrap = false;
     let text = match diff {
@@ -2135,6 +2140,7 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
         Some(Fetch::Loaded(diff)) => {
             lines = diff.text.lines.len();
             widest = diff.widest;
+            rows = Some(diff.rows.clone());
             scroll = app
                 .scroll
                 .diff
@@ -2162,6 +2168,16 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
         pane = pane.wrap(Wrap { trim: false });
     }
     frame.render_widget(pane, area);
+    if let Some(rows) = rows {
+        let view = TextView {
+            inner,
+            scroll: usize::from(scroll),
+            rows,
+            hscroll: usize::from(x),
+        };
+        highlight_selection(app, frame, Pane::Diff, &view);
+        app.drawn.diff_text = view;
+    }
     pane_scrollbar(
         app,
         frame,
@@ -2230,6 +2246,15 @@ fn highlight_selection(app: &App, frame: &mut Frame, pane: Pane, view: &TextView
         let Some((from, to)) = selection.columns_on(view.scroll + y, App::row_width(row)) else {
             continue;
         };
+        // The text may be scrolled sideways, past what is shown, which the selection can be too.
+        let (from, to) = (
+            from.saturating_sub(view.hscroll),
+            to.saturating_sub(view.hscroll)
+                .min(usize::from(view.inner.width)),
+        );
+        if from >= to {
+            continue;
+        }
         let x = view.inner.x + to_u16(from);
         let width = to_u16(to - from).min(view.inner.right().saturating_sub(x));
         let cells = Rect::new(x, view.inner.y + to_u16(y), width, 1);
@@ -2283,11 +2308,12 @@ fn description(app: &mut App, frame: &mut Frame, area: Rect) {
             table,
             header: false,
         })
-        .collect();
+        .collect::<Vec<_>>();
     let view = TextView {
         inner,
         scroll: usize::from(scroll),
-        rows,
+        rows: std::sync::Arc::new(rows),
+        hscroll: 0,
     };
     // Already wrapped, so the links can be found from where they are drawn.
     let pane = Paragraph::new(Text::from(laid.lines)).scroll((scroll, 0));
@@ -3896,6 +3922,86 @@ mod tests {
         assert!(app.selection().is_some());
         click(&mut app, Position::new(0, 0));
         assert!(app.selection().is_none());
+    }
+
+    #[test]
+    fn a_drag_over_the_diff_copies_its_lines_with_their_markers() {
+        let mut app = app_with_text("body", "");
+        app.diff_loaded(
+            1,
+            Ok("@@ -1,2 +1,2 @@\n context line\n-removed line\n+added line\n".to_string()),
+        );
+        draw(&mut app, 200, 40);
+        let view = app.drawn.diff_text.clone();
+        assert_eq!(view.rows.len(), 4);
+        // From the middle of the second line to the end of the fourth.
+        press_at(&mut app, text_cell(&view, 1, 9));
+        drag_to(&mut app, text_cell(&view, 3, 30));
+        release_at(&mut app, text_cell(&view, 3, 30));
+        assert!(app.focus == Pane::Diff);
+        assert_eq!(
+            app.copy_to_run().as_deref(),
+            Some("line\n-removed line\n+added line")
+        );
+        // Drawn reversed where it was selected, and `y` copies it again.
+        let buffer = draw(&mut app, 200, 40);
+        assert!(
+            buffer[text_cell(&view, 2, 0)]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED)
+        );
+        assert!(
+            !buffer[text_cell(&view, 0, 0)]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED)
+        );
+        press(&mut app, "y");
+        assert!(app.copy_to_run().unwrap().starts_with("line\n"));
+    }
+
+    #[test]
+    fn a_selection_in_a_diff_scrolled_sideways_is_of_the_text_under_the_pointer() {
+        let mut app = app_with_text("body", "");
+        let long = format!("+{}END", "x".repeat(300));
+        app.diff_loaded(1, Ok(format!("{long}\n+short")));
+        draw(&mut app, 200, 40);
+        let width = app.drawn.diff_text.inner.width;
+        // Scroll to the end, where only the tail of the long line is on screen.
+        for _ in 0..200 {
+            app.focus = Pane::Diff;
+            press(&mut app, "l");
+            draw(&mut app, 200, 40);
+        }
+        let view = app.drawn.diff_text.clone();
+        assert!(view.hscroll > 100, "{}", view.hscroll);
+        press_at(&mut app, text_cell(&view, 0, width - 3));
+        drag_to(&mut app, text_cell(&view, 0, width - 1));
+        release_at(&mut app, text_cell(&view, 0, width - 1));
+        assert_eq!(app.copy_to_run().as_deref(), Some("END"));
+        // The reversed cells are under the pointer, not at the start of the line.
+        let buffer = draw(&mut app, 200, 40);
+        assert!(
+            buffer[text_cell(&view, 0, width - 1)]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED)
+        );
+        assert!(
+            !buffer[text_cell(&view, 0, 0)]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED)
+        );
+    }
+
+    #[test]
+    fn a_failed_or_loading_diff_has_nothing_to_select() {
+        let mut app = app_with_text("body", "");
+        draw(&mut app, 200, 40);
+        let inner = app.drawn.areas.diff;
+        press_at(&mut app, Position::new(inner.x + 2, inner.y + 1));
+        drag_to(&mut app, Position::new(inner.x + 9, inner.y + 1));
+        release_at(&mut app, Position::new(inner.x + 9, inner.y + 1));
+        assert!(app.selection().is_none());
+        assert!(app.copy_to_run().is_none());
     }
 
     #[test]

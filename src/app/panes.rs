@@ -147,6 +147,7 @@ pub struct Drawn {
     /// The rows of text the description and the comments drew, for selecting.
     pub description_text: super::selection::TextView,
     pub comment_text: super::selection::TextView,
+    pub diff_text: super::selection::TextView,
 }
 
 impl Default for Drawn {
@@ -163,6 +164,7 @@ impl Default for Drawn {
             comment_links: Vec::new(),
             description_text: Default::default(),
             comment_text: Default::default(),
+            diff_text: Default::default(),
         }
     }
 }

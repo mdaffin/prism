@@ -32,7 +32,10 @@ pub struct TextView {
     pub inner: Rect,
     /// The first row shown.
     pub scroll: usize,
-    pub rows: Vec<TextRow>,
+    /// Shared, as a diff's rows are made once when it loads.
+    pub rows: std::sync::Arc<Vec<TextRow>>,
+    /// The columns the text is scrolled sideways, which the rows are not cut for (a diff's are).
+    pub hscroll: usize,
 }
 
 /// A place in the text: a row and a column of it.
@@ -161,6 +164,7 @@ impl App {
         match pane {
             Pane::Description => Some(&self.drawn.description_text),
             Pane::Comments => Some(&self.drawn.comment_text),
+            Pane::Diff => Some(&self.drawn.diff_text),
             _ => None,
         }
     }
@@ -183,7 +187,7 @@ impl App {
         let x = position.x.clamp(inner.x, inner.right() - 1) - inner.x;
         let y = position.y.clamp(inner.y, inner.bottom() - 1) - inner.y;
         let row = (view.scroll + usize::from(y)).min(view.rows.len() - 1);
-        Some((row, usize::from(x)))
+        Some((row, usize::from(x) + view.hscroll))
     }
 
     /// A press in the description or the comments: a drag from here selects text. It doesn't on a
@@ -203,9 +207,10 @@ impl App {
         let Some(place) = Self::place_at(view, position) else {
             return;
         };
-        let links = match pane {
+        let links: &[Vec<crate::model::LinkSpan>] = match pane {
             Pane::Description => &self.drawn.description_links,
-            _ => &self.drawn.comment_links,
+            Pane::Comments => &self.drawn.comment_links,
+            _ => &[],
         };
         let on_link = links
             .get(place.0)
@@ -247,6 +252,7 @@ impl App {
                 if by != 0 {
                     let scroll = match selection.pane {
                         Pane::Description => &mut self.scroll.description,
+                        Pane::Diff => &mut self.scroll.diff,
                         _ => &mut self.scroll.comments,
                     };
                     *scroll = scroll.saturating_add_signed(by as i16);
@@ -305,15 +311,17 @@ mod tests {
         TextView {
             inner: Rect::new(1, 1, 20, 10),
             scroll: 0,
-            rows: rows
-                .iter()
-                .map(|&(text, join, table)| TextRow {
-                    text: text.to_string(),
-                    join,
-                    table,
-                    header: false,
-                })
-                .collect(),
+            hscroll: 0,
+            rows: std::sync::Arc::new(
+                rows.iter()
+                    .map(|&(text, join, table)| TextRow {
+                        text: text.to_string(),
+                        join,
+                        table,
+                        header: false,
+                    })
+                    .collect(),
+            ),
         }
     }
 
