@@ -2,6 +2,7 @@ mod app;
 mod batch;
 mod cli;
 mod clipboard;
+mod config;
 mod gh;
 mod history;
 mod keys;
@@ -15,7 +16,7 @@ mod testing;
 use std::time::Duration;
 
 use clap::Parser;
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, eyre};
 use crossterm::event::{
     DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event,
     EventStream, KeyEventKind, MouseEventKind,
@@ -37,10 +38,12 @@ async fn main() -> Result<()> {
     // Installed before ratatui::init so the terminal is restored before a report is printed.
     color_eyre::install()?;
     let args = cli::Args::parse();
+    let config = config::Config::load(config::default_path().as_deref()).map_err(|e| eyre!(e))?;
+    let settings = args.settings(config).map_err(|e| eyre!(e))?;
     gh::check_installed()?;
 
     let terminal = ratatui::init();
-    let mouse = !args.no_mouse;
+    let mouse = settings.mouse;
     // Focus events pause the timed refresh while the terminal is out of focus. A terminal that
     // doesn't report them ignores the request.
     execute!(std::io::stdout(), EnableFocusChange)?;
@@ -56,7 +59,7 @@ async fn main() -> Result<()> {
         }
         hook(info)
     }));
-    let result = run(terminal, args).await;
+    let result = run(terminal, settings).await;
     let _ = execute!(std::io::stdout(), DisableFocusChange);
     if mouse {
         let _ = execute!(std::io::stdout(), DisableMouseCapture);
@@ -65,7 +68,7 @@ async fn main() -> Result<()> {
     result
 }
 
-async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
+async fn run(mut terminal: DefaultTerminal, args: cli::Settings) -> Result<()> {
     let title = cli::title(args.repo.as_deref(), args.dry_run);
     let query = query::initial(args.author.as_deref(), &args.search);
     let mut app = App::new(title, query, args.dry_run)
@@ -73,7 +76,7 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Args) -> Result<()> {
         .with_columns(args.column_regex)
         .with_history(history::History::load(
             history::default_path(),
-            history::DEFAULT_LIMIT,
+            args.history_limit,
         ));
     // Background work reports back through this channel.
     let (tx, mut rx) = mpsc::unbounded_channel();
