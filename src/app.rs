@@ -1068,6 +1068,11 @@ impl App {
         }
     }
 
+    /// The query that the list on screen is the result of.
+    pub fn submitted_query(&self) -> &str {
+        &self.submitted_query
+    }
+
     /// Whether the search box holds text that has not been searched for, after a click away from
     /// it.
     pub fn query_is_unsearched(&self) -> bool {

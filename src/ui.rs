@@ -406,15 +406,28 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
     match app.mode {
         Mode::Loading => frame.render_widget(Line::from("Loading…"), table_area),
         Mode::List if !app.rows.is_empty() && app.visible.is_empty() => {
-            frame.render_widget(Line::from("No PRs match the filter."), table_area)
+            let message = format!(
+                "No PRs match the filter `{}`. Press Esc to clear it.",
+                app.filter.value()
+            );
+            frame.render_widget(
+                Paragraph::new(message).wrap(Wrap { trim: false }),
+                table_area,
+            )
         }
         Mode::List if app.rows.is_empty() => {
+            let query = app.submitted_query();
             let message = if app.errors.text().is_some() {
-                "No PRs loaded."
+                format!(
+                    "No PRs loaded for `{query}`. Press Ctrl-R to try again, or / to change the search."
+                )
             } else {
-                "No matching PRs found."
+                format!("No PRs found for `{query}`. Press / to change the search.")
             };
-            frame.render_widget(Line::from(message), table_area)
+            frame.render_widget(
+                Paragraph::new(message).wrap(Wrap { trim: false }),
+                table_area,
+            )
         }
         // Popups are drawn over the table.
         Mode::List
@@ -4413,17 +4426,46 @@ mod tests {
     }
 
     #[test]
-    fn says_when_the_filter_hides_every_pr() {
+    fn says_when_the_filter_hides_every_pr_and_how_to_clear_it() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "fzzz");
-        let screen = lines(&draw(&mut app, 200, 30));
-        assert!(
-            screen
-                .iter()
-                .any(|line| line.contains("No PRs match the filter."))
-        );
+        for width in [200, 100] {
+            let screen = lines(&draw(&mut app, width, 30)).join("\n");
+            assert!(
+                screen.contains("No PRs match the filter `zzz`. Press Esc to clear it."),
+                "{width}: {screen}"
+            );
+        }
+        // Esc does what it says.
+        key(&mut app, KeyCode::Esc);
+        assert!(app.visible.len() == 1);
     }
 
+    #[test]
+    fn says_which_query_found_nothing_and_points_to_the_search_box() {
+        for width in [200, 100] {
+            let mut app = app_for_query("is:pr label:nothing", Vec::new());
+            let screen = lines(&draw(&mut app, width, 30)).join("\n");
+            assert!(
+                screen.contains(
+                    "No PRs found for `is:pr label:nothing`. Press / to change the search."
+                ),
+                "{width}: {screen}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_first_search_points_to_trying_again() {
+        let mut app = App::new("PRs".to_string(), "is:pr".to_string(), false);
+        let (id, _) = app.list_to_fetch().unwrap();
+        app.update(Msg::PrsLoaded(id, Err(gh_failure())));
+        let screen = lines(&draw(&mut app, 200, 30)).join("\n");
+        assert!(
+            screen.contains("No PRs loaded for `is:pr`. Press Ctrl-R"),
+            "{screen}"
+        );
+    }
     #[test]
     fn the_status_bar_shows_the_focused_panes_keys() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
