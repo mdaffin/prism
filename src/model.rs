@@ -176,6 +176,36 @@ pub fn ago(timestamp: &str, now: jiff::Timestamp) -> String {
     "just now".to_string()
 }
 
+/// How the list is ordered. Whatever the sort, closed and merged PRs come last, as they can't be
+/// acted on, and PRs that tie stay in the order GitHub listed them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Sort {
+    /// Passing first, then pending or without checks, then failing or in conflict.
+    #[default]
+    Checks,
+    /// Lowest number, the oldest PR, first.
+    Number,
+    /// A to Z, ignoring case.
+    Title,
+    /// Those still needing a review, then those with changes requested, then approved ones.
+    Review,
+    /// The longest since anything happened to it first.
+    Updated,
+}
+
+impl Sort {
+    /// The next sort in the cycle, which comes back to the first.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Checks => Self::Number,
+            Self::Number => Self::Title,
+            Self::Title => Self::Review,
+            Self::Review => Self::Updated,
+            Self::Updated => Self::Checks,
+        }
+    }
+}
+
 pub fn review_label(review_decision: ReviewDecision) -> &'static str {
     match review_decision {
         ReviewDecision::Approved => "✓ approved",

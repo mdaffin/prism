@@ -277,6 +277,8 @@ impl App {
             KeyCode::Char('/') => self.typing = Typing::Search,
             KeyCode::Char('f') => self.typing = Typing::Filter,
             KeyCode::Char('c') => self.edit_columns(),
+            KeyCode::Char('s') => self.cycle_sort(),
+            KeyCode::Char('S') => self.reverse_sort(),
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Char('o') => self.open_focused(),
             KeyCode::Char('y') => self.copy_focused(),

@@ -78,6 +78,12 @@ pub const KEYS: &[KeyHelp] = &[
     key("/", "Edit the GitHub search query", Some("Search")),
     key("f", "Filter the list as you type", None),
     key(
+        "s",
+        "Sort the list by the next column (checks, number, title, review, then when it was updated); the header shows which, and ▲ or ▼ which way",
+        None,
+    ),
+    key("S", "Reverse the sort", None),
+    key(
         "c",
         "Edit the regex whose named groups become the table's columns",
         None,

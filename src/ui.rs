@@ -19,7 +19,7 @@ use crate::app::{
 use crate::batch::{Batch, Confirm, ItemStatus, Summary};
 use crate::gh::{Approvers, Comment, PrState, Reviewer, Verdict};
 use crate::keys;
-use crate::model::{self, CheckState};
+use crate::model::{self, CheckState, Sort};
 
 /// The most rows a list fetch error takes above the status bar.
 const MAX_ERROR_ROWS: u16 = 5;
@@ -404,10 +404,22 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
         | Mode::Results(_) => {
             let author = app.shows_author();
             // The groups of the column regex share the space the title had.
-            let titles = match &app.columns {
+            let mut titles = match &app.columns {
                 Some(regex) => model::column_names(regex),
                 None => vec!["Title".to_string()],
             };
+            // The sorted column's header has an arrow: up for smallest first. A title sort goes by
+            // the title columns in order, so it is marked on the first.
+            let (sorted, descending) = app.sort();
+            let arrow = if descending { " ▼" } else { " ▲" };
+            let marked = |column: Sort, name: &str| {
+                if sorted == column {
+                    format!("{name}{arrow}")
+                } else {
+                    name.to_string()
+                }
+            };
+            titles[0] = marked(Sort::Title, &titles[0]);
             // With more than fits, the title columns take the width of their longest cell and the
             // table scrolls sideways; otherwise they share what is left.
             let title_widths = title_column_widths(app, &titles);
@@ -440,11 +452,15 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
                 }
             }))
             .collect::<Vec<_>>();
-            let header = ["", "#", "Checks", "Review"]
-                .map(str::to_string)
-                .into_iter()
-                .chain(author.then(|| "Author".to_string()))
-                .chain(titles);
+            let header = [
+                String::new(),
+                marked(Sort::Number, "#"),
+                marked(Sort::Checks, "Checks"),
+                marked(Sort::Review, "Review"),
+            ]
+            .into_iter()
+            .chain(author.then(|| "Author".to_string()))
+            .chain(titles);
             let mut table = Table::new(rows, widths)
                 .header(Row::new(header).bold())
                 .row_highlight_style(Style::new().reversed());
@@ -1591,6 +1607,72 @@ mod tests {
             let column = line.find(text).map(|byte| line[..byte].chars().count())?;
             Some(Position::new(column as u16, y as u16))
         })
+    }
+
+    #[test]
+    fn the_sorted_columns_header_has_an_arrow_for_the_direction_and_s_changes_the_rows_drawn() {
+        let mut app = app_with(vec![
+            pr(9, "Bump zulu", "OPEN", ""),
+            pr(3, "Bump alpha", "OPEN", ""),
+        ]);
+        // The header row of the table: the one with the `#` column.
+        let header = |app: &mut App| {
+            let screen = lines(&draw(app, 200, 30));
+            screen.into_iter().find(|l| l.contains(" # ")).unwrap()
+        };
+        let row = |screen: &[String], number: &str| {
+            screen
+                .iter()
+                .position(|line| line.contains(number) && line.contains("[ ]"))
+                .unwrap()
+        };
+        // Sorted by checks to begin with, smallest first.
+        let top = header(&mut app);
+        assert!(top.contains("Checks ▲"), "{top}");
+        assert!(!top.contains("Review ▲") && !top.contains('▼'), "{top}");
+        // The same checks, so GitHub's order: 9, then 3.
+        let screen = lines(&draw(&mut app, 200, 30));
+        assert!(row(&screen, "#9") < row(&screen, "#3"));
+
+        press(&mut app, "s");
+        let top = header(&mut app);
+        assert!(top.contains("# ▲") && !top.contains("Checks ▲"), "{top}");
+        let screen = lines(&draw(&mut app, 200, 30));
+        assert!(row(&screen, "#3") < row(&screen, "#9"));
+
+        press(&mut app, "S");
+        let top = header(&mut app);
+        assert!(top.contains("# ▼"), "{top}");
+        let screen = lines(&draw(&mut app, 200, 30));
+        assert!(row(&screen, "#9") < row(&screen, "#3"));
+
+        press(&mut app, "s");
+        assert!(header(&mut app).contains("Title ▲"));
+        press(&mut app, "s");
+        assert!(header(&mut app).contains("Review ▲"));
+        // Nothing in the table to mark for the update time, so the title bar says it.
+        press(&mut app, "s");
+        let screen = lines(&draw(&mut app, 200, 30));
+        assert!(screen.iter().all(|l| !l.contains("Review ▲")));
+        assert!(
+            screen[0].starts_with("PRs · sorted by updated ▲"),
+            "{}",
+            screen[0]
+        );
+    }
+
+    #[test]
+    fn a_title_sort_marks_the_first_title_column_when_there_are_several() {
+        let mut app = app_with(vec![pr(1, "Bump alpha to 1.2", "OPEN", "")]);
+        app.columns =
+            Some(model::parse_column_regex(r"Bump (?<container>.+?) to (?<version>\S+)$").unwrap());
+        press(&mut app, "ss");
+        let screen = lines(&draw(&mut app, 200, 30));
+        let top = screen.iter().find(|l| l.contains(" # ")).unwrap();
+        assert!(
+            top.contains("container ▲") && !top.contains("version ▲"),
+            "{top}"
+        );
     }
 
     #[test]
@@ -3759,7 +3841,7 @@ mod tests {
     fn the_help_popup_groups_the_keys_by_pane() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "?");
-        let screen = lines(&draw(&mut app, 200, 60));
+        let screen = lines(&draw(&mut app, 200, 90));
         // The panes behind the popup have titles too, so look from the popup's own.
         let top = screen
             .iter()

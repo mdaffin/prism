@@ -11,9 +11,9 @@ use tui_input::Input;
 use crate::batch::{
     Batch, BatchItem, Choice, Confirm, ConfirmPr, ItemStatus, Summary, auto_merge, finished_status,
 };
-use crate::gh::{Pr, PrDetails, PrState, PrStatus, StatusUpdate};
+use crate::gh::{Pr, PrDetails, PrState, PrStatus, ReviewDecision, StatusUpdate};
 use crate::history::History;
-use crate::model::{self, CheckState, Checks, one_line};
+use crate::model::{self, CheckState, Checks, Sort, one_line};
 
 mod completion;
 mod input;
@@ -64,6 +64,9 @@ pub struct App {
     /// changes or a list loads, not when a row is refreshed, so a row whose status changes
     /// doesn't vanish from under the cursor.
     pub visible: Vec<usize>,
+    /// How the list is ordered, and whether that is the other way round.
+    sort: Sort,
+    descending: bool,
     /// The local filter box.
     pub filter: Input,
     /// The box that edits the column regex. It starts from the regex in use each time it opens.
@@ -254,17 +257,68 @@ impl ConfirmOpen {
 pub struct Row {
     pub pr: Pr,
     pub checks: Checks,
+    /// Where GitHub listed it, so that PRs that tie in a sort stay in that order however often the
+    /// list is sorted.
+    listed_at: usize,
 }
 
 impl Row {
     pub fn new(pr: Pr) -> Self {
         let checks = model::classify_checks(pr.mergeable, &pr.status_check_rollup);
-        Self { pr, checks }
+        Self {
+            pr,
+            checks,
+            listed_at: 0,
+        }
     }
 
-    /// Swaps in a freshly fetched PR, and works out its checks again.
+    /// Swaps in a freshly fetched PR, and works out its checks again. It keeps its place in the
+    /// order GitHub listed.
     fn replace(&mut self, pr: Pr) {
+        let listed_at = self.listed_at;
         *self = Self::new(pr);
+        self.listed_at = listed_at;
+    }
+
+    /// How this row sorts against another: open PRs before the rest, then by `sort` (the other
+    /// way round if `descending`), then in the order GitHub listed them. The title sorts by the
+    /// cells of the table's title columns, so by what is shown.
+    fn order(
+        &self,
+        other: &Row,
+        sort: Sort,
+        descending: bool,
+        columns: Option<&Regex>,
+    ) -> std::cmp::Ordering {
+        let closed = |row: &Row| row.pr.state != PrState::Open;
+        // The review column's order: those that need one, then changes requested, then approved.
+        let review = |row: &Row| match row.pr.review_decision {
+            ReviewDecision::Other => 0,
+            ReviewDecision::ChangesRequested => 1,
+            ReviewDecision::Approved => 2,
+        };
+        let cells = |row: &Row| -> Vec<String> {
+            let cells = row.title_cells(columns);
+            cells.iter().map(|cell| cell.to_lowercase()).collect()
+        };
+        closed(self)
+            .cmp(&closed(other))
+            .then_with(|| {
+                let by_sort = match sort {
+                    Sort::Checks => self.checks.state.rank().cmp(&other.checks.state.rank()),
+                    Sort::Number => self.pr.number.cmp(&other.pr.number),
+                    Sort::Title => cells(self).cmp(&cells(other)),
+                    Sort::Review => review(self).cmp(&review(other)),
+                    // Timestamps in this form sort as text.
+                    Sort::Updated => self.pr.updated_at.cmp(&other.pr.updated_at),
+                };
+                if descending {
+                    by_sort.reverse()
+                } else {
+                    by_sort
+                }
+            })
+            .then_with(|| self.listed_at.cmp(&other.listed_at))
     }
 
     /// Takes what a timed refresh brings, and works out the checks again. The title stays.
@@ -379,6 +433,8 @@ impl App {
             batch_epoch: 0,
             rows: Vec::new(),
             visible: Vec::new(),
+            sort: Sort::default(),
+            descending: false,
             filter: Input::default(),
             table: TableState::default(),
             list_x: 0,
@@ -450,17 +506,53 @@ impl App {
         };
         self.columns = columns;
         self.typing = Typing::Nothing;
-        // The filter matches the columns shown.
-        self.refilter();
+        // The filter matches the columns shown, and a sort by title goes by them too.
+        self.resort();
     }
 
-    /// The title, with a note when the list was cut short.
+    /// The title, with a note when the list was cut short, and one for a sort that has no column
+    /// of the table to mark.
     pub fn title(&self) -> String {
-        if self.truncated {
-            format!("{} - showing first {}, more exist", self.title, self.limit)
-        } else {
-            self.title.clone()
+        let mut title = self.title.clone();
+        if self.sort == Sort::Updated {
+            let arrow = if self.descending { '▼' } else { '▲' };
+            title.push_str(&format!(" · sorted by updated {arrow}"));
         }
+        if self.truncated {
+            title.push_str(&format!(" - showing first {}, more exist", self.limit));
+        }
+        title
+    }
+
+    /// How the list is sorted and whether that is the other way round, for marking the column.
+    pub fn sort(&self) -> (Sort, bool) {
+        (self.sort, self.descending)
+    }
+
+    /// `s`: sorts the list by the next of the sorts, which come round again, smallest first. It
+    /// stays for the session and applies to every list that loads.
+    pub(super) fn cycle_sort(&mut self) {
+        self.sort = self.sort.next();
+        self.descending = false;
+        self.resort();
+    }
+
+    /// `S`: sorts the list the other way round.
+    pub(super) fn reverse_sort(&mut self) {
+        self.descending = !self.descending;
+        self.resort();
+    }
+
+    /// Puts `rows` in the order of the sort. The highlight stays on its PR, and the selection,
+    /// which is by number, is untouched; the filter is applied to the new order.
+    fn resort(&mut self) {
+        let before = self.highlighted().map(|row| row.pr.number);
+        let (sort, descending, columns) = (self.sort, self.descending, self.columns.as_ref());
+        self.rows
+            .sort_by(|a, b| a.order(b, sort, descending, columns));
+        // `visible` is positions in `rows`, which have moved.
+        self.visible = (0..self.rows.len()).collect();
+        self.refilter_keeping(before);
     }
 
     /// Whether the spinner needs ticks.
@@ -556,6 +648,12 @@ impl App {
     /// visible, else the first row is.
     fn refilter(&mut self) {
         let before = self.highlighted().map(|row| row.pr.number);
+        self.refilter_keeping(before);
+    }
+
+    /// Works out `visible` from the filter, with the highlight on PR `before` if it is visible,
+    /// else on the first row.
+    fn refilter_keeping(&mut self, before: Option<u64>) {
         let mut filter = model::Filter::new(self.filter.value());
         self.visible = self
             .rows
@@ -676,8 +774,12 @@ impl App {
         self.truncated = prs.len() > self.limit;
         prs.truncate(self.limit);
         let mut rows: Vec<Row> = prs.into_iter().map(Row::new).collect();
-        // Open PRs first, passing first; closed and merged PRs can't be acted on.
-        rows.sort_by_key(|row| (row.pr.state != PrState::Open, row.checks.state.rank()));
+        for (i, row) in rows.iter_mut().enumerate() {
+            row.listed_at = i;
+        }
+        // Open PRs first, then as the sort says; closed and merged PRs can't be acted on.
+        let (sort, descending) = (self.sort, self.descending);
+        rows.sort_by(|a, b| a.order(b, sort, descending, self.columns.as_ref()));
         let before = self.highlighted().map(|row| row.pr.number);
         // A refresh keeps the highlight on the same PR if it is still listed.
         let highlight = before
