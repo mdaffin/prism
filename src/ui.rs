@@ -93,65 +93,166 @@ struct PaneLayout {
     diff: Rect,
 }
 
-/// The approvers over the diff, in `area`. The approvers get `wanted` rows, but never more than a
-/// third of the area.
-fn approvers_over_diff(area: Rect, wanted: u16) -> [Rect; 2] {
+/// Splits `area` between the `items` that are on, each with its constraint, down or across, and
+/// gives each item its piece. An item that is off gets an empty rectangle and no room.
+fn split(area: Rect, vertical: bool, items: &[(bool, Constraint)]) -> Vec<Rect> {
+    let on: Vec<Constraint> = items
+        .iter()
+        .filter(|(on, _)| *on)
+        .map(|&(_, constraint)| constraint)
+        .collect();
+    let layout = if vertical {
+        Layout::vertical(on)
+    } else {
+        Layout::horizontal(on)
+    };
+    let mut pieces = layout.split(area).to_vec().into_iter();
+    items
+        .iter()
+        .map(|(on, _)| {
+            if *on {
+                pieces.next().unwrap_or_default()
+            } else {
+                Rect::default()
+            }
+        })
+        .collect()
+}
+
+/// The approvers over the diff, in `area`, for whichever of the two are shown. The approvers get
+/// `wanted` rows, but never more than a third of the area.
+fn approvers_over_diff(area: Rect, wanted: u16, (approvers, diff): (bool, bool)) -> (Rect, Rect) {
     let rows = wanted.min(area.height / 3);
-    Layout::vertical([Constraint::Length(rows), Constraint::Fill(1)]).areas(area)
+    let pieces = split(
+        area,
+        true,
+        &[
+            (
+                approvers,
+                if diff {
+                    Constraint::Length(rows)
+                } else {
+                    Constraint::Fill(1)
+                },
+            ),
+            (diff, Constraint::Fill(1)),
+        ],
+    );
+    (pieces[0], pieces[1])
 }
 
 /// With room, the list is above the checks and comments on the left and the PR's details are on
 /// the right. In a narrow terminal that would leave the table too little width, so the list takes
 /// the full width on top. Under it, what is read most gets the space: the description beside the
 /// diff, with the checks and comments in a short row at the bottom. The approvers are in the
-/// details, above the diff, and take `approvers_rows` if they can.
-fn pane_layout(body: Rect, approvers_rows: u16) -> PaneLayout {
-    let halves = |area| Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).areas(area);
+/// details, above the diff, and take `approvers_rows` if they can. A pane in `hidden` is left out
+/// (its rectangle is empty) and the others share its room; with all of a side's panes hidden, the
+/// other side takes the width, and the Pull request box goes with the details.
+fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane]) -> PaneLayout {
+    let shown = |pane| !hidden.contains(&pane);
+    let (checks_on, comments_on) = (shown(Pane::Checks), shown(Pane::Comments));
+    let (description_on, approvers_on, diff_on) = (
+        shown(Pane::Description),
+        shown(Pane::Approvers),
+        shown(Pane::Diff),
+    );
+    let details_on = description_on || approvers_on || diff_on;
     if body.width >= WIDE_LAYOUT_MIN_WIDTH {
-        let [left, detail] = halves(body);
-        let [list, checks, comments] = Layout::vertical([
-            Constraint::Fill(2),
-            Constraint::Fill(1),
-            Constraint::Max(MAX_COMMENTS_ROWS),
-        ])
-        .areas(left);
-        let [pull_request, description, diff_pane] = Layout::vertical([
-            Constraint::Length(PULL_REQUEST_ROWS),
-            Constraint::Fill(1),
-            Constraint::Fill(2),
-        ])
-        .areas(detail);
-        let [approvers, diff] = approvers_over_diff(diff_pane, approvers_rows);
+        let sides = split(
+            body,
+            false,
+            &[
+                (true, Constraint::Fill(1)),
+                (details_on, Constraint::Fill(1)),
+            ],
+        );
+        let left = split(
+            sides[0],
+            true,
+            &[
+                (true, Constraint::Fill(2)),
+                (checks_on, Constraint::Fill(1)),
+                (comments_on, Constraint::Max(MAX_COMMENTS_ROWS)),
+            ],
+        );
+        let detail = split(
+            sides[1],
+            true,
+            &[
+                (details_on, Constraint::Length(PULL_REQUEST_ROWS)),
+                (description_on, Constraint::Fill(1)),
+                (approvers_on || diff_on, Constraint::Fill(2)),
+            ],
+        );
+        let (approvers, diff) =
+            approvers_over_diff(detail[2], approvers_rows, (approvers_on, diff_on));
         PaneLayout {
-            list,
-            checks,
+            list: left[0],
+            checks: left[1],
             approvers,
-            comments,
-            pull_request,
-            description,
+            comments: left[2],
+            pull_request: detail[0],
+            description: detail[1],
             diff,
         }
     } else {
+        let lower_on = checks_on || comments_on;
         let lower_rows = (body.height / 5).clamp(MIN_LOWER_ROWS, MAX_COMMENTS_ROWS);
-        let [list, details, lower] = Layout::vertical([
-            Constraint::Fill(2),
-            Constraint::Fill(3),
-            Constraint::Length(lower_rows),
-        ])
-        .areas(body);
-        let [left, diff_pane] = halves(details);
-        let [pull_request, description] =
-            Layout::vertical([Constraint::Length(PULL_REQUEST_ROWS), Constraint::Fill(1)])
-                .areas(left);
-        let [approvers, diff] = approvers_over_diff(diff_pane, approvers_rows);
-        let [checks, comments] = halves(lower);
+        let rows = split(
+            body,
+            true,
+            &[
+                (true, Constraint::Fill(2)),
+                (details_on, Constraint::Fill(3)),
+                (lower_on, Constraint::Length(lower_rows)),
+            ],
+        );
+        let right_on = approvers_on || diff_on;
+        let columns = split(
+            rows[1],
+            false,
+            &[
+                (description_on, Constraint::Fill(1)),
+                (right_on, Constraint::Fill(1)),
+            ],
+        );
+        // The Pull request box is over the description, or over the diff if that is hidden.
+        let left = split(
+            columns[0],
+            true,
+            &[
+                (description_on, Constraint::Length(PULL_REQUEST_ROWS)),
+                (description_on, Constraint::Fill(1)),
+            ],
+        );
+        let right = split(
+            columns[1],
+            true,
+            &[
+                (
+                    right_on && !description_on,
+                    Constraint::Length(PULL_REQUEST_ROWS),
+                ),
+                (right_on, Constraint::Fill(1)),
+            ],
+        );
+        let (approvers, diff) =
+            approvers_over_diff(right[1], approvers_rows, (approvers_on, diff_on));
+        let lower = split(
+            rows[2],
+            false,
+            &[
+                (checks_on, Constraint::Fill(1)),
+                (comments_on, Constraint::Fill(1)),
+            ],
+        );
         PaneLayout {
-            list,
-            checks,
+            list: rows[0],
+            checks: lower[0],
             approvers,
-            comments,
-            pull_request,
-            description,
+            comments: lower[1],
+            pull_request: if description_on { left[0] } else { right[0] },
+            description: left[1],
             diff,
         }
     }
@@ -178,7 +279,11 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         pull_request: pull_request_area,
         description: description_area,
         diff: diff_area,
-    } = pane_layout(body_area, approvers_rows(app, body_area.width / 2));
+    } = pane_layout(
+        body_area,
+        approvers_rows(app, body_area.width / 2),
+        &app.hidden_panes,
+    );
     // The filter box is only there while it is being edited or has text in it.
     let filter_rows = if app.typing == Typing::Filter || !app.filter.value().is_empty() {
         INPUT_BOX_ROWS
@@ -220,12 +325,40 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     }
 
     pr_table(app, frame, table_area);
-    checks(app, frame, checks_area);
-    approvers(app, frame, approvers_area);
-    comments(app, frame, comments_area);
-    pull_request(app, frame, pull_request_area);
-    description(app, frame, description_area);
-    diff(app, frame, diff_area);
+    // A hidden pane is not drawn, and what it recorded of itself is cleared so that nothing acts
+    // on a pane that is not there.
+    if app.pane_hidden(Pane::Checks) {
+        app.drawn.areas.checks = Rect::default();
+        app.drawn.checks_layout = ChecksLayout::default();
+    } else {
+        checks(app, frame, checks_area);
+    }
+    if app.pane_hidden(Pane::Approvers) {
+        app.drawn.areas.approvers = Rect::default();
+    } else {
+        approvers(app, frame, approvers_area);
+    }
+    if app.pane_hidden(Pane::Comments) {
+        app.drawn.areas.comments = Rect::default();
+        app.drawn.comment_layout = CommentLayout::default();
+        app.drawn.comment_links = Vec::new();
+    } else {
+        comments(app, frame, comments_area);
+    }
+    if !pull_request_area.is_empty() {
+        pull_request(app, frame, pull_request_area);
+    }
+    if app.pane_hidden(Pane::Description) {
+        app.drawn.areas.description = Rect::default();
+        app.drawn.description_links = Vec::new();
+    } else {
+        description(app, frame, description_area);
+    }
+    if app.pane_hidden(Pane::Diff) {
+        app.drawn.areas.diff = Rect::default();
+    } else {
+        diff(app, frame, diff_area);
+    }
 
     if let Some(error) = error {
         let error = Paragraph::new(error).red().wrap(Wrap { trim: false });
@@ -3001,6 +3134,140 @@ mod tests {
             .unwrap_or_else(|| panic!("no scrollbar for {target:?}"))
     }
 
+    /// The areas of the panes that can be hidden, in `Pane::HIDEABLE` order.
+    fn hideable_areas(app: &App) -> Vec<Rect> {
+        let a = &app.drawn.areas;
+        vec![a.checks, a.comments, a.description, a.approvers, a.diff]
+    }
+
+    #[test]
+    fn each_pane_can_be_hidden_in_both_layouts_and_the_others_take_its_room() {
+        let area_of = |r: &Rect| u32::from(r.width) * u32::from(r.height);
+        for width in [200u16, 100] {
+            let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+            draw(&mut app, width, 40);
+            let all = hideable_areas(&app);
+            assert!(all.iter().all(|r| !r.is_empty()), "{width}: {all:?}");
+            let shown_total = |app: &App| -> u32 {
+                hideable_areas(app).iter().map(area_of).sum::<u32>()
+                    + area_of(&app.drawn.areas.table)
+            };
+            let before = shown_total(&app);
+            for (i, pane) in Pane::HIDEABLE.into_iter().enumerate() {
+                press(&mut app, &(i + 1).to_string());
+                draw(&mut app, width, 40);
+                let areas = hideable_areas(&app);
+                assert!(
+                    areas[i].is_empty(),
+                    "{width}: {pane:?} still has {:?}",
+                    areas[i]
+                );
+                for (j, other) in areas.iter().enumerate() {
+                    assert!(
+                        j == i || !other.is_empty(),
+                        "{width}: hiding {pane:?} hid {j}"
+                    );
+                }
+                // The room it had went to the others, so the panes still fill about as much.
+                let kept = shown_total(&app);
+                assert!(
+                    kept + area_of(&all[i]) / 2 > before,
+                    "{width}: {pane:?} {kept} {before}"
+                );
+                // None overlap.
+                let mut drawn = areas.clone();
+                drawn.push(app.drawn.areas.table);
+                for (a, ra) in drawn.iter().enumerate() {
+                    for rb in &drawn[a + 1..] {
+                        assert!(ra.intersection(*rb).is_empty(), "{width}: {ra:?} {rb:?}");
+                    }
+                }
+                // Shown again, it is back.
+                press(&mut app, &(i + 1).to_string());
+                draw(&mut app, width, 40);
+                assert!(!hideable_areas(&app)[i].is_empty(), "{width}: {pane:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn hiding_every_pane_leaves_the_list_across_the_whole_screen_and_0_brings_them_back() {
+        for width in [200u16, 100] {
+            let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+            press(&mut app, "12345");
+            let screen = lines(&draw(&mut app, width, 40));
+            assert!(hideable_areas(&app).iter().all(|r| r.is_empty()), "{width}");
+            assert_eq!(app.drawn.areas.table.width, width, "{width}");
+            assert!(
+                !screen.join("\n").contains("Pull request\u{2500}"),
+                "{width}"
+            );
+            press(&mut app, "0");
+            draw(&mut app, width, 40);
+            assert!(
+                hideable_areas(&app).iter().all(|r| !r.is_empty()),
+                "{width}"
+            );
+            assert!(app.hidden_panes.is_empty());
+        }
+    }
+
+    #[test]
+    fn hiding_the_focused_pane_moves_the_focus_and_tab_skips_hidden_panes() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        draw(&mut app, 200, 40);
+        // Focus the checks, then hide them: the focus moves on to the next shown pane.
+        key(&mut app, KeyCode::Tab);
+        assert!(app.focus == Pane::Checks);
+        press(&mut app, "1");
+        assert!(app.focus == Pane::Comments);
+        // Tab from the list now goes straight to the comments, and Shift-Tab round to the diff.
+        key(&mut app, KeyCode::BackTab);
+        key(&mut app, KeyCode::BackTab);
+        assert!(app.focus == Pane::Diff);
+        press(&mut app, "5");
+        assert!(app.focus == Pane::Table);
+        key(&mut app, KeyCode::Tab);
+        assert!(app.focus == Pane::Comments);
+        // A hidden pane takes no clicks and no sideways scrolling.
+        draw(&mut app, 200, 40);
+        let checks = app.drawn.areas.checks;
+        assert!(checks.is_empty());
+        click(&mut app, Position::new(checks.x, checks.y));
+        assert!(app.focus == Pane::Comments);
+        press(&mut app, "0");
+        key(&mut app, KeyCode::Tab);
+        assert!(app.focus == Pane::Description);
+    }
+
+    #[test]
+    fn hiding_the_diff_stops_its_fetches_until_it_is_shown_again() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        press(&mut app, "5");
+        assert!(app.diffs_to_fetch().is_empty());
+        press(&mut app, "5");
+        assert_eq!(app.diffs_to_fetch().len(), 1);
+    }
+
+    #[test]
+    fn a_hidden_panes_stale_data_is_dropped_so_nothing_acts_on_it() {
+        let mut app = app_with_long_panes();
+        draw(&mut app, 200, 40);
+        assert!(!app.drawn.comment_layout.items.is_empty());
+        assert!(app.drawn.checks_layout.count > 0);
+        press(&mut app, "1");
+        press(&mut app, "2");
+        press(&mut app, "3");
+        draw(&mut app, 200, 40);
+        assert!(app.drawn.comment_layout.items.is_empty());
+        assert_eq!(app.drawn.checks_layout.count, 0);
+        assert!(app.drawn.description_links.is_empty());
+        assert!(!app.drawn.areas.scrollbars.iter().any(|b| matches!(
+            b.target,
+            ScrollTarget::Checks | ScrollTarget::Comments | ScrollTarget::Description
+        )));
+    }
+
     #[test]
     fn a_click_on_a_vertical_track_pages_towards_it() {
         let mut app = app_with_long_panes();
@@ -4774,10 +5041,10 @@ mod tests {
     fn a_tall_help_popup_has_no_scrollbar() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "?");
-        draw(&mut app, 200, 90);
+        draw(&mut app, 200, 120);
         assert_eq!(app.drawn.popup.content, app.drawn.popup.viewport);
         key(&mut app, KeyCode::End);
-        draw(&mut app, 200, 90);
+        draw(&mut app, 200, 120);
         assert_eq!(app.drawn.popup.offset, 0);
     }
 
@@ -4785,7 +5052,7 @@ mod tests {
     fn the_help_popup_groups_the_keys_by_pane() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "?");
-        let screen = lines(&draw(&mut app, 200, 90));
+        let screen = lines(&draw(&mut app, 200, 120));
         // The panes behind the popup have titles too, so look from the popup's own.
         let top = screen
             .iter()

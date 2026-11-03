@@ -84,12 +84,46 @@ impl Pane {
             .expect("every pane is in ORDER")
     }
 
-    pub(super) fn next(self) -> Self {
-        Self::ORDER[(self.position() + 1) % Self::ORDER.len()]
+    /// The pane's name, as in its title.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Table => "the list",
+            Self::Checks => "Checks",
+            Self::Comments => "Comments",
+            Self::Description => "Description",
+            Self::Approvers => "Approvers",
+            Self::Diff => "Diff",
+        }
     }
 
-    pub(super) fn previous(self) -> Self {
-        Self::ORDER[(self.position() + Self::ORDER.len() - 1) % Self::ORDER.len()]
+    /// The panes that can be hidden: every one but the list.
+    pub const HIDEABLE: [Pane; 5] = [
+        Pane::Checks,
+        Pane::Comments,
+        Pane::Description,
+        Pane::Approvers,
+        Pane::Diff,
+    ];
+
+    /// The next pane in Tab order that is not in `hidden`.
+    pub(super) fn next(self, hidden: &[Pane]) -> Self {
+        self.step(1, hidden)
+    }
+
+    /// The previous pane in Tab order that is not in `hidden`.
+    pub(super) fn previous(self, hidden: &[Pane]) -> Self {
+        self.step(Self::ORDER.len() - 1, hidden)
+    }
+
+    fn step(self, by: usize, hidden: &[Pane]) -> Self {
+        let mut pane = self;
+        for _ in 0..Self::ORDER.len() {
+            pane = Self::ORDER[(pane.position() + by) % Self::ORDER.len()];
+            if !hidden.contains(&pane) {
+                return pane;
+            }
+        }
+        self
     }
 }
 
@@ -179,6 +213,39 @@ impl PaneAreas {
 }
 
 impl App {
+    /// Whether `pane` has been hidden with a number key.
+    pub fn pane_hidden(&self, pane: Pane) -> bool {
+        self.hidden_panes.contains(&pane)
+    }
+
+    /// `1` to `5`: hides the pane, or shows it again if it is hidden, for the session. The others
+    /// take its room, Tab skips it, and the focus moves on from it. The list can't be hidden.
+    pub(super) fn toggle_pane(&mut self, pane: Pane) {
+        let name = pane.name();
+        let key = Pane::HIDEABLE
+            .iter()
+            .position(|&p| p == pane)
+            .map_or(0, |i| i + 1);
+        if let Some(at) = self.hidden_panes.iter().position(|&p| p == pane) {
+            self.hidden_panes.remove(at);
+            self.note = Some(format!("Showing {name}"));
+        } else {
+            self.hidden_panes.push(pane);
+            self.note = Some(format!("Hid {name}: {key} shows it again, 0 shows all"));
+        }
+        if self.pane_hidden(self.focus) {
+            self.focus = self.focus.next(&self.hidden_panes);
+        }
+    }
+
+    /// `0`: shows every pane again.
+    pub(super) fn show_all_panes(&mut self) {
+        if !self.hidden_panes.is_empty() {
+            self.hidden_panes.clear();
+            self.note = Some("Showing every pane".to_string());
+        }
+    }
+
     /// One notch of the wheel: what one Up/Down press does in the table and the comments pane, and
     /// `WHEEL_LINES` lines elsewhere.
     pub(super) fn wheel(&mut self, pane: Pane, direction: isize) {

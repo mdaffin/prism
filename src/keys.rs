@@ -101,6 +101,12 @@ pub const KEYS: &[KeyHelp] = &[
         "Show the whole message of a failed fetch, which the panes cut to its first line",
         None,
     ),
+    key(
+        "1-5",
+        "Hide or show the checks, comments, description, approvers or diff pane, for the session; the others take its room and Tab skips it",
+        None,
+    ),
+    key("0", "Show every pane", None),
     key("Tab / Shift-Tab", "Move focus between the panes", None),
     key(
         "Up/Down, j/k",

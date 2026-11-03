@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use ratatui::text::Text;
 
-use super::{App, Mode, RefreshId, Typing};
+use super::{App, Mode, Pane, RefreshId, Typing};
 use crate::batch::{ItemStatus, auto_merge};
 use crate::gh::{PrDetails, PrState};
 use crate::model::Markdown;
@@ -369,8 +369,12 @@ impl App {
     }
 
     /// PRs whose diffs haven't been requested yet, as many as there are free fetch slots, with
-    /// their fetch ids. Marks them as loading, so the caller must start the fetches.
+    /// their fetch ids. Marks them as loading, so the caller must start the fetches. None while the
+    /// Diff pane is hidden, as nothing shows them; they are fetched once it is shown again.
     pub fn diffs_to_fetch(&mut self) -> Vec<(u64, FetchId)> {
+        if self.pane_hidden(Pane::Diff) {
+            return Vec::new();
+        }
         let order = self.numbers_from_highlight();
         start_fetches(
             &mut self.diffs,

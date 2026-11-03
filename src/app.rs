@@ -80,6 +80,8 @@ pub struct App {
     pub columns_error: Option<String>,
     /// The columns hidden with `v`, for the session. A hidden column keeps its sort.
     pub hidden: Vec<Column>,
+    /// The panes hidden with `1` to `5`, for the session.
+    pub hidden_panes: Vec<Pane>,
     /// The drag on a scrollbar's thumb that is in progress, if any.
     bar_drag: Option<scrollbars::BarDrag>,
     /// The highlighted row, as a position in `visible`.
@@ -453,6 +455,7 @@ impl App {
             columns_input: Input::default(),
             columns_error: None,
             hidden: Vec::new(),
+            hidden_panes: Vec::new(),
             bar_drag: None,
             dry_run,
             mode: Mode::Loading,

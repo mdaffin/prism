@@ -321,6 +321,11 @@ impl App {
             KeyCode::Char('c') => self.edit_columns(),
             KeyCode::Char('e') => self.show_failure(),
             KeyCode::Char('v') => self.mode = Mode::PickColumns(0),
+            KeyCode::Char(digit @ '1'..='5') => {
+                let pane = Pane::HIDEABLE[usize::from(digit as u8 - b'1')];
+                self.toggle_pane(pane);
+            }
+            KeyCode::Char('0') => self.show_all_panes(),
             KeyCode::Char('s') => self.cycle_sort(),
             KeyCode::Char('S') => self.reverse_sort(),
             KeyCode::Char('?') => self.mode = Mode::Help(0),
@@ -332,8 +337,8 @@ impl App {
             // the selection.
             KeyCode::Esc if !self.filter.value().is_empty() => self.clear_filter(),
             KeyCode::Esc => self.selected.clear(),
-            KeyCode::Tab => self.focus = self.focus.next(),
-            KeyCode::BackTab => self.focus = self.focus.previous(),
+            KeyCode::Tab => self.focus = self.focus.next(&self.hidden_panes),
+            KeyCode::BackTab => self.focus = self.focus.previous(&self.hidden_panes),
             KeyCode::Down | KeyCode::Char('j') => self.step_focused(1),
             KeyCode::Up | KeyCode::Char('k') => self.step_focused(-1),
             KeyCode::Right | KeyCode::Char('l') => {
