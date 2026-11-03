@@ -11,7 +11,7 @@ pub const HELP_HINTS: &str = "Esc ? q: Close";
 pub const RUNNING_HINTS: &str = "q: Cancel | Ctrl-C: Quit";
 pub const RESULTS_HINTS: &str = "Enter/Esc: Close";
 /// Editing the search box.
-pub const SEARCH_HINTS: &str = "Enter: Search | Up/Down: History | Esc: Cancel";
+pub const SEARCH_HINTS: &str = "Enter: Search | Tab: Complete | Up/Down: History | Esc: Cancel";
 /// Editing the filter box.
 pub const FILTER_HINTS: &str = "Enter: Keep filter | Esc: Clear filter";
 
@@ -108,6 +108,12 @@ pub const KEYS: &[KeyHelp] = &[
         Some("Quit"),
     ),
     key("Ctrl-C", "Quit from anywhere", None),
+    key("Search box: Tab", "Accept the highlighted suggestion", None),
+    key(
+        "Search box: Up/Down",
+        "Move in the suggestions, or else through the queries searched before",
+        None,
+    ),
     pane_key(
         Pane::Table,
         "Enter",

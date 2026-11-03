@@ -2107,3 +2107,131 @@ fn a_names_result_that_is_not_the_latest_is_dropped() {
     app.update(Msg::LabelsLoaded(id, Ok(vec!["fresh".to_string()])));
     assert_eq!(app.names.labels(), ["fresh"]);
 }
+
+/// An app whose search box is open with `typed` added to the query, and whose labels are known.
+fn app_completing(typed: &str) -> App {
+    let mut app = app_with_rows(2);
+    press(&mut app, "/");
+    let started = app.names_to_fetch();
+    let labels = ["deps", "bug"].map(String::from).to_vec();
+    app.update(Msg::LabelsLoaded(started.labels.unwrap(), Ok(labels)));
+    press(&mut app, typed);
+    app
+}
+
+fn suggestions(app: &App) -> Vec<String> {
+    app.completion()
+        .map(|(c, _)| c.suggestions)
+        .unwrap_or_default()
+}
+
+#[test]
+fn no_suggestions_until_the_query_has_been_changed() {
+    let mut app = app_with_rows(2);
+    press(&mut app, "/");
+    assert!(app.completion().is_none());
+    press(&mut app, " is:p");
+    assert!(app.completion().is_some());
+}
+
+#[test]
+fn tab_accepts_the_highlighted_suggestion_and_goes_on_to_its_values() {
+    let mut app = app_completing(" la");
+    assert_eq!(suggestions(&app), ["label", "language"]);
+    key(&mut app, KeyCode::Tab);
+    assert_eq!(app.query.value(), "is:pr label:");
+    assert_eq!(app.query.cursor(), 12);
+    // The labels the repository has, sorted.
+    assert_eq!(suggestions(&app), ["bug", "deps"]);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Tab);
+    assert_eq!(app.query.value(), "is:pr label:deps ");
+    assert!(app.completion().is_none());
+}
+
+#[test]
+fn authors_come_from_the_rows_listed() {
+    let app = app_completing(" author:");
+    assert_eq!(suggestions(&app), ["alice"]);
+}
+
+#[test]
+fn up_and_down_move_in_the_suggestions_round_the_ends() {
+    let mut app = app_completing(" la");
+    let selected = |app: &App| app.completion().unwrap().1;
+    key(&mut app, KeyCode::Down);
+    assert_eq!(selected(&app), 1);
+    key(&mut app, KeyCode::Down);
+    assert_eq!(selected(&app), 0);
+    key(&mut app, KeyCode::Up);
+    assert_eq!(selected(&app), 1);
+    // The text is as it was, and a key that changes it starts the highlight again.
+    assert_eq!(app.query.value(), "is:pr la");
+    press(&mut app, "n");
+    assert_eq!(selected(&app), 0);
+}
+
+#[test]
+fn up_goes_through_the_history_when_there_are_no_suggestions() {
+    let mut app = app_with_rows(2);
+    press(&mut app, "/x");
+    key(&mut app, KeyCode::Enter);
+    press(&mut app, "/y");
+    key(&mut app, KeyCode::Enter);
+    press(&mut app, "/ la");
+    assert!(app.completion().is_some());
+    key(&mut app, KeyCode::Up);
+    // Moved in the suggestions: the query is not recalled.
+    assert_eq!(app.query.value(), "is:prxy la");
+}
+
+#[test]
+fn recalling_a_query_does_not_open_a_list_that_takes_up_and_down() {
+    let mut app = app_with_rows(2);
+    // A recalled query that ends in something with suggestions.
+    press(&mut app, "/ is:op");
+    key(&mut app, KeyCode::Enter);
+    press(&mut app, "/ x");
+    key(&mut app, KeyCode::Up);
+    assert_eq!(app.query.value(), "is:pr is:op");
+    assert!(app.completion().is_none());
+    key(&mut app, KeyCode::Down);
+    assert_eq!(app.query.value(), "is:pr is:op x");
+}
+
+#[test]
+fn esc_closes_the_list_before_it_cancels_the_edit() {
+    let mut app = app_completing(" la");
+    key(&mut app, KeyCode::Esc);
+    assert!(app.completion().is_none());
+    assert!(app.typing == Typing::Search);
+    assert_eq!(app.query.value(), "is:pr la");
+    // It stays closed until the text changes.
+    key(&mut app, KeyCode::Left);
+    key(&mut app, KeyCode::Right);
+    assert!(app.completion().is_none());
+    press(&mut app, "n");
+    assert!(app.completion().is_some());
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Esc);
+    assert!(app.typing != Typing::Search);
+    assert_eq!(app.query.value(), "is:pr");
+}
+
+#[test]
+fn enter_searches_the_text_as_it_is_with_the_list_open() {
+    let mut app = app_completing(" la");
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter);
+    assert!(app.typing != Typing::Search);
+    let (_, query) = app.list_to_fetch().unwrap();
+    assert_eq!(query, "is:pr la");
+}
+
+#[test]
+fn tab_with_no_suggestions_does_nothing_to_the_query() {
+    let mut app = app_completing(" zzz");
+    key(&mut app, KeyCode::Tab);
+    assert_eq!(app.query.value(), "is:pr zzz");
+    assert!(app.typing == Typing::Search);
+}

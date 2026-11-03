@@ -197,18 +197,29 @@ impl App {
                 self.list.refresh_requested = false;
                 self.errors.clear();
             }
+            // The list of suggestions, when it is open, comes before the box in what Esc and Up and
+            // Down do.
             KeyCode::Esc => {
-                self.typing = Typing::Nothing;
-                self.query = Input::new(self.submitted_query.clone());
+                if !self.dismiss_completion() {
+                    self.typing = Typing::Nothing;
+                    self.query = Input::new(self.submitted_query.clone());
+                }
+            }
+            KeyCode::Tab => {
+                self.accept_completion();
             }
             KeyCode::Up | KeyCode::Down => {
-                let current = self.query.value();
-                let recalled = match key.code {
-                    KeyCode::Up => self.history.previous(current),
-                    _ => self.history.next(current),
-                };
-                if let Some(recalled) = recalled {
-                    self.query = Input::new(recalled.to_string());
+                let step = if key.code == KeyCode::Up { -1 } else { 1 };
+                if !self.move_completion(step) {
+                    let current = self.query.value();
+                    let recalled = match key.code {
+                        KeyCode::Up => self.history.previous(current),
+                        _ => self.history.next(current),
+                    };
+                    if let Some(recalled) = recalled {
+                        self.query = Input::new(recalled.to_string());
+                        self.hide_completion();
+                    }
                 }
             }
             _ => {

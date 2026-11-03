@@ -236,6 +236,12 @@ pub fn complete(query: &str, cursor: usize, have: &Candidates) -> Option<Complet
 }
 
 impl Completion {
+    /// The character index in the query that the suggestions start to replace, which is where a
+    /// list of them is drawn from.
+    pub fn start(&self) -> usize {
+        self.range.start
+    }
+
     /// The query with the suggestion at `index` put in, and where the cursor then is: after a `:`
     /// for a name, and after a space for a value. A `:` or whitespace that is already there is
     /// used rather than added again.

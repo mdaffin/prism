@@ -10,7 +10,7 @@ use ratatui::widgets::{
     StatefulWidget, Table, TableState, Wrap,
 };
 use regex::Regex;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{
     self, App, ChecksLayout, CommentLayout, ConfirmOpen, Details, Fetch, Mode, Page, Pane, Typing,
@@ -192,6 +192,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         let error = Paragraph::new(error).red().wrap(Wrap { trim: false });
         frame.render_widget(error, error_area);
     }
+    suggestions(app, frame, search_area, body_area);
     draw_dialog(app, frame, body_area);
     let status = status_line(app, status_area.width);
     frame.render_widget(
@@ -890,6 +891,67 @@ fn search(app: &App, frame: &mut Frame, area: Rect) {
         let x = app.query.visual_cursor().saturating_sub(scroll) as u16;
         frame.set_cursor_position(Position::new(area.x + 1 + x, area.y + 1));
     }
+}
+
+/// The most suggestions shown at once.
+const MAX_SUGGESTION_ROWS: u16 = 8;
+
+/// The list of suggestions under the search box, starting under the word they replace, drawn over
+/// the table. Not drawn where there is no room for at least one row inside its border.
+fn suggestions(app: &App, frame: &mut Frame, search_area: Rect, body: Rect) {
+    let Some((completion, selected)) = app.completion() else {
+        return;
+    };
+    // A box squeezed by a very short terminal is not under anything.
+    if search_area.height < INPUT_BOX_ROWS {
+        return;
+    }
+    let top = search_area.bottom();
+    let space = body.bottom().saturating_sub(top);
+    let rows = completion
+        .suggestions
+        .len()
+        .min(usize::from(MAX_SUGGESTION_ROWS))
+        .min(usize::from(space.saturating_sub(2)));
+    if rows == 0 {
+        return;
+    }
+    let widest = completion
+        .suggestions
+        .iter()
+        .map(|s| s.width())
+        .max()
+        .unwrap_or(0);
+    // A column of padding each side of the text, and the border.
+    let width = (widest as u16 + 4).min(search_area.width);
+    let before: usize = app
+        .query
+        .value()
+        .chars()
+        .take(completion.start())
+        .map(|c| c.width().unwrap_or(0))
+        .sum();
+    let scroll = app
+        .query
+        .visual_scroll(usize::from(search_area.width.saturating_sub(2)));
+    let x = (search_area.x + 1 + before.saturating_sub(scroll) as u16)
+        .min(search_area.right().saturating_sub(width));
+    let area = Rect::new(x, top, width, rows as u16 + 2);
+    // Scrolled just far enough to keep the highlight in view.
+    let first = (selected + 1).saturating_sub(rows);
+    let lines: Vec<Line> = completion
+        .suggestions
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(rows)
+        .map(|(i, suggestion)| {
+            let line = Line::from(format!(" {suggestion} "));
+            if i == selected { line.reversed() } else { line }
+        })
+        .collect();
+    frame.render_widget(Clear, area);
+    frame.render_widget(Paragraph::new(lines).block(Block::bordered()), area);
 }
 
 /// A bordered pane, with a cyan border and title while it has focus.
@@ -2406,6 +2468,52 @@ mod tests {
         assert_eq!(buffer[(filter.x, filter.y + 1)].fg, Color::Cyan);
         assert_ne!(buffer[(filter.x + 1, filter.y + 1)].fg, Color::Cyan);
         assert_ne!(buffer[(search.x, search.y + 1)].fg, Color::Cyan);
+    }
+
+    #[test]
+    fn the_suggestions_are_listed_under_the_word_with_the_highlight_reversed() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        press(&mut app, "/ la");
+        let buffer = draw(&mut app, 200, 40);
+        let search = app.drawn.areas.search;
+        let label = find(&buffer, " label ").unwrap();
+        // Inside the box's border, which starts under the word: "is:pr " is six columns.
+        assert_eq!(label.y, search.bottom() + 1);
+        assert_eq!(label.x, search.x + 1 + 6 + 1);
+        assert!(buffer[label].modifier.contains(Modifier::REVERSED));
+        let language = find(&buffer, " language ").unwrap();
+        assert_eq!(language.y, label.y + 1);
+        assert!(!buffer[language].modifier.contains(Modifier::REVERSED));
+
+        key(&mut app, KeyCode::Down);
+        let buffer = draw(&mut app, 200, 40);
+        assert!(!buffer[label].modifier.contains(Modifier::REVERSED));
+        assert!(buffer[language].modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn many_suggestions_scroll_to_keep_the_highlight_in_view() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        press(&mut app, "/ sort:");
+        for _ in 0..9 {
+            key(&mut app, KeyCode::Down);
+        }
+        let buffer = draw(&mut app, 200, 40);
+        let screen = lines(&buffer);
+        // Ten values, eight rows: the ninth is highlighted at the bottom and the first has gone.
+        assert!(find(&buffer, " interactions-desc ").is_some());
+        assert!(!screen.iter().any(|l| l.contains(" created-desc ")));
+    }
+
+    #[test]
+    fn the_suggestions_are_left_out_where_there_is_no_room_for_a_row() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        press(&mut app, "/ la");
+        // Too short for the search box to be drawn whole, and just tall enough for it alone.
+        for height in [6, 7] {
+            let buffer = draw(&mut app, 200, height);
+            assert!(find(&buffer, " label ").is_none());
+        }
     }
 
     #[test]

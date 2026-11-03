@@ -15,6 +15,7 @@ use crate::gh::{GhError, Pr, PrDetails, PrState, PrStatus, StatusUpdate};
 use crate::history::History;
 use crate::model::{self, CheckState, Checks, one_line};
 
+mod completion;
 mod input;
 mod panes;
 mod work;
@@ -43,6 +44,8 @@ pub struct App {
     pub mode: Mode,
     /// The search box. While it isn't being edited it holds the last submitted query.
     pub query: Input,
+    /// The highlight in the list of suggestions under the search box.
+    completion_view: completion::CompletionView,
     /// The query to restore when an edit is cancelled.
     submitted_query: String,
     /// The queries submitted before, walked with Up and Down in the search box.
@@ -361,6 +364,7 @@ impl App {
             dry_run,
             mode: Mode::Loading,
             query: Input::new(query.clone()),
+            completion_view: completion::CompletionView::default(),
             submitted_query: query.clone(),
             history: History::load(None, crate::history::DEFAULT_LIMIT),
             typing: Typing::Nothing,
