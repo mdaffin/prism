@@ -377,7 +377,7 @@ const CHECKBOX_WIDTH: u16 = 3;
 
 /// The table of PRs in a bordered pane, or a message in its place while there are none.
 fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
-    let table_block = pane_block("Pull requests", app.focus == Pane::Table);
+    let table_block = pane_block(table_title(app), app.focus == Pane::Table);
     app.drawn.areas.table = area;
     app.drawn.areas.table_rows = Rect::default();
     app.drawn.areas.table_checkboxes = Rect::default();
@@ -1222,10 +1222,57 @@ fn max_scroll(content_rows: usize, area_rows: u16) -> u16 {
     to_u16(max)
 }
 
+/// `title` with the `parts` in brackets after it, or alone when there are none.
+fn with_counts(title: &str, parts: &[String]) -> String {
+    if parts.is_empty() {
+        title.to_string()
+    } else {
+        format!("{title} ({})", parts.join(", "))
+    }
+}
+
+/// The list's title, with how many PRs it holds and how many of those the filter shows, and how
+/// many are selected: `Pull requests (12 of 30, 3 selected)`. What isn't true is left out.
+fn table_title(app: &App) -> String {
+    let mut parts = Vec::new();
+    if !app.rows.is_empty() {
+        if app.visible.len() == app.rows.len() {
+            parts.push(app.rows.len().to_string());
+        } else {
+            parts.push(format!("{} of {}", app.visible.len(), app.rows.len()));
+        }
+    }
+    if !app.selected.is_empty() {
+        parts.push(format!("{} selected", app.selected.len()));
+    }
+    with_counts("Pull requests", &parts)
+}
+
+/// A pane's title with how many items it holds, if any.
+fn counted_title(title: &str, count: usize) -> String {
+    let parts: Vec<String> = (count > 0).then(|| count.to_string()).into_iter().collect();
+    with_counts(title, &parts)
+}
+
+/// The details of the highlighted PR, once loaded.
+fn loaded_details(app: &App) -> Option<&crate::gh::PrDetails> {
+    match app.details.get(&app.highlighted()?.pr.number)? {
+        Fetch::Loaded(loaded) => Some(&loaded.details),
+        _ => None,
+    }
+}
+
 fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
     app.drawn.areas.checks = area;
     app.drawn.checks_layout = ChecksLayout::default();
-    let block = pane_block("Checks", app.focus == Pane::Checks);
+    let conflict_row = app
+        .highlighted()
+        .is_some_and(|r| r.checks.state == CheckState::Conflict);
+    let count = app
+        .highlighted()
+        .map_or(0, |r| r.checks.worst_first().len())
+        + usize::from(conflict_row);
+    let block = pane_block(counted_title("Checks", count), app.focus == Pane::Checks);
     let inner = block.inner(area);
     set_page(app, Pane::Checks, inner.height, 2);
     frame.render_widget(block, area);
@@ -1318,7 +1365,13 @@ fn approvers_rows(app: &App, width: u16) -> u16 {
 /// The approvers pane, above the diff.
 fn approvers(app: &mut App, frame: &mut Frame, area: Rect) {
     app.drawn.areas.approvers = area;
-    let block = pane_block("Approvers", app.focus == Pane::Approvers);
+    let count = loaded_details(app).map_or(0, |d| {
+        d.approvers.approvals.len() + d.approvers.requests.len()
+    });
+    let block = pane_block(
+        counted_title("Approvers", count),
+        app.focus == Pane::Approvers,
+    );
     let inner = block.inner(area);
     set_page(app, Pane::Approvers, inner.height, 1);
     frame.render_widget(block, area);
@@ -1409,7 +1462,11 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     app.drawn.areas.comments = area;
     app.drawn.comment_layout = CommentLayout::default();
     app.drawn.comment_links = Vec::new();
-    let block = pane_block("Comments", app.focus == Pane::Comments);
+    let count = loaded_details(app).map_or(0, |d| d.comments.len());
+    let block = pane_block(
+        counted_title("Comments", count),
+        app.focus == Pane::Comments,
+    );
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let (comments, bodies) = match app.highlighted().map(|row| app.details.get(&row.pr.number)) {
@@ -2029,6 +2086,75 @@ mod tests {
         assert!(app.visible.is_empty());
         app.toggle_column(Column::Author);
         assert_eq!(app.visible.len(), 1);
+    }
+
+    /// The text of the screen, which has each pane's title in its top border.
+    fn border_titles(app: &mut App, width: u16) -> String {
+        lines(&draw(app, width, 40)).join("\n")
+    }
+
+    #[test]
+    fn the_list_title_counts_the_prs_the_filter_shows_and_those_selected() {
+        for width in [200, 100] {
+            let mut app = app_with(vec![
+                by("alice", 1, "Bump alpha"),
+                by("alice", 2, "Bump beta"),
+                by("bob", 3, "Fix gamma"),
+            ]);
+            let screen = border_titles(&mut app, width);
+            assert!(screen.contains("Pull requests (3)"), "{width}: {screen}");
+            assert!(!screen.contains(" of 3"), "{width}");
+            press(&mut app, " ");
+            let screen = border_titles(&mut app, width);
+            assert!(
+                screen.contains("Pull requests (3, 1 selected)"),
+                "{width}: {screen}"
+            );
+            press(&mut app, "fbump");
+            key(&mut app, KeyCode::Enter);
+            let screen = border_titles(&mut app, width);
+            assert!(
+                screen.contains("Pull requests (2 of 3, 1 selected)"),
+                "{width}: {screen}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_checks_comments_and_approvers_titles_say_how_many_they_hold() {
+        for width in [200, 100] {
+            let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+            // Nothing loaded yet: no count to claim.
+            let screen = border_titles(&mut app, width);
+            assert!(
+                screen.contains("Comments") && !screen.contains("Comments ("),
+                "{screen}"
+            );
+            assert!(
+                screen.contains("Approvers") && !screen.contains("Approvers ("),
+                "{screen}"
+            );
+            let details = serde_json::from_value(serde_json::json!({
+                "headRefName": "branch",
+                "body": "",
+                "comments": [
+                    {"author": {"login": "a"}, "createdAt": "2026-01-01T00:00:00Z", "body": "x"},
+                    {"author": {"login": "b"}, "createdAt": "2026-01-02T00:00:00Z", "body": "y"},
+                ],
+                "additions": 1,
+                "deletions": 1,
+                "approvers": {"requests": [
+                    {"of": {"Person": "u1"}, "code_owner": false},
+                    {"of": {"Person": "u2"}, "code_owner": false},
+                    {"of": {"Person": "u3"}, "code_owner": false},
+                ]},
+            }))
+            .unwrap();
+            app.details_loaded(1, Ok(details));
+            let screen = border_titles(&mut app, width);
+            assert!(screen.contains("Comments (2)"), "{width}: {screen}");
+            assert!(screen.contains("Approvers (3)"), "{width}: {screen}");
+        }
     }
 
     #[test]
