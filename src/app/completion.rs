@@ -36,6 +36,8 @@ impl App {
             authors: &authors,
             labels: self.names.labels(),
             branches: self.names.branches(),
+            users: self.names.users(),
+            teams: self.names.teams(),
         };
         let completion = query::complete(&key.0, key.1, &have)?;
         let selected = if current { view.selected } else { 0 };

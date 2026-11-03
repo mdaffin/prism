@@ -9,7 +9,7 @@ use super::{App, Mode, RefreshId, Typing};
 use crate::batch::{ItemStatus, auto_merge};
 use crate::gh::{PrDetails, PrState};
 use crate::model::Markdown;
-use crate::query;
+use crate::query::{self, Source};
 
 /// The most detail fetches to run at once.
 const MAX_DETAIL_FETCHES: usize = 4;
@@ -104,12 +104,15 @@ pub(super) fn forget_failed<T>(fetches: &mut HashMap<u64, Fetch<T>>) {
     fetches.retain(|_, fetch| !matches!(fetch, Fetch::Failed(_)));
 }
 
-/// The labels and branches the repository has, fetched when the search box is first opened to
-/// complete `label:`, `base:` and `head:`. `None` until asked for.
+/// The names the repository has, fetched to complete the search query. The labels when the search
+/// box is first opened, and the others when a qualifier that uses them is first typed. `None`
+/// until asked for.
 #[derive(Default)]
 pub struct RepoNames {
     pub(super) labels: Option<Fetch<Vec<String>>>,
     pub(super) branches: Option<Fetch<Vec<String>>>,
+    pub(super) users: Option<Fetch<Vec<String>>>,
+    pub(super) teams: Option<Fetch<Vec<String>>>,
 }
 
 /// The names fetches that [`App::names_to_fetch`] started, with their ids.
@@ -117,6 +120,8 @@ pub struct RepoNames {
 pub struct NamesToFetch {
     pub labels: Option<FetchId>,
     pub branches: Option<FetchId>,
+    pub users: Option<FetchId>,
+    pub teams: Option<FetchId>,
 }
 
 impl RepoNames {
@@ -130,9 +135,24 @@ impl RepoNames {
         loaded(&self.branches)
     }
 
+    /// The users fetched who can be assigned, or none while they load or if that failed.
+    pub fn users(&self) -> &[String] {
+        loaded(&self.users)
+    }
+
+    /// The owner's teams fetched, or none while they load or if that failed.
+    pub fn teams(&self) -> &[String] {
+        loaded(&self.teams)
+    }
+
     /// Drops a failed fetch, so that it is tried again the next time the box is opened.
     pub(super) fn forget_failed(&mut self) {
-        for fetch in [&mut self.labels, &mut self.branches] {
+        for fetch in [
+            &mut self.labels,
+            &mut self.branches,
+            &mut self.users,
+            &mut self.teams,
+        ] {
             if matches!(fetch, Some(Fetch::Failed(_))) {
                 *fetch = None;
             }
@@ -302,22 +322,27 @@ impl App {
         })
     }
 
-    /// The labels and branches to fetch now, if they haven't been asked for. The labels when the
-    /// search box is open, and the branches only once a `base:` or `head:` value is being typed,
-    /// as they cost more and are rarely wanted. Marks them as loading, so the caller must start
-    /// the fetches.
+    /// The names to fetch now, if they haven't been asked for. The labels when the search box is
+    /// open, and the branches, users or teams only once a value that uses them is being typed, as
+    /// they cost more and are rarely wanted. Marks them as loading, so the caller must start the
+    /// fetches.
     pub fn names_to_fetch(&mut self) -> NamesToFetch {
         let mut started = NamesToFetch::default();
         if self.typing != Typing::Search {
             return started;
         }
+        let source = query::source_at(self.query.value(), self.query.cursor());
         let wanted = [
             true,
-            query::is_in_branch_value(self.query.value(), self.query.cursor()),
+            source == Some(Source::Branches),
+            source == Some(Source::Users),
+            source == Some(Source::Teams),
         ];
         for ((fetch, id), wanted) in [
             (&mut self.names.labels, &mut started.labels),
             (&mut self.names.branches, &mut started.branches),
+            (&mut self.names.users, &mut started.users),
+            (&mut self.names.teams, &mut started.teams),
         ]
         .into_iter()
         .zip(wanted)

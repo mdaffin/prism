@@ -2247,3 +2247,32 @@ fn tab_with_no_suggestions_does_nothing_to_the_query() {
     assert_eq!(app.query.value(), "is:pr zzz");
     assert!(app.typing == Typing::Search);
 }
+
+#[test]
+fn users_and_teams_are_fetched_when_a_qualifier_that_uses_them_is_typed() {
+    use super::work::NamesToFetch;
+    let mut app = app_with_rows(1);
+    press(&mut app, "/");
+    app.names_to_fetch();
+    // Not for a name that is still being typed, or for a qualifier that doesn't use them.
+    press(&mut app, " reviewed-by");
+    press(&mut app, " author:");
+    assert_eq!(app.names_to_fetch(), NamesToFetch::default());
+
+    press(&mut app, " reviewed-by:");
+    let started = app.names_to_fetch();
+    let users = started.users.unwrap();
+    assert!(started.teams.is_none() && started.branches.is_none());
+    assert_eq!(app.names_to_fetch(), NamesToFetch::default());
+    press(&mut app, " team-review-requested:");
+    let teams = app.names_to_fetch().teams.unwrap();
+
+    app.update(Msg::UsersLoaded(users, Ok(vec!["bob".to_string()])));
+    app.update(Msg::TeamsLoaded(teams, Ok(vec!["acme/web".to_string()])));
+    assert_eq!(app.names.users(), ["bob"]);
+    assert_eq!(app.names.teams(), ["acme/web"]);
+    // The users fetched are offered with the authors of the rows.
+    key(&mut app, KeyCode::Esc);
+    press(&mut app, " review-requested:");
+    assert_eq!(suggestions(&app), ["alice", "bob"]);
+}

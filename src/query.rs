@@ -92,6 +92,28 @@ pub struct Candidates<'a> {
     pub authors: &'a [String],
     pub labels: &'a [String],
     pub branches: &'a [String],
+    /// The users who can be assigned, for the qualifiers that name a reviewer.
+    pub users: &'a [String],
+    /// The owner's teams, as `org/slug`.
+    pub teams: &'a [String],
+}
+
+/// What a qualifier's values come from, when that is something fetched when it is first wanted.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum Source {
+    Branches,
+    Users,
+    Teams,
+}
+
+/// Where the values of the qualifier `name` come from, if they are fetched.
+fn source_of(name: &str) -> Option<Source> {
+    match name.to_lowercase().as_str() {
+        "base" | "head" => Some(Source::Branches),
+        "user-review-requested" | "review-requested" | "reviewed-by" => Some(Source::Users),
+        "team-review-requested" | "team" => Some(Source::Teams),
+        _ => None,
+    }
 }
 
 /// What a suggestion replaces, and so what accepting it adds.
@@ -159,8 +181,12 @@ fn filter<'a>(candidates: impl Iterator<Item = &'a str>, typed: &str) -> Vec<&'a
 
 /// The values to suggest for the qualifier `name`.
 fn values<'a>(name: &str, have: &Candidates<'a>) -> Vec<&'a str> {
-    let sorted = |names: &'a [String]| {
-        let mut names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let sorted = |lists: &[&'a [String]]| {
+        let mut names: Vec<&str> = lists
+            .iter()
+            .flat_map(|l| l.iter())
+            .map(String::as_str)
+            .collect();
         names.sort_by_key(|n| n.to_lowercase());
         names
     };
@@ -170,9 +196,14 @@ fn values<'a>(name: &str, have: &Candidates<'a>) -> Vec<&'a str> {
         "review" => REVIEW_VALUES.to_vec(),
         "status" => STATUS_VALUES.to_vec(),
         "sort" => SORT_VALUES.to_vec(),
-        "author" | "assignee" => sorted(have.authors),
-        "label" => sorted(have.labels),
-        "base" | "head" => sorted(have.branches),
+        "author" | "assignee" => sorted(&[have.authors]),
+        "label" => sorted(&[have.labels]),
+        "base" | "head" => sorted(&[have.branches]),
+        // The authors of the PRs listed are offered along with the users fetched.
+        "user-review-requested" | "review-requested" | "reviewed-by" => {
+            sorted(&[have.authors, have.users])
+        }
+        "team-review-requested" | "team" => sorted(&[have.teams]),
         _ => Vec::new(),
     }
 }
@@ -188,16 +219,16 @@ fn locate(chars: &[char], cursor: usize) -> Option<(std::ops::Range<usize>, usiz
     Some((word, name_start, colon))
 }
 
-/// Whether the cursor is in the value of a qualifier that is completed from the repository's
-/// branches, which are only fetched once one is typed.
-pub fn is_in_branch_value(query: &str, cursor: usize) -> bool {
+/// What the value that the cursor is in is completed from, if it is in the value of a qualifier
+/// whose values are fetched. They are only fetched once one is typed.
+pub fn source_at(query: &str, cursor: usize) -> Option<Source> {
     let chars: Vec<char> = query.chars().collect();
     let cursor = cursor.min(chars.len());
-    let Some((_, name_start, Some(colon))) = locate(&chars, cursor) else {
-        return false;
+    let (_, name_start, Some(colon)) = locate(&chars, cursor)? else {
+        return None;
     };
     let name: String = chars[name_start..colon].iter().collect();
-    cursor > colon && matches!(name.to_lowercase().as_str(), "base" | "head")
+    source_of(&name).filter(|_| cursor > colon)
 }
 
 /// What fits the word at `cursor` (a character index) in `query`, or `None` when nothing does.
@@ -419,6 +450,7 @@ mod tests {
             authors: &authors,
             labels: &labels,
             branches: &branches,
+            ..Candidates::default()
         };
         assert_eq!(
             suggest("author:a|", &have),
@@ -512,19 +544,56 @@ mod tests {
     }
 
     #[test]
-    fn branches_are_wanted_only_in_the_value_of_base_or_head() {
-        let in_value = |query: &str| {
+    fn names_are_wanted_only_in_the_value_of_the_qualifiers_that_use_them() {
+        let source = |query: &str| {
             let cursor = query.chars().position(|c| c == '|').unwrap();
-            is_in_branch_value(&query.replace('|', ""), cursor)
+            source_at(&query.replace('|', ""), cursor)
         };
-        assert!(in_value("base:|"));
-        assert!(in_value("is:pr -head:ma|"));
-        assert!(in_value("BASE:ma|in label:x"));
-        assert!(!in_value("ba|"));
-        assert!(!in_value("base|:main"));
-        assert!(!in_value("label:ba|"));
-        assert!(!in_value("base:main |"));
-        assert!(!in_value("|"));
+        assert_eq!(source("base:|"), Some(Source::Branches));
+        assert_eq!(source("is:pr -head:ma|"), Some(Source::Branches));
+        assert_eq!(source("BASE:ma|in label:x"), Some(Source::Branches));
+        assert_eq!(source("reviewed-by:a|"), Some(Source::Users));
+        assert_eq!(source("review-requested:|"), Some(Source::Users));
+        assert_eq!(source("user-review-requested:|"), Some(Source::Users));
+        assert_eq!(source("team-review-requested:o|"), Some(Source::Teams));
+        assert_eq!(source("team:|"), Some(Source::Teams));
+        assert_eq!(source("ba|"), None);
+        assert_eq!(source("base|:main"), None);
+        assert_eq!(source("label:ba|"), None);
+        assert_eq!(source("author:|"), None);
+        assert_eq!(source("base:main |"), None);
+        assert_eq!(source("|"), None);
+    }
+
+    #[test]
+    fn reviewers_and_teams_are_completed_from_what_was_fetched() {
+        let (authors, users, teams) = (
+            strings(&["alice"]),
+            strings(&["bob", "alice", "carol"]),
+            strings(&["acme/platform", "acme/web"]),
+        );
+        let have = Candidates {
+            authors: &authors,
+            users: &users,
+            teams: &teams,
+            ..Candidates::default()
+        };
+        // The authors listed and the users fetched, each once.
+        assert_eq!(
+            suggest("reviewed-by:|", &have).unwrap(),
+            ["alice", "bob", "carol"]
+        );
+        assert_eq!(
+            suggest("-user-review-requested:ca|", &have),
+            Some(strings(&["carol"]))
+        );
+        assert_eq!(
+            suggest("team-review-requested:acme/p|", &have),
+            Some(strings(&["acme/platform"]))
+        );
+        assert_eq!(suggest("team:w|", &have), Some(strings(&["acme/web"])));
+        // `author:` is still only those listed.
+        assert_eq!(suggest("author:|", &have), Some(strings(&["alice"])));
     }
 
     #[test]

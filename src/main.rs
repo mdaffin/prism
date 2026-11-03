@@ -149,6 +149,16 @@ fn start_work(
             Msg::BranchesLoaded(id, gh.branches().await)
         });
     }
+    if let Some(id) = names.users {
+        spawn(gh, tx, async move |gh| {
+            Msg::UsersLoaded(id, gh.users().await)
+        });
+    }
+    if let Some(id) = names.teams {
+        spawn(gh, tx, async move |gh| {
+            Msg::TeamsLoaded(id, gh.teams().await)
+        });
+    }
     for number in app.refreshes_to_fetch() {
         spawn(gh, tx, async move |gh| {
             Msg::PrRefreshed(number, gh.pr(number).await)

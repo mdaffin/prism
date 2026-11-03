@@ -29,6 +29,12 @@ const BRANCHES_PER_PAGE: usize = 100;
 /// The most pages of branches fetched.
 const MAX_BRANCH_PAGES: usize = 5;
 
+/// The users or teams asked for at a time. This is the most GitHub gives.
+const NAMES_PER_PAGE: usize = 100;
+
+/// The most pages of users or of teams fetched, so at most a thousand of each.
+const MAX_NAME_PAGES: usize = 10;
+
 /// Fields requested from `gh pr view --json` for the highlighted PR.
 const DETAIL_FIELDS: &str = "headRefName,body,comments,additions,deletions";
 
@@ -199,6 +205,45 @@ impl Gh {
             }
         }
         Ok(branches)
+    }
+
+    /// The logins of the users who can be assigned to the repository's PRs, for completing the
+    /// qualifiers that name a reviewer.
+    pub async fn users(&self) -> Result<Vec<String>> {
+        let path = "repos/{owner}/{repo}/assignees";
+        self.pages(path, ".[].login", MAX_NAME_PAGES).await
+    }
+
+    /// The repository owner's teams as `org/slug`, for completing `team-review-requested:`. Only
+    /// what the token may see: without the `read:org` scope this fails. The list gives no
+    /// organisation, so it is read from each team's page.
+    pub async fn teams(&self) -> Result<Vec<String>> {
+        let path = "orgs/{owner}/teams";
+        let jq = r#".[] | .html_url | capture("/orgs/(?<org>[^/]+)/teams/(?<slug>[^/]+)") | .org + "/" + .slug"#;
+        self.pages(path, jq, MAX_NAME_PAGES).await
+    }
+
+    /// One name for each line that `jq` makes of each page of `path`, up to `max_pages` of them.
+    /// The first page says whether there are more, and then the rest are fetched together, as a
+    /// long list fetched a page at a time takes too long. A later page that fails is left out,
+    /// which only means fewer suggestions.
+    async fn pages(&self, path: &str, jq: &str, max_pages: usize) -> Result<Vec<String>> {
+        let page = async |page: usize| -> Result<Vec<String>> {
+            let path = format!("{path}?per_page={NAMES_PER_PAGE}&page={page}");
+            let stdout = self
+                .exec_in(&["api", &path, "--jq", jq], true, true)
+                .await?;
+            Ok(String::from_utf8_lossy(&stdout)
+                .lines()
+                .map(str::to_string)
+                .collect())
+        };
+        let mut names = page(1).await?;
+        if names.len() == NAMES_PER_PAGE {
+            let rest = futures::future::join_all((2..=max_pages).map(page)).await;
+            names.extend(rest.into_iter().filter_map(Result::ok).flatten());
+        }
+        Ok(names)
     }
 
     pub async fn pr_details(&self, number: u64) -> Result<PrDetails> {

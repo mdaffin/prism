@@ -328,10 +328,12 @@ pub enum Msg {
     DetailsLoaded(u64, FetchId, Result<PrDetails>),
     /// Likewise for a diff.
     DiffLoaded(u64, FetchId, Result<String>),
-    /// The repository's labels, or its branches, from the fetch with this id, dropped if it is
-    /// not the latest.
+    /// The repository's labels, branches, users or teams, from the fetch with this id, dropped if
+    /// it is not the latest.
     LabelsLoaded(FetchId, Result<Vec<String>>),
     BranchesLoaded(FetchId, Result<Vec<String>>),
+    UsersLoaded(FetchId, Result<Vec<String>>),
+    TeamsLoaded(FetchId, Result<Vec<String>>),
     /// The result of approving this PR, in the batch with this epoch (see
     /// [`App::batch_epoch`]). One from an earlier batch, such as a cancelled one, is dropped.
     Approved(u64, u64, Result<()>),
@@ -595,6 +597,8 @@ impl App {
             Msg::PrRefreshed(number, result) => self.row_refreshed(number, result),
             Msg::LabelsLoaded(id, result) => names_loaded(&mut self.names.labels, id, result),
             Msg::BranchesLoaded(id, result) => names_loaded(&mut self.names.branches, id, result),
+            Msg::UsersLoaded(id, result) => names_loaded(&mut self.names.users, id, result),
+            Msg::TeamsLoaded(id, result) => names_loaded(&mut self.names.teams, id, result),
             Msg::DetailsLoaded(number, id, _) if !is_current(&self.details, number, id) => {}
             Msg::DiffLoaded(number, id, _) if !is_current(&self.diffs, number, id) => {}
             Msg::DetailsLoaded(number, _, Err(e)) => {
