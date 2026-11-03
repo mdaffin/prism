@@ -2051,23 +2051,31 @@ fn a_failed_refresh_is_shown_until_one_succeeds_and_keeps_what_it_got() {
 }
 
 #[test]
-fn labels_and_branches_are_fetched_once_when_the_search_box_opens() {
+fn labels_are_fetched_once_when_the_search_box_opens_and_branches_when_one_is_typed() {
     use super::work::NamesToFetch;
     let mut app = app_with_rows(1);
     // Not until the box is open.
     assert_eq!(app.names_to_fetch(), NamesToFetch::default());
     press(&mut app, "/");
-    let started = app.names_to_fetch();
-    let (labels, branches) = (started.labels.unwrap(), started.branches.unwrap());
-    assert_ne!(labels, branches);
+    let labels = app.names_to_fetch().labels.unwrap();
     // Nor again, while they load or after.
     assert_eq!(app.names_to_fetch(), NamesToFetch::default());
     assert!(app.names.labels().is_empty());
+
+    // Branches are left until a `base:` or `head:` value is being typed.
+    press(&mut app, " label:x");
+    assert_eq!(app.names_to_fetch(), NamesToFetch::default());
+    press(&mut app, " -base:");
+    let branches = app.names_to_fetch().branches.unwrap();
+    assert_eq!(app.names_to_fetch(), NamesToFetch::default());
+    press(&mut app, " head:");
+    assert_eq!(app.names_to_fetch(), NamesToFetch::default());
 
     app.update(Msg::LabelsLoaded(labels, Ok(vec!["deps".to_string()])));
     app.update(Msg::BranchesLoaded(branches, Ok(vec!["main".to_string()])));
     assert_eq!(app.names.labels(), ["deps"]);
     assert_eq!(app.names.branches(), ["main"]);
+    key(&mut app, KeyCode::Esc);
     key(&mut app, KeyCode::Esc);
     press(&mut app, "/");
     assert_eq!(app.names_to_fetch(), NamesToFetch::default());
@@ -2077,14 +2085,17 @@ fn labels_and_branches_are_fetched_once_when_the_search_box_opens() {
 fn a_failed_names_fetch_is_not_retried_until_the_next_search() {
     use super::work::NamesToFetch;
     let mut app = app_with_rows(1);
-    press(&mut app, "/");
+    press(&mut app, "/ head:");
     let started = app.names_to_fetch();
     app.update(Msg::LabelsLoaded(
         started.labels.unwrap(),
         Err(color_eyre::eyre::eyre!("no")),
     ));
     // The other one is unaffected, and a key press doesn't ask again.
-    app.update(Msg::BranchesLoaded(started.branches.unwrap(), Ok(vec![])));
+    app.update(Msg::BranchesLoaded(
+        started.branches.unwrap(),
+        Err(color_eyre::eyre::eyre!("no")),
+    ));
     press(&mut app, "x");
     assert_eq!(app.names_to_fetch(), NamesToFetch::default());
 
@@ -2094,7 +2105,8 @@ fn a_failed_names_fetch_is_not_retried_until_the_next_search() {
     press(&mut app, "/");
     let again = app.names_to_fetch();
     assert!(again.labels.is_some());
-    assert!(again.branches.is_none());
+    // The branches wait until the cursor is in a `head:` value again, which it is.
+    assert!(again.branches.is_some());
 }
 
 #[test]

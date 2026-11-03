@@ -177,6 +177,29 @@ fn values<'a>(name: &str, have: &Candidates<'a>) -> Vec<&'a str> {
     }
 }
 
+/// The word at `cursor`, where its qualifier's name starts (after a `-`, which negates the
+/// qualifier and isn't part of its name), and where its `:` is, if it has one.
+fn locate(chars: &[char], cursor: usize) -> Option<(std::ops::Range<usize>, usize, Option<usize>)> {
+    let word = words(chars)
+        .into_iter()
+        .find(|w| w.start <= cursor && cursor <= w.end)?;
+    let name_start = word.start + usize::from(chars[word.start] == '-');
+    let colon = (name_start..word.end).find(|&i| chars[i] == ':');
+    Some((word, name_start, colon))
+}
+
+/// Whether the cursor is in the value of a qualifier that is completed from the repository's
+/// branches, which are only fetched once one is typed.
+pub fn is_in_branch_value(query: &str, cursor: usize) -> bool {
+    let chars: Vec<char> = query.chars().collect();
+    let cursor = cursor.min(chars.len());
+    let Some((_, name_start, Some(colon))) = locate(&chars, cursor) else {
+        return false;
+    };
+    let name: String = chars[name_start..colon].iter().collect();
+    cursor > colon && matches!(name.to_lowercase().as_str(), "base" | "head")
+}
+
 /// What fits the word at `cursor` (a character index) in `query`, or `None` when nothing does.
 ///
 /// A word that is being typed as a qualifier's name is completed to a name, after a `-` if there
@@ -186,12 +209,7 @@ fn values<'a>(name: &str, have: &Candidates<'a>) -> Vec<&'a str> {
 pub fn complete(query: &str, cursor: usize, have: &Candidates) -> Option<Completion> {
     let chars: Vec<char> = query.chars().collect();
     let cursor = cursor.min(chars.len());
-    let word = words(&chars)
-        .into_iter()
-        .find(|w| w.start <= cursor && cursor <= w.end)?;
-    // A `-` negates the qualifier and isn't part of its name.
-    let name_start = word.start + usize::from(chars[word.start] == '-');
-    let colon = (name_start..word.end).find(|&i| chars[i] == ':');
+    let (word, name_start, colon) = locate(&chars, cursor)?;
     let text = |range: std::ops::Range<usize>| chars[range].iter().collect::<String>();
 
     let (kind, range, suggestions) = match colon {
@@ -491,6 +509,22 @@ mod tests {
         assert_eq!(accept("label:de|", &have), "label:deps |");
         // Whitespace that is already there is not doubled.
         assert_eq!(accept("label:de| x", &have), "label:deps |x");
+    }
+
+    #[test]
+    fn branches_are_wanted_only_in_the_value_of_base_or_head() {
+        let in_value = |query: &str| {
+            let cursor = query.chars().position(|c| c == '|').unwrap();
+            is_in_branch_value(&query.replace('|', ""), cursor)
+        };
+        assert!(in_value("base:|"));
+        assert!(in_value("is:pr -head:ma|"));
+        assert!(in_value("BASE:ma|in label:x"));
+        assert!(!in_value("ba|"));
+        assert!(!in_value("base|:main"));
+        assert!(!in_value("label:ba|"));
+        assert!(!in_value("base:main |"));
+        assert!(!in_value("|"));
     }
 
     #[test]

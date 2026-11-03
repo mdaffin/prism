@@ -9,6 +9,7 @@ use super::{App, Mode, RefreshId, Typing};
 use crate::batch::{ItemStatus, auto_merge};
 use crate::gh::{PrDetails, PrState};
 use crate::model::Markdown;
+use crate::query;
 
 /// The most detail fetches to run at once.
 const MAX_DETAIL_FETCHES: usize = 4;
@@ -301,18 +302,27 @@ impl App {
         })
     }
 
-    /// The labels and branches to fetch now, if the search box is open and they haven't been
-    /// asked for. Marks them as loading, so the caller must start the fetches.
+    /// The labels and branches to fetch now, if they haven't been asked for. The labels when the
+    /// search box is open, and the branches only once a `base:` or `head:` value is being typed,
+    /// as they cost more and are rarely wanted. Marks them as loading, so the caller must start
+    /// the fetches.
     pub fn names_to_fetch(&mut self) -> NamesToFetch {
         let mut started = NamesToFetch::default();
         if self.typing != Typing::Search {
             return started;
         }
-        for (fetch, id) in [
+        let wanted = [
+            true,
+            query::is_in_branch_value(self.query.value(), self.query.cursor()),
+        ];
+        for ((fetch, id), wanted) in [
             (&mut self.names.labels, &mut started.labels),
             (&mut self.names.branches, &mut started.branches),
-        ] {
-            if fetch.is_none() {
+        ]
+        .into_iter()
+        .zip(wanted)
+        {
+            if wanted && fetch.is_none() {
                 self.next_fetch_id += 1;
                 *fetch = Some(Fetch::Loading(self.next_fetch_id));
                 *id = Some(self.next_fetch_id);
