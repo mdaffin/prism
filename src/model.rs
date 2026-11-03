@@ -176,6 +176,72 @@ pub fn ago(timestamp: &str, now: jiff::Timestamp) -> String {
     "just now".to_string()
 }
 
+/// How long before `now` a timestamp was, in the fewest characters: `5m`, `2h`, `3d`, `2w`, `4mo`,
+/// `1y`. Under a minute is `now`. A timestamp that can't be read is shown as it is.
+pub fn short_age(timestamp: &str, now: jiff::Timestamp) -> String {
+    let Ok(then) = timestamp.parse::<jiff::Timestamp>() else {
+        return timestamp.to_string();
+    };
+    let seconds = now.as_second() - then.as_second();
+    let units = [
+        (365 * 24 * 3600, "y"),
+        (30 * 24 * 3600, "mo"),
+        (7 * 24 * 3600, "w"),
+        (24 * 3600, "d"),
+        (3600, "h"),
+        (60, "m"),
+    ];
+    for (size, unit) in units {
+        if seconds >= size {
+            return format!("{}{unit}", seconds / size);
+        }
+    }
+    "now".to_string()
+}
+
+/// A column of the table that can be hidden: every one but the checkbox and the title columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Column {
+    Number,
+    Checks,
+    Review,
+    Author,
+    Updated,
+}
+
+impl Column {
+    /// Every column, in the order the table shows them.
+    pub const ALL: [Column; 5] = [
+        Self::Number,
+        Self::Checks,
+        Self::Review,
+        Self::Author,
+        Self::Updated,
+    ];
+
+    /// The header, and the name in the columns popup.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Number => "#",
+            Self::Checks => "Checks",
+            Self::Review => "Review",
+            Self::Author => "Author",
+            Self::Updated => "Updated",
+        }
+    }
+
+    /// What clicking the header sorts by.
+    pub fn sort(self) -> Sort {
+        match self {
+            Self::Number => Sort::Number,
+            Self::Checks => Sort::Checks,
+            Self::Review => Sort::Review,
+            Self::Author => Sort::Author,
+            Self::Updated => Sort::Updated,
+        }
+    }
+}
+
 /// How the list is ordered. Whatever the sort, closed and merged PRs come last, as they can't be
 /// acted on, and PRs that tie stay in the order GitHub listed them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -917,6 +983,21 @@ mod tests {
         // The future, such as a clock that is a little off, isn't an error.
         assert_eq!(ago("2026-03-10T12:00:30Z"), "just now");
         assert_eq!(ago("yesterday"), "yesterday");
+    }
+
+    #[test]
+    fn shortens_times_to_a_number_and_a_unit() {
+        let now: jiff::Timestamp = "2026-03-10T12:00:00Z".parse().unwrap();
+        let short = |timestamp| short_age(timestamp, now);
+        assert_eq!(short("2026-03-10T11:59:30Z"), "now");
+        assert_eq!(short("2026-03-10T11:15:00Z"), "45m");
+        assert_eq!(short("2026-03-10T09:00:00Z"), "3h");
+        assert_eq!(short("2026-03-07T12:00:00Z"), "3d");
+        assert_eq!(short("2026-02-24T12:00:00Z"), "2w");
+        assert_eq!(short("2025-12-10T12:00:00Z"), "3mo");
+        assert_eq!(short("2024-03-10T12:00:00Z"), "2y");
+        assert_eq!(short("2026-03-10T12:00:30Z"), "now");
+        assert_eq!(short("yesterday"), "yesterday");
     }
 
     #[test]

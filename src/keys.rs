@@ -8,6 +8,8 @@ use crate::app::Pane;
 /// Choosing in the confirm dialogs.
 pub const CHOOSE_HINTS: &str = "←/→ Tab: Choose | Enter: Confirm | Esc: Cancel";
 pub const HELP_HINTS: &str = "Esc ? q: Close";
+/// Choosing the columns to show.
+pub const PICK_COLUMNS_HINTS: &str = "Up/Down: Move | Space: Show or hide | Enter/Esc: Close";
 pub const RUNNING_HINTS: &str = "q: Cancel | Ctrl-C: Quit";
 pub const RESULTS_HINTS: &str = "Enter/Esc: Close";
 /// Editing the search box.
@@ -86,6 +88,11 @@ pub const KEYS: &[KeyHelp] = &[
     key(
         "c",
         "Edit the regex whose named groups become the table's columns",
+        None,
+    ),
+    key(
+        "v",
+        "Choose which columns the table shows (Space hides or shows one, for the session)",
         None,
     ),
     key("Tab / Shift-Tab", "Move focus between the panes", None),

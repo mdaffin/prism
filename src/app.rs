@@ -14,7 +14,7 @@ use crate::batch::{
 };
 use crate::gh::{Pr, PrDetails, PrState, PrStatus, ReviewDecision, StatusUpdate};
 use crate::history::History;
-use crate::model::{self, CheckState, Checks, Sort, one_line};
+use crate::model::{self, CheckState, Checks, Column, Sort, one_line};
 
 mod completion;
 mod input;
@@ -74,6 +74,8 @@ pub struct App {
     pub columns_input: Input,
     /// Why the regex in `columns_input` was refused, until it is edited again.
     pub columns_error: Option<String>,
+    /// The columns hidden with `v`, for the session. A hidden column keeps its sort.
+    pub hidden: Vec<Column>,
     /// The highlighted row, as a position in `visible`.
     pub table: TableState,
     /// Columns the table is scrolled sideways, past its first columns. The view clamps it. Unlike
@@ -226,6 +228,8 @@ pub enum Mode {
     ConfirmOpen(ConfirmOpen),
     /// Listing every key.
     Help,
+    /// Choosing which columns to show: the position in `Column::ALL` of the highlighted one.
+    PickColumns(usize),
     /// Approving PRs.
     Running(Batch),
     /// Showing how a batch went.
@@ -344,18 +348,33 @@ impl Row {
         }
     }
 
-    /// Whether the filter matches in some column for each of its terms. The author counts even
-    /// when its column is hidden, which is only when every row has the same one.
-    fn matches(&self, filter: &mut model::Filter, title_columns: Option<&Regex>) -> bool {
-        let cells: Vec<String> = [
-            format!("#{}", self.pr.number),
-            self.checks_label().to_string(),
-            model::review_label(self.pr.review_decision).to_string(),
-            self.pr.author.login.clone(),
-        ]
-        .into_iter()
-        .chain(self.title_cells(title_columns))
-        .collect();
+    /// What `column` shows for this row, `now` being the time its age is from.
+    pub fn cell(&self, column: Column, now: jiff::Timestamp) -> String {
+        match column {
+            Column::Number => format!("#{}", self.pr.number),
+            Column::Checks => self.checks_label().to_string(),
+            Column::Review => model::review_label(self.pr.review_decision).to_string(),
+            Column::Author => self.pr.author.login.clone(),
+            Column::Updated => model::short_age(&self.pr.updated_at, now),
+        }
+    }
+
+    /// Whether the filter matches in some column for each of its terms. A column hidden with `v`
+    /// is not matched, as it isn't shown. The author is, when its column is missing only because
+    /// every row has the same one.
+    fn matches(
+        &self,
+        filter: &mut model::Filter,
+        title_columns: Option<&Regex>,
+        hidden: &[Column],
+    ) -> bool {
+        let now = jiff::Timestamp::now();
+        let cells: Vec<String> = Column::ALL
+            .into_iter()
+            .filter(|column| !hidden.contains(column))
+            .map(|column| self.cell(column, now))
+            .chain(self.title_cells(title_columns))
+            .collect();
         filter.matches(&cells)
     }
 
@@ -425,6 +444,7 @@ impl App {
             columns: None,
             columns_input: Input::default(),
             columns_error: None,
+            hidden: Vec::new(),
             dry_run,
             mode: Mode::Loading,
             query: Input::new(query.clone()),
@@ -523,10 +543,18 @@ impl App {
     pub fn title(&self) -> String {
         let mut title = self.title.clone();
         let unmarked = match self.sort {
+            Sort::Title => None,
             Sort::Updated => Some("updated"),
-            Sort::Author if !self.shows_author() => Some("author"),
-            _ => None,
-        };
+            Sort::Author => Some("author"),
+            Sort::Number => Some("number"),
+            Sort::Checks => Some("checks"),
+            Sort::Review => Some("review"),
+        }
+        .filter(|_| {
+            // The title columns can't be hidden, so a title sort always has a header to mark.
+            let column = Column::ALL.into_iter().find(|c| c.sort() == self.sort);
+            column.is_some_and(|column| !self.shows(column))
+        });
         if let Some(name) = unmarked {
             let arrow = if self.descending { '▼' } else { '▲' };
             title.push_str(&format!(" · sorted by {name} {arrow}"));
@@ -700,7 +728,7 @@ impl App {
             .rows
             .iter()
             .enumerate()
-            .filter(|(_, row)| row.matches(&mut filter, self.columns.as_ref()))
+            .filter(|(_, row)| row.matches(&mut filter, self.columns.as_ref(), &self.hidden))
             .map(|(i, _)| i)
             .collect();
         let position = before.and_then(|number| {
@@ -1017,6 +1045,33 @@ impl App {
     /// would show the same name.
     pub fn shows_author(&self) -> bool {
         !crate::query::names_one_author(&self.submitted_query)
+    }
+
+    /// Whether the table has a `column`: not if it was hidden with `v`, nor the author when every
+    /// row has the same one.
+    pub fn shows(&self, column: Column) -> bool {
+        !self.hidden.contains(&column) && (column != Column::Author || self.shows_author())
+    }
+
+    /// The columns the table shows, in its order.
+    pub fn shown_columns(&self) -> Vec<Column> {
+        Column::ALL
+            .into_iter()
+            .filter(|&column| self.shows(column))
+            .collect()
+    }
+
+    /// `v` in the columns popup: hides `column` if it is shown, and shows it if it is hidden. The
+    /// sort stays, as does the filter, which goes by what is shown.
+    pub(super) fn toggle_column(&mut self, column: Column) {
+        match self.hidden.iter().position(|&c| c == column) {
+            Some(at) => {
+                self.hidden.remove(at);
+            }
+            None => self.hidden.push(column),
+        }
+        // The filter matches the columns shown.
+        self.refilter();
     }
 
     /// The page that `o` opens for the highlighted item of the focused pane, for the status bar.

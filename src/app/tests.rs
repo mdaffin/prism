@@ -2546,16 +2546,19 @@ fn titled_for_sort(number: u64, title: &str) -> Pr {
 }
 
 #[test]
-fn only_a_sort_by_updated_is_named_in_the_title_as_it_has_no_column() {
+fn a_sort_is_named_in_the_title_only_when_its_column_is_hidden() {
     let mut app = app_to_sort();
-    for _ in 0..4 {
+    for _ in 0..5 {
         press(&mut app, "s");
         assert_eq!(app.title(), "PRs");
     }
-    press(&mut app, "s");
+    // Hiding the sorted column leaves the sort, and the title says what it is.
+    app.toggle_column(Column::Updated);
     assert_eq!(app.title(), "PRs · sorted by updated ▲");
     press(&mut app, "S");
     assert_eq!(app.title(), "PRs · sorted by updated ▼");
+    app.toggle_column(Column::Updated);
+    assert_eq!(app.title(), "PRs");
     press(&mut app, "s");
     assert_eq!(app.title(), "PRs");
 }

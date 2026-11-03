@@ -19,7 +19,7 @@ use crate::app::{
 use crate::batch::{Batch, Confirm, ItemStatus, Summary};
 use crate::gh::{Approvers, Comment, PrState, Reviewer, Verdict};
 use crate::keys;
-use crate::model::{self, CheckState, Sort};
+use crate::model::{self, CheckState, Column, Sort};
 
 /// The most rows a list fetch error takes above the status bar.
 const MAX_ERROR_ROWS: u16 = 5;
@@ -58,6 +58,8 @@ const CHECKS_WIDTH: u16 = 12;
 const REVIEW_WIDTH: u16 = 11;
 /// Fits `app/renovate` and a typical login; a longer one is cut.
 const AUTHOR_WIDTH: u16 = 16;
+/// Fits the header with its arrow, `Updated ▲`; a cell is an age such as `3d`.
+const UPDATED_WIDTH: u16 = 9;
 
 /// The characters of a horizontal scrollbar. The track is the border's own, so only the thumb
 /// shows.
@@ -243,6 +245,7 @@ fn draw_dialog(app: &mut App, frame: &mut Frame, area: Rect) {
         Mode::Confirm(confirm) => confirm_dialog(confirm, app.dry_run, frame, area),
         Mode::ConfirmOpen(confirm) => open_dialog(confirm, frame, area),
         Mode::Help => help_popup(frame, area),
+        Mode::PickColumns(at) => columns_popup(app, *at, frame, area),
         Mode::Running(batch) => running_popup(batch, app.dry_run, spinner(app), frame, area),
         Mode::Results(summary) => results_popup(summary, app.dry_run, frame, area),
         Mode::Loading | Mode::List => Vec::new(),
@@ -256,6 +259,7 @@ fn mode_hints(app: &App) -> Option<&'static str> {
     match &app.mode {
         Mode::Confirm(_) | Mode::ConfirmOpen(_) => Some(keys::CHOOSE_HINTS),
         Mode::Help => Some(keys::HELP_HINTS),
+        Mode::PickColumns(_) => Some(keys::PICK_COLUMNS_HINTS),
         Mode::Running(_) => Some(keys::RUNNING_HINTS),
         Mode::Results(_) => Some(keys::RESULTS_HINTS),
         Mode::Loading | Mode::List => match app.typing {
@@ -401,9 +405,10 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
         | Mode::Confirm(_)
         | Mode::ConfirmOpen(_)
         | Mode::Help
+        | Mode::PickColumns(_)
         | Mode::Running(_)
         | Mode::Results(_) => {
-            let author = app.shows_author();
+            let shown = app.shown_columns();
             // The groups of the column regex share the space the title had.
             let mut titles = match &app.columns {
                 Some(regex) => model::column_names(regex),
@@ -421,48 +426,38 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
                 }
             };
             titles[0] = marked(Sort::Title, &titles[0]);
-            let author_header = marked(Sort::Author, "Author");
             // With more than fits, the title columns take the width of their longest cell and the
             // table scrolls sideways; otherwise they share what is left.
             let title_widths = title_column_widths(app, &titles);
-            let fixed = CHECKBOX_WIDTH
-                + NUMBER_WIDTH
-                + CHECKS_WIDTH
-                + REVIEW_WIDTH
-                + if author { AUTHOR_WIDTH } else { 0 };
-            let gaps = (4 + usize::from(author) + titles.len() - 1) as u16;
+            let fixed = CHECKBOX_WIDTH + shown.iter().map(|&c| column_width(c)).sum::<u16>();
+            let gaps = (1 + shown.len() + titles.len() - 1) as u16;
             let total = fixed + title_widths.iter().sum::<u16>() + gaps;
             let scrolling = total > table_area.width;
             // Borrowing the fields rather than calling `visible_rows` leaves `app.table` free.
+            let now = jiff::Timestamp::now();
             let rows = app.visible.iter().map(|&i| &app.rows[i]).map(|row| {
                 let selected = app.selected.contains(&row.pr.number);
-                pr_row(row, selected, author, app.columns.as_ref())
+                pr_row(row, selected, &shown, app.columns.as_ref(), now)
             });
-            let widths = [
-                Constraint::Length(CHECKBOX_WIDTH),
-                Constraint::Length(NUMBER_WIDTH),
-                Constraint::Length(CHECKS_WIDTH),
-                Constraint::Length(REVIEW_WIDTH),
-            ]
-            .into_iter()
-            .chain(author.then_some(Constraint::Length(AUTHOR_WIDTH)))
-            .chain(title_widths.iter().map(|&width| {
-                if scrolling {
-                    Constraint::Length(width)
-                } else {
-                    Constraint::Fill(1)
-                }
-            }))
-            .collect::<Vec<_>>();
-            let header = [
-                String::new(),
-                marked(Sort::Number, "#"),
-                marked(Sort::Checks, "Checks"),
-                marked(Sort::Review, "Review"),
-            ]
-            .into_iter()
-            .chain(author.then_some(author_header))
-            .chain(titles);
+            let widths = [Constraint::Length(CHECKBOX_WIDTH)]
+                .into_iter()
+                .chain(
+                    shown
+                        .iter()
+                        .map(|&column| Constraint::Length(column_width(column))),
+                )
+                .chain(title_widths.iter().map(|&width| {
+                    if scrolling {
+                        Constraint::Length(width)
+                    } else {
+                        Constraint::Fill(1)
+                    }
+                }))
+                .collect::<Vec<_>>();
+            let header = [String::new()]
+                .into_iter()
+                .chain(shown.iter().map(|&c| marked(c.sort(), c.name())))
+                .chain(titles);
             let mut table = Table::new(rows, widths)
                 .header(Row::new(header).bold())
                 .row_highlight_style(Style::new().reversed());
@@ -478,7 +473,13 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
                 StatefulWidget::render(table, full, &mut buffer, &mut app.table);
                 let x = app.list_x.min(total - table_area.width);
                 app.list_x = x;
-                copy_scrolled(&buffer, frame.buffer_mut(), table_area, FROZEN_WIDTH, x);
+                copy_scrolled(
+                    &buffer,
+                    frame.buffer_mut(),
+                    table_area,
+                    frozen_width(&shown),
+                    x,
+                );
                 hscrollbar(
                     frame,
                     area,
@@ -510,47 +511,71 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
             };
             app.drawn.areas.table_offset = app.table.offset();
             let full_width = if scrolling { total } else { table_area.width };
-            app.drawn.areas.table_header = header_hits(table_area, author, full_width, app.list_x);
+            app.drawn.areas.table_header = header_hits(
+                table_area,
+                &shown,
+                full_width,
+                frozen_width(&shown),
+                app.list_x,
+            );
         }
     }
 }
 
-/// Where each sortable column's header is on screen, for a click: the number, checks and review
-/// columns, the author if it is there, and one area for all the title columns, to the end of the
-/// table. The table is
-/// `full_width` columns wide, scrolled `x` columns past its frozen ones, as drawn above. The
-/// checkbox has nothing to sort by.
-fn header_hits(area: Rect, author: bool, full_width: u16, x: u16) -> Vec<(Rect, Sort)> {
+/// Where each sortable column's header is on screen, for a click: each of the `shown` columns, and
+/// one area for all the title columns, to the end of the table. The table is `full_width` columns
+/// wide, scrolled `x` columns past its `frozen` ones, as drawn above. The checkbox has nothing to
+/// sort by.
+fn header_hits(
+    area: Rect,
+    shown: &[Column],
+    full_width: u16,
+    frozen: u16,
+    x: u16,
+) -> Vec<(Rect, Sort)> {
     // The columns, in the table's own coordinates, with the one column between each.
-    let number = (CHECKBOX_WIDTH + 1, NUMBER_WIDTH);
-    let checks = (number.0 + number.1 + 1, CHECKS_WIDTH);
-    let review = (checks.0 + checks.1 + 1, REVIEW_WIDTH);
-    let after_review = review.0 + review.1 + 1;
-    let title_start = after_review + if author { AUTHOR_WIDTH + 1 } else { 0 };
-    let columns = [
-        (number.0, number.0 + number.1, Sort::Number),
-        (checks.0, checks.0 + checks.1, Sort::Checks),
-        (review.0, review.0 + review.1, Sort::Review),
-        (after_review, after_review + AUTHOR_WIDTH, Sort::Author),
-        (title_start, full_width, Sort::Title),
-    ];
+    let mut start = CHECKBOX_WIDTH + 1;
+    let mut columns = Vec::new();
+    for &column in shown {
+        let end = start + column_width(column);
+        columns.push((start, end, column.sort()));
+        start = end + 1;
+    }
+    columns.push((start, full_width, Sort::Title));
     columns
         .into_iter()
-        .filter(|(_, _, sort)| author || *sort != Sort::Author)
         .filter_map(|(start, end, sort)| {
             // The frozen columns stay; the rest move with the scroll, and can't go under them.
-            let (start, end) = if end <= FROZEN_WIDTH {
+            let (start, end) = if end <= frozen {
                 (start, end)
             } else {
-                (
-                    start.saturating_sub(x).max(FROZEN_WIDTH),
-                    end.saturating_sub(x),
-                )
+                (start.saturating_sub(x).max(frozen), end.saturating_sub(x))
             };
             let end = end.min(area.width);
             (start < end).then(|| (Rect::new(area.x + start, area.y, end - start, 1), sort))
         })
         .collect()
+}
+
+/// The width of the table's `column`.
+fn column_width(column: Column) -> u16 {
+    match column {
+        Column::Number => NUMBER_WIDTH,
+        Column::Checks => CHECKS_WIDTH,
+        Column::Review => REVIEW_WIDTH,
+        Column::Author => AUTHOR_WIDTH,
+        Column::Updated => UPDATED_WIDTH,
+    }
+}
+
+/// The width of the columns that stay in view when the table scrolls sideways: the checkbox, and
+/// the number if it is shown, with the gap after each.
+fn frozen_width(shown: &[Column]) -> u16 {
+    if shown.contains(&Column::Number) {
+        FROZEN_WIDTH
+    } else {
+        CHECKBOX_WIDTH + 1
+    }
 }
 
 /// The widest cell of each title column, the header included, as far as is worth showing.
@@ -578,26 +603,72 @@ fn copy_scrolled(source: &Buffer, target: &mut Buffer, area: Rect, frozen: u16, 
     }
 }
 
-/// A PR's row of the table. A closed or merged PR is dimmed.
-fn pr_row<'a>(row: &'a app::Row, selected: bool, author: bool, columns: Option<&Regex>) -> Row<'a> {
+/// A PR's row of the table, with a cell for each of the `shown` columns. A closed or merged PR is
+/// dimmed.
+fn pr_row<'a>(
+    row: &'a app::Row,
+    selected: bool,
+    shown: &[Column],
+    columns: Option<&Regex>,
+    now: jiff::Timestamp,
+) -> Row<'a> {
     let mark = if selected { "[x]" } else { "[ ]" };
-    let checks = Cell::new(row.checks_label()).style(checks_style(row));
+    let cell = |column: Column| {
+        let cell = Cell::new(row.cell(column, now));
+        if column == Column::Checks {
+            cell.style(checks_style(row))
+        } else {
+            cell
+        }
+    };
     let cells = Row::new(
-        [
-            Cell::new(mark),
-            Cell::new(format!("#{}", row.pr.number)),
-            checks,
-            Cell::new(model::review_label(row.pr.review_decision)),
-        ]
-        .into_iter()
-        .chain(author.then(|| Cell::new(row.pr.author.login.as_str())))
-        .chain(row.title_cells(columns).into_iter().map(Cell::new)),
+        [Cell::new(mark)]
+            .into_iter()
+            .chain(shown.iter().map(|&column| cell(column)))
+            .chain(row.title_cells(columns).into_iter().map(Cell::new)),
     );
     if row.pr.state == PrState::Open {
         cells
     } else {
         cells.dim()
     }
+}
+
+/// The popup that chooses the table's columns: a checkbox for each, and the one at `at`
+/// highlighted. The sorted column is named, as hiding it leaves the sort in place.
+fn columns_popup(app: &App, at: usize, frame: &mut Frame, area: Rect) -> Vec<Rect> {
+    let lines = Column::ALL
+        .into_iter()
+        .enumerate()
+        .map(|(i, column)| {
+            // The author also has no column when every PR has the same one.
+            let note =
+                if column == Column::Author && !app.shows_author() && !app.hidden.contains(&column)
+                {
+                    " (every PR has the same one)"
+                } else {
+                    ""
+                };
+            let mark = if app.hidden.contains(&column) {
+                "[ ]"
+            } else {
+                "[x]"
+            };
+            let line = Line::from(format!("{mark} {}{note}", column.name()));
+            if i == at { line.reversed() } else { line }
+        })
+        .collect();
+    let buttons = button_row(["OK"], 0);
+    let footer = vec![Line::default(), buttons.line];
+    let popup_ = Popup {
+        title: "Columns".to_string(),
+        dry_run: false,
+        lines,
+        wrap: false,
+        footer,
+        buttons: buttons.widths,
+    };
+    popup(frame, area, popup_)
 }
 
 fn confirm_dialog(confirm: &Confirm, dry_run: bool, frame: &mut Frame, area: Rect) -> Vec<Rect> {
@@ -1694,15 +1765,11 @@ mod tests {
         assert!(header(&mut app).contains("Review ▲"));
         press(&mut app, "s");
         assert!(header(&mut app).contains("Author ▲"));
-        // Nothing in the table to mark for the update time, so the title bar says it.
+        // The update time has a column to mark now.
         press(&mut app, "s");
+        assert!(header(&mut app).contains("Updated ▲"));
         let screen = lines(&draw(&mut app, 200, 30));
-        assert!(screen.iter().all(|l| !l.contains("Review ▲")));
-        assert!(
-            screen[0].starts_with("PRs · sorted by updated ▲"),
-            "{}",
-            screen[0]
-        );
+        assert!(!screen[0].contains("sorted by"), "{}", screen[0]);
     }
 
     /// The middle of the header cell that sorts by `sort`, as last drawn.
@@ -1735,6 +1802,7 @@ mod tests {
                 Sort::Checks,
                 Sort::Review,
                 Sort::Author,
+                Sort::Updated,
                 Sort::Title
             ]
         );
@@ -1748,13 +1816,14 @@ mod tests {
         assert!(text_at(&header[1].0).trim().starts_with("Checks"));
         assert!(text_at(&header[2].0).trim().starts_with("Review"));
         assert!(text_at(&header[3].0).trim().starts_with("Author"));
-        assert!(text_at(&header[4].0).trim().starts_with("Title"));
+        assert!(text_at(&header[4].0).trim().starts_with("Updated"));
+        assert!(text_at(&header[5].0).trim().starts_with("Title"));
         for pair in header.windows(2) {
             assert!(pair[0].0.right() <= pair[1].0.x);
             assert_eq!(pair[0].0.y, pair[1].0.y);
         }
         // The title columns reach the end of the table.
-        let title = header[4].0;
+        let title = header[5].0;
         assert_eq!(title.right(), app.drawn.areas.table.right() - 1);
     }
 
@@ -1851,8 +1920,115 @@ mod tests {
             .collect();
         assert_eq!(
             sorts,
-            [Sort::Number, Sort::Checks, Sort::Review, Sort::Title]
+            [
+                Sort::Number,
+                Sort::Checks,
+                Sort::Review,
+                Sort::Updated,
+                Sort::Title
+            ]
         );
+    }
+
+    /// The header row of the table, as drawn at 200 columns.
+    fn table_header_text(app: &mut App) -> String {
+        let buffer = draw(app, 200, 30);
+        let area = app.drawn.areas.table;
+        (area.x..area.right())
+            .map(|x| buffer[(x, area.y + 1)].symbol())
+            .collect()
+    }
+
+    #[test]
+    fn the_updated_column_shows_how_long_ago_in_a_word_or_two() {
+        let mut pr = by("alice", 1, "Bump alpha");
+        pr.updated_at = "2020-01-02T03:04:05Z".to_string();
+        let mut app = app_with(vec![pr]);
+        let screen = lines(&draw(&mut app, 200, 30)).join("\n");
+        assert!(screen.contains("Updated"), "{screen}");
+        assert!(screen.contains('y'), "{screen}");
+    }
+
+    #[test]
+    fn each_column_can_be_hidden_and_takes_its_header_and_click_area_with_it() {
+        for column in Column::ALL {
+            let mut app = app_with(vec![by("alice", 1, "Bump alpha"), by("bob", 2, "Bump b")]);
+            app.toggle_column(column);
+            let top = table_header_text(&mut app);
+            assert!(!top.contains(column.name()), "{column:?}: {top}");
+            // The others are still there, and a click on each still sorts by it.
+            let sorts: Vec<Sort> = app
+                .drawn
+                .areas
+                .table_header
+                .iter()
+                .map(|(_, s)| *s)
+                .collect();
+            assert!(!sorts.contains(&column.sort()), "{column:?}");
+            assert_eq!(sorts.len(), Column::ALL.len(), "{column:?}: {sorts:?}");
+            for sort in sorts {
+                click_header(&mut app, sort);
+                draw(&mut app, 200, 30);
+                assert_eq!(app.sort().0, sort, "{column:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn hiding_the_number_unfreezes_it_and_the_checkbox_alone_stays() {
+        let mut app = app_with_a_long_title();
+        app.toggle_column(Column::Number);
+        draw(&mut app, 100, 40);
+        for _ in 0..8 {
+            press(&mut app, "l");
+        }
+        draw(&mut app, 100, 40);
+        let table = app.drawn.areas.table;
+        assert!(app.list_x > 0);
+        for (area, sort) in &app.drawn.areas.table_header {
+            assert!(area.x > table.x + CHECKBOX_WIDTH, "{sort:?}");
+        }
+    }
+
+    #[test]
+    fn the_columns_popup_shows_every_column_and_space_hides_the_highlighted_one() {
+        let mut app = app_with(vec![by("alice", 1, "Bump alpha"), by("bob", 2, "Bump b")]);
+        press(&mut app, "v");
+        let screen = lines(&draw(&mut app, 200, 30)).join("\n");
+        assert!(
+            screen.contains("[x] Number") || screen.contains("[x] #"),
+            "{screen}"
+        );
+        for column in Column::ALL {
+            assert!(
+                screen.contains(&format!("[x] {}", column.name())),
+                "{screen}"
+            );
+        }
+        press(&mut app, "j");
+        press(&mut app, " ");
+        assert_eq!(app.hidden, [Column::Checks]);
+        let screen = lines(&draw(&mut app, 200, 30)).join("\n");
+        assert!(screen.contains("[ ] Checks"), "{screen}");
+        press(&mut app, " ");
+        assert!(app.hidden.is_empty());
+        // It takes every key but the ones that close it, and Esc closes it.
+        press(&mut app, "s");
+        assert!(matches!(app.mode, Mode::PickColumns(_)));
+        key(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::List));
+    }
+
+    #[test]
+    fn the_filter_matches_only_the_columns_shown() {
+        let mut app = app_with(vec![by("alice", 1, "Bump alpha"), by("bob", 2, "Bump b")]);
+        app.filter = tui_input::Input::new("bob".to_string());
+        app.toggle_column(Column::Number);
+        assert_eq!(app.visible.len(), 1);
+        app.toggle_column(Column::Author);
+        assert!(app.visible.is_empty());
+        app.toggle_column(Column::Author);
+        assert_eq!(app.visible.len(), 1);
     }
 
     #[test]

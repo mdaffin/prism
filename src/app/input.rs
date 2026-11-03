@@ -10,6 +10,7 @@ use unicode_width::UnicodeWidthChar;
 
 use super::{App, Mode, Pane, Typing};
 use crate::batch::on_confirm_key;
+use crate::model::Column;
 
 /// The columns that a key press or a notch of the wheel scrolls a pane sideways.
 const SIDEWAYS_COLUMNS: isize = 8;
@@ -114,7 +115,7 @@ impl App {
                 self.on_key(KeyCode::Enter.into());
             }
             // Enter does not close these, but Esc and `q` do, and OK says the same.
-            Mode::Help | Mode::Results(_) => self.mode = Mode::List,
+            Mode::Help | Mode::PickColumns(_) | Mode::Results(_) => self.mode = Mode::List,
             _ => {}
         }
     }
@@ -171,6 +172,23 @@ impl App {
             Mode::Help => {
                 if matches!(key.code, KeyCode::Esc | KeyCode::Char('?' | 'q')) {
                     self.mode = Mode::List;
+                }
+            }
+            Mode::PickColumns(at) => {
+                let last = Column::ALL.len() - 1;
+                match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => *at = at.saturating_sub(1),
+                    KeyCode::Down | KeyCode::Char('j') => *at = (*at + 1).min(last),
+                    KeyCode::Home => *at = 0,
+                    KeyCode::End => *at = last,
+                    KeyCode::Char(' ') => {
+                        let column = Column::ALL[*at];
+                        self.toggle_column(column);
+                    }
+                    KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q' | 'v') => {
+                        self.mode = Mode::List
+                    }
+                    _ => {}
                 }
             }
             Mode::Running(batch) => {
@@ -280,6 +298,7 @@ impl App {
             KeyCode::Char('/') => self.typing = Typing::Search,
             KeyCode::Char('f') => self.typing = Typing::Filter,
             KeyCode::Char('c') => self.edit_columns(),
+            KeyCode::Char('v') => self.mode = Mode::PickColumns(0),
             KeyCode::Char('s') => self.cycle_sort(),
             KeyCode::Char('S') => self.reverse_sort(),
             KeyCode::Char('?') => self.mode = Mode::Help,
