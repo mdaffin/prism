@@ -18,6 +18,8 @@ pub const SUGGESTIONS_HINTS: &str = "Enter: Search | Tab/Up/Down: Choose | Esc: 
 pub const CHOSEN_HINTS: &str = "Enter: Take | Tab/Down: Next | Shift-Tab/Up: Previous | Esc: Close";
 /// Editing the filter box.
 pub const FILTER_HINTS: &str = "Enter: Keep filter | Esc: Clear filter";
+/// Editing the columns box.
+pub const COLUMNS_HINTS: &str = "Enter: Apply | Esc: Cancel";
 
 /// The status bar's name for the key that opens the highlighted item, which the bar keeps when
 /// it has to drop hints.
@@ -75,6 +77,11 @@ pub const KEYS: &[KeyHelp] = &[
     key("?", "Show every key", Some("Help")),
     key("/", "Edit the GitHub search query", Some("Search")),
     key("f", "Filter the list as you type", None),
+    key(
+        "c",
+        "Edit the regex whose named groups become the table's columns",
+        None,
+    ),
     key("Tab / Shift-Tab", "Move focus between the panes", None),
     key(
         "Up/Down, j/k",

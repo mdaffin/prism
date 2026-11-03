@@ -133,6 +133,8 @@ pub struct PaneAreas {
     pub search: Rect,
     /// The filter box. Empty while it is not drawn, so a stale rectangle can't catch a click.
     pub filter: Rect,
+    /// The columns box. Empty while it is not drawn, like `filter`.
+    pub columns: Rect,
     /// The table's rows, below its header. Empty while no rows are drawn.
     pub table_rows: Rect,
     /// The checkbox column of `table_rows`.

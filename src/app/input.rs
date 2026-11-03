@@ -123,12 +123,15 @@ impl App {
             (Typing::Search, self.drawn.areas.search)
         } else if self.drawn.areas.filter.contains(position) {
             (Typing::Filter, self.drawn.areas.filter)
+        } else if self.drawn.areas.columns.contains(position) {
+            (Typing::Columns, self.drawn.areas.columns)
         } else {
             return false;
         };
         self.typing = typing;
         let input = match typing {
             Typing::Filter => &mut self.filter,
+            Typing::Columns => &mut self.columns_input,
             _ => &mut self.query,
         };
         // The text starts inside the border, scrolled to keep the cursor in view.
@@ -181,6 +184,7 @@ impl App {
             Mode::Loading | Mode::List => match self.typing {
                 Typing::Search => self.on_search_key(key),
                 Typing::Filter => self.on_filter_key(key),
+                Typing::Columns => self.on_columns_key(key),
                 Typing::Nothing => self.on_list_key(key),
             },
         }
@@ -245,6 +249,19 @@ impl App {
         }
     }
 
+    /// While editing the columns, every key other than Enter and Esc goes to the columns box.
+    /// Enter applies the regex; Esc drops the edit.
+    fn on_columns_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter => self.apply_columns(),
+            KeyCode::Esc => self.typing = Typing::Nothing,
+            _ => {
+                self.columns_input.handle_event(&Event::Key(key));
+                self.columns_error = None;
+            }
+        }
+    }
+
     fn on_list_key(&mut self, key: KeyEvent) {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
@@ -259,6 +276,7 @@ impl App {
         match key.code {
             KeyCode::Char('/') => self.typing = Typing::Search,
             KeyCode::Char('f') => self.typing = Typing::Filter,
+            KeyCode::Char('c') => self.edit_columns(),
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Char('o') => self.open_focused(),
             KeyCode::Char('y') => self.copy_focused(),

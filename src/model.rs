@@ -192,6 +192,15 @@ pub fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// The line of a regex error that says what is wrong: the one after `error:` if there is one, as
+/// the first line of a syntax error only says that there is one.
+pub fn regex_error_line(error: &str) -> &str {
+    error
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("error: "))
+        .unwrap_or_else(|| first_line(error))
+}
+
 /// The first line of `text` that isn't blank, such as the headline of an error message.
 pub fn first_line(text: &str) -> &str {
     text.lines()
@@ -574,12 +583,12 @@ const RESERVED_COLUMNS: [&str; 13] = [
     "runs", "review", "updated",
 ];
 
-/// Compiles the `--column-regex` and checks its named groups can be columns.
+/// Compiles the column regex and checks its named groups can be columns.
 pub fn parse_column_regex(pattern: &str) -> Result<Regex, String> {
     let regex = Regex::new(pattern).map_err(|error| error.to_string())?;
     let names = column_names(&regex);
     if names.is_empty() {
-        return Err("--column-regex needs at least one named group, e.g. '(?<package>\\S+) to (?<version>\\S+)'".to_string());
+        return Err("the column regex needs at least one named group, e.g. '(?<package>\\S+) to (?<version>\\S+)'".to_string());
     }
     let clashes: Vec<&str> = names
         .iter()
@@ -588,7 +597,7 @@ pub fn parse_column_regex(pattern: &str) -> Result<Regex, String> {
         .collect();
     if !clashes.is_empty() {
         return Err(format!(
-            "--column-regex group names clash with built-in columns: {}",
+            "the column regex's group names clash with built-in columns: {}",
             clashes.join(", ")
         ));
     }
@@ -1179,7 +1188,7 @@ mod tests {
         let error = parse_column_regex(r"(?<title>\S+) to (?<version>\S+)").unwrap_err();
         assert_eq!(
             error,
-            "--column-regex group names clash with built-in columns: title"
+            "the column regex's group names clash with built-in columns: title"
         );
         let error = parse_column_regex(r"(?<checks>\S+) (?<review>\S+)").unwrap_err();
         assert!(error.ends_with("checks, review"));

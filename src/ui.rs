@@ -162,9 +162,16 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     } else {
         0
     };
-    let [search_area, filter_area, table_area] = Layout::vertical([
+    // The columns box is only there while it is being edited.
+    let columns_rows = if app.typing == Typing::Columns {
+        INPUT_BOX_ROWS
+    } else {
+        0
+    };
+    let [search_area, filter_area, columns_area, table_area] = Layout::vertical([
         Constraint::Length(INPUT_BOX_ROWS),
         Constraint::Length(filter_rows),
+        Constraint::Length(columns_rows),
         Constraint::Fill(1),
     ])
     .areas(top_area);
@@ -176,9 +183,17 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     } else {
         Rect::default()
     };
+    app.drawn.areas.columns = if columns_rows > 0 {
+        columns_area
+    } else {
+        Rect::default()
+    };
     search(app, frame, search_area);
     if filter_rows > 0 {
         filter(app, frame, filter_area);
+    }
+    if columns_rows > 0 {
+        columns(app, frame, columns_area);
     }
 
     pr_table(app, frame, table_area);
@@ -229,6 +244,7 @@ fn mode_hints(app: &App) -> Option<&'static str> {
                 None => keys::SEARCH_HINTS,
             }),
             Typing::Filter => Some(keys::FILTER_HINTS),
+            Typing::Columns => Some(keys::COLUMNS_HINTS),
             Typing::Nothing => None,
         },
     }
@@ -874,6 +890,22 @@ fn filter(app: &App, frame: &mut Frame, area: Rect) {
         let x = app.filter.visual_cursor().saturating_sub(scroll) as u16;
         frame.set_cursor_position(Position::new(area.x + 1 + x, area.y + 1));
     }
+}
+
+/// The box that edits the column regex, with the reason a regex was refused in its title.
+fn columns(app: &App, frame: &mut Frame, area: Rect) {
+    let width = area.width.saturating_sub(2);
+    let scroll = app.columns_input.visual_scroll(usize::from(width));
+    let mut title = Line::from("Columns");
+    if let Some(error) = &app.columns_error {
+        title.push_span(format!(" · {error}").red().bold());
+    }
+    let input = Paragraph::new(app.columns_input.value())
+        .scroll((0, scroll as u16))
+        .block(pane_block(title, true));
+    frame.render_widget(input, area);
+    let x = app.columns_input.visual_cursor().saturating_sub(scroll) as u16;
+    frame.set_cursor_position(Position::new(area.x + 1 + x, area.y + 1));
 }
 
 fn search(app: &App, frame: &mut Frame, area: Rect) {
@@ -1706,6 +1738,122 @@ mod tests {
             .find(|line| line.contains("#2") && line.contains("["))
             .unwrap();
         assert!(!fix.contains("Fix beta"));
+    }
+
+    /// Clears the columns box and types `regex` into it.
+    fn type_columns(app: &mut App, regex: &str) {
+        for _ in 0..app.columns_input.value().chars().count() {
+            key(app, KeyCode::Backspace);
+        }
+        press(app, regex);
+    }
+
+    #[test]
+    fn a_valid_regex_in_the_columns_box_changes_the_headers_on_enter() {
+        let mut app = app_with(vec![pr(1, "Bump alpha to 1.2", "OPEN", "")]);
+        let screen = lines(&draw(&mut app, 200, 30));
+        assert!(screen.iter().any(|line| line.contains("Title")));
+
+        press(&mut app, "c");
+        assert!(app.typing == Typing::Columns);
+        let screen = lines(&draw(&mut app, 200, 30));
+        assert!(screen.iter().any(|line| line.contains("Columns")));
+        assert!(app.drawn.areas.columns != Rect::default());
+
+        press(&mut app, r"Bump (?<container>.+?) to (?<version>\S+)$");
+        key(&mut app, KeyCode::Enter);
+        assert!(app.typing == Typing::Nothing);
+        let screen = lines(&draw(&mut app, 200, 30));
+        let header = screen.iter().find(|line| line.contains("Checks")).unwrap();
+        assert!(header.contains("container") && header.contains("version"));
+        assert!(!header.contains("Title"));
+        // The box is gone, and has no area to catch a click.
+        assert_eq!(app.drawn.areas.columns, Rect::default());
+
+        // Opening it again starts from the regex in use, and an empty one goes back to the title.
+        press(&mut app, "c");
+        assert_eq!(
+            app.columns_input.value(),
+            r"Bump (?<container>.+?) to (?<version>\S+)$"
+        );
+        type_columns(&mut app, "");
+        key(&mut app, KeyCode::Enter);
+        assert!(app.columns.is_none());
+        let screen = lines(&draw(&mut app, 200, 30));
+        assert!(screen.iter().any(|line| line.contains("Title")));
+    }
+
+    #[test]
+    fn an_invalid_regex_shows_its_error_and_keeps_the_old_one() {
+        let mut app = app_with(vec![pr(1, "Bump alpha to 1.2", "OPEN", "")]);
+        app.columns = Some(model::parse_column_regex(r"Bump (?<container>\S+)").unwrap());
+
+        for (bad, reason) in [
+            ("(", "unclosed group"),
+            ("no groups", "at least one named group"),
+            ("(?<title>x)", "clash"),
+        ] {
+            press(&mut app, "c");
+            type_columns(&mut app, bad);
+            key(&mut app, KeyCode::Enter);
+            // The box stays open, with the reason in its title.
+            assert!(app.typing == Typing::Columns, "{bad}");
+            let screen = lines(&draw(&mut app, 200, 30));
+            let title = screen.iter().find(|line| line.contains("Columns")).unwrap();
+            assert!(title.contains(reason), "{bad}: {title}");
+            let header = screen.iter().find(|line| line.contains("Checks")).unwrap();
+            assert!(header.contains("container"), "{bad}: the old regex stays");
+
+            // Editing clears the error, and Esc leaves the old regex in use.
+            press(&mut app, "x");
+            assert!(app.columns_error.is_none());
+            key(&mut app, KeyCode::Esc);
+            assert!(app.typing == Typing::Nothing);
+            assert_eq!(
+                app.columns.as_ref().unwrap().as_str(),
+                r"Bump (?<container>\S+)"
+            );
+        }
+    }
+
+    #[test]
+    fn the_filter_follows_the_columns_when_they_change() {
+        let mut app = app_with(vec![
+            pr(1, "Bump alpha to 1.2", "OPEN", ""),
+            pr(2, "Bump beta to 3.4", "OPEN", ""),
+        ]);
+        press(&mut app, "fBump");
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(app.visible.len(), 2);
+
+        // "Bump" is in the titles but not in any column.
+        press(&mut app, "c");
+        press(&mut app, r"Bump (?<container>.+?) to (?<version>\S+)$");
+        key(&mut app, KeyCode::Enter);
+        assert!(app.visible.is_empty());
+
+        // Back to the title, and it matches again.
+        press(&mut app, "c");
+        type_columns(&mut app, "");
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(app.visible.len(), 2);
+    }
+
+    #[test]
+    fn a_click_on_the_columns_box_moves_its_cursor_and_elsewhere_drops_the_edit() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        press(&mut app, "c");
+        press(&mut app, "(?<a>x)");
+        draw(&mut app, 200, 40);
+        let area = app.drawn.areas.columns;
+        click(&mut app, Position::new(area.x + 1 + 2, area.y + 1));
+        assert!(app.typing == Typing::Columns);
+        assert_eq!(app.columns_input.cursor(), 2);
+
+        // A click on the table leaves the box; the regex was never applied.
+        click(&mut app, Position::new(2, area.y + 6));
+        assert!(app.typing == Typing::Nothing);
+        assert!(app.columns.is_none());
     }
 
     #[test]

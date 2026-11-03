@@ -66,6 +66,10 @@ pub struct App {
     pub visible: Vec<usize>,
     /// The local filter box.
     pub filter: Input,
+    /// The box that edits the column regex. It starts from the regex in use each time it opens.
+    pub columns_input: Input,
+    /// Why the regex in `columns_input` was refused, until it is edited again.
+    pub columns_error: Option<String>,
     /// The highlighted row, as a position in `visible`.
     pub table: TableState,
     /// Columns the table is scrolled sideways, past its first columns. The view clamps it. Unlike
@@ -195,6 +199,8 @@ pub enum Typing {
     Search,
     /// The filter box.
     Filter,
+    /// The box that edits the column regex.
+    Columns,
 }
 
 /// What to keep of a failed fetch: for a `gh` command, what `gh` said, without the command. The
@@ -363,6 +369,8 @@ impl App {
             limit: usize::MAX,
             truncated: false,
             columns: None,
+            columns_input: Input::default(),
+            columns_error: None,
             dry_run,
             mode: Mode::Loading,
             query: Input::new(query.clone()),
@@ -422,6 +430,35 @@ impl App {
     pub fn with_columns(mut self, columns: Option<Regex>) -> Self {
         self.columns = columns;
         self
+    }
+
+    /// Opens the columns box on the regex in use, or on nothing.
+    pub(super) fn edit_columns(&mut self) {
+        let current = self.columns.as_ref().map_or("", Regex::as_str);
+        self.columns_input = Input::new(current.to_string());
+        self.columns_error = None;
+        self.typing = Typing::Columns;
+    }
+
+    /// Uses the regex in the columns box, and closes it. Text that isn't a valid column regex
+    /// leaves the box open with the reason and the old regex in use; no text means no columns.
+    fn apply_columns(&mut self) {
+        let text = self.columns_input.value().trim();
+        let columns = if text.is_empty() {
+            None
+        } else {
+            match model::parse_column_regex(text) {
+                Ok(regex) => Some(regex),
+                Err(error) => {
+                    self.columns_error = Some(model::regex_error_line(&error).to_string());
+                    return;
+                }
+            }
+        };
+        self.columns = columns;
+        self.typing = Typing::Nothing;
+        // The filter matches the columns shown.
+        self.refilter();
     }
 
     /// The title, with a note when the list was cut short.
