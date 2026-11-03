@@ -13,6 +13,8 @@ use tokio::process::Command;
 
 use crate::cli::MergeMethod;
 
+mod graphql;
+
 /// Fields requested from `gh pr list --json`: only what the table needs, so it renders sooner.
 const LIST_FIELDS: &str =
     "number,title,state,statusCheckRollup,mergeable,reviewDecision,updatedAt,url,author";
@@ -51,10 +53,73 @@ impl Gh {
     }
 
     /// Lists up to one more PR than `limit`, so the caller can tell whether the list was cut
-    /// short.
+    /// short. It is one GraphQL search, a page of [`graphql::MAX_PAGE`] at a time for a longer
+    /// list.
     pub async fn list_prs(&self, query: &str, limit: u32) -> Result<Vec<Pr>> {
-        let stdout = self.list_json(query, limit, LIST_FIELDS).await?;
-        Ok(serde_json::from_slice(&stdout)?)
+        let wanted = limit.saturating_add(1) as usize;
+        let search = graphql::search_string(query);
+        let mut prs = Vec::new();
+        let mut after: Option<String> = None;
+        while prs.len() < wanted {
+            let first = (wanted - prs.len()).min(graphql::MAX_PAGE as usize);
+            let mut variables = vec![
+                Variable::Typed("q", search.clone()),
+                Variable::Typed("first", first.to_string()),
+            ];
+            if let Some(cursor) = &after {
+                variables.push(Variable::Text("after", cursor));
+            }
+            let response: graphql::Response<graphql::SearchData> =
+                self.graphql(graphql::LIST_QUERY, &variables).await?;
+            let page = response.data.search;
+            let next = page
+                .page_info
+                .end_cursor
+                .clone()
+                .filter(|_| page.page_info.has_next_page);
+            prs.extend(page.prs());
+            match next {
+                Some(cursor) => after = Some(cursor),
+                None => break,
+            }
+        }
+        prs.truncate(wanted);
+        Ok(prs)
+    }
+
+    /// Runs a GraphQL query with `gh api graphql` and reads its `data`. Only queries: the text
+    /// must start with `query`, so nothing here can send a mutation. A failure is `gh`'s output
+    /// with a response's `errors` cut down to their messages.
+    async fn graphql<T: DeserializeOwned>(
+        &self,
+        query: &str,
+        variables: &[Variable<'_>],
+    ) -> Result<T> {
+        if !query.trim_start().starts_with("query") {
+            bail!("only GraphQL queries are sent");
+        }
+        let mut args = vec!["api".to_string(), "graphql".to_string()];
+        args.extend(["-f".to_string(), format!("query={query}")]);
+        for variable in variables {
+            let (flag, name, value) = match variable {
+                // `-F` fills in `{owner}` and `{repo}`, and reads a number as one.
+                Variable::Typed(name, value) => ("-F", name, value.as_str()),
+                // `-f` passes the value untouched, which a cursor needs.
+                Variable::Text(name, value) => ("-f", name, *value),
+            };
+            args.extend([flag.to_string(), format!("{name}={value}")]);
+        }
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        match self.exec_in(&args, true, true).await {
+            Ok(stdout) => Ok(serde_json::from_slice(&stdout)?),
+            Err(error) => match error.downcast::<GhError>() {
+                Ok(mut failure) => {
+                    failure.output = graphql::error_message(&failure.output);
+                    Err(failure.into())
+                }
+                Err(error) => Err(error),
+            },
+        }
     }
 
     /// The status of each PR the query lists, and of up to [`MAX_MISSING_LOOKUPS`] of the
@@ -309,6 +374,14 @@ impl Gh {
         }
         Ok(output.stdout)
     }
+}
+
+/// A variable of a GraphQL query.
+enum Variable<'a> {
+    /// Passed with `-F`: a `{owner}` or `{repo}` in it is filled in, and a number is sent as one.
+    Typed(&'a str, String),
+    /// Passed with `-f`, as the text it is.
+    Text(&'a str, &'a str),
 }
 
 /// A `gh` command that exited with an error.
@@ -651,6 +724,22 @@ mod tests {
         assert!(details.body.is_none());
         assert!(details.comments[0].author.is_none());
         assert!(details.comments[1].body.is_none());
+    }
+
+    #[tokio::test]
+    async fn only_queries_are_sent_as_graphql() {
+        let gh = Gh::new(None, false);
+        for text in [
+            "mutation { addStar(input: {starrableId: \"x\"}) { clientMutationId } }",
+            "  mutation($id: ID!) { x }",
+            "{ viewer { login } }",
+        ] {
+            let error = gh
+                .graphql::<serde_json::Value>(text, &[])
+                .await
+                .unwrap_err();
+            assert_eq!(error.to_string(), "only GraphQL queries are sent", "{text}");
+        }
     }
 
     #[test]
