@@ -15,13 +15,6 @@ use crate::cli::MergeMethod;
 
 mod graphql;
 
-/// Fields requested from `gh pr list --json`: only what the table needs, so it renders sooner.
-const LIST_FIELDS: &str =
-    "number,title,state,statusCheckRollup,mergeable,reviewDecision,updatedAt,url,author";
-
-/// Fields requested by the timed refresh: what can change under a row that is already listed.
-const STATUS_FIELDS: &str = "number,state,statusCheckRollup,mergeable,reviewDecision,updatedAt";
-
 /// The most PRs a refresh looks up one by one because the list no longer returns them.
 const MAX_MISSING_LOOKUPS: usize = 10;
 
@@ -53,10 +46,22 @@ impl Gh {
     }
 
     /// Lists up to one more PR than `limit`, so the caller can tell whether the list was cut
-    /// short. It is one GraphQL search, a page of [`graphql::MAX_PAGE`] at a time for a longer
-    /// list.
+    /// short.
     pub async fn list_prs(&self, query: &str, limit: u32) -> Result<Vec<Pr>> {
+        let prs: Vec<graphql::GqlPr> = self.search(query, limit, graphql::Fields::List).await?;
+        Ok(prs.into_iter().map(Pr::from).collect())
+    }
+
+    /// The PRs that `query` finds, up to one more than `limit`. It is one GraphQL search, a page
+    /// of [`graphql::MAX_PAGE`] at a time for a longer list.
+    async fn search<T: DeserializeOwned>(
+        &self,
+        query: &str,
+        limit: u32,
+        fields: graphql::Fields,
+    ) -> Result<Vec<T>> {
         let wanted = limit.saturating_add(1) as usize;
+        let graphql_query = graphql::search_query(fields);
         let search = graphql::search_string(query);
         let mut prs = Vec::new();
         let mut after: Option<String> = None;
@@ -69,8 +74,8 @@ impl Gh {
             if let Some(cursor) = &after {
                 variables.push(Variable::Text("after", cursor));
             }
-            let response: graphql::Response<graphql::SearchData> =
-                self.graphql(graphql::LIST_QUERY, &variables).await?;
+            let response: graphql::Response<graphql::SearchData<T>> =
+                self.graphql(&graphql_query, &variables).await?;
             let page = response.data.search;
             let next = page
                 .page_info
@@ -85,6 +90,26 @@ impl Gh {
         }
         prs.truncate(wanted);
         Ok(prs)
+    }
+
+    /// These PRs by number, in one request. One that isn't found is left out; if GitHub says
+    /// anything is wrong with the request, it all fails.
+    async fn lookup<T: DeserializeOwned>(
+        &self,
+        numbers: &[u64],
+        fields: graphql::Fields,
+    ) -> Result<Vec<T>> {
+        let query = graphql::lookup_query(numbers, fields);
+        let variables = [
+            Variable::Typed("owner", "{owner}".to_string()),
+            Variable::Typed("name", "{repo}".to_string()),
+        ];
+        let mut response: graphql::Response<graphql::LookupData<T>> =
+            self.graphql(&query, &variables).await?;
+        Ok(numbers
+            .iter()
+            .filter_map(|&number| response.data.take(number))
+            .collect())
     }
 
     /// Runs a GraphQL query with `gh api graphql` and reads its `data`. Only queries: the text
@@ -115,6 +140,8 @@ impl Gh {
             Err(error) => match error.downcast::<GhError>() {
                 Ok(mut failure) => {
                     failure.output = graphql::error_message(&failure.output);
+                    // The command would be the whole query.
+                    failure.command = "gh api graphql".to_string();
                     Err(failure.into())
                 }
                 Err(error) => Err(error),
@@ -123,8 +150,9 @@ impl Gh {
     }
 
     /// The status of each PR the query lists, and of up to [`MAX_MISSING_LOOKUPS`] of the
-    /// `candidates` it doesn't, such as a PR merged by someone else since the list loaded. It
-    /// uses what it got even if some of it failed, and says why in `failure`.
+    /// `candidates` it doesn't, such as a PR merged by someone else since the list loaded, which
+    /// are looked up together. It uses what it got even if some of it failed, and says why in
+    /// `failure`. A failed lookup fails for all of the candidates.
     pub async fn status_update(
         &self,
         query: &str,
@@ -135,7 +163,7 @@ impl Gh {
         match self.list_statuses(query, limit).await {
             Ok(statuses) => update.statuses = statuses,
             Err(e) => {
-                update.failure = Some(e.to_string());
+                update.failure = Some(failure_text(&e));
                 return update;
             }
         }
@@ -149,23 +177,25 @@ impl Gh {
             })
             .take(MAX_MISSING_LOOKUPS)
             .collect();
-        let lookups = futures::future::join_all(missing.into_iter().map(|n| self.pr_status(n)));
-        for result in lookups.await {
-            match result {
-                Ok(status) => update.statuses.push(status),
-                Err(e) => update.failure = update.failure.take().or(Some(e.to_string())),
-            }
+        if missing.is_empty() {
+            return update;
+        }
+        match self
+            .lookup::<graphql::GqlStatus>(&missing, graphql::Fields::Status)
+            .await
+        {
+            Ok(found) => update
+                .statuses
+                .extend(found.into_iter().map(PrStatus::from)),
+            Err(e) => update.failure = Some(failure_text(&e)),
         }
         update
     }
 
     async fn list_statuses(&self, query: &str, limit: u32) -> Result<Vec<PrStatus>> {
-        let stdout = self.list_json(query, limit, STATUS_FIELDS).await?;
-        Ok(serde_json::from_slice(&stdout)?)
-    }
-
-    async fn pr_status(&self, number: u64) -> Result<PrStatus> {
-        self.view_json(number, STATUS_FIELDS).await
+        let statuses: Vec<graphql::GqlStatus> =
+            self.search(query, limit, graphql::Fields::Status).await?;
+        Ok(statuses.into_iter().map(PrStatus::from).collect())
     }
 
     /// `gh pr view` for one PR with these `--json` fields.
@@ -175,23 +205,13 @@ impl Gh {
         Ok(serde_json::from_slice(&stdout)?)
     }
 
-    /// `gh pr list` for the query, asking for one more PR than `limit`.
-    async fn list_json(&self, query: &str, limit: u32, fields: &str) -> Result<Vec<u8>> {
-        let limit = limit.saturating_add(1).to_string();
-        // Without `--state all`, gh adds `state:open` when the query has no state qualifier. A
-        // qualifier in the query still wins, as on GitHub's web UI.
-        // The query is joined to the flag with `=`, so one that starts with `-`, such as
-        // `-label:major`, can't be read as a flag of its own.
-        let search = format!("--search={query}");
-        let args = [
-            "pr", "list", "--state", "all", &search, "--limit", &limit, "--json", fields,
-        ];
-        self.run(&args).await
-    }
-
     /// One PR with the same fields as the list, to refresh its row.
     pub async fn pr(&self, number: u64) -> Result<Pr> {
-        self.view_json(number, LIST_FIELDS).await
+        let found: Vec<graphql::GqlPr> = self.lookup(&[number], graphql::Fields::List).await?;
+        match found.into_iter().next() {
+            Some(pr) => Ok(pr.into()),
+            None => bail!("PR #{number} was not found"),
+        }
     }
 
     /// Opens the PR in the browser. It only reads, so it also runs under `--dry-run`.
@@ -373,6 +393,15 @@ impl Gh {
             .into());
         }
         Ok(output.stdout)
+    }
+}
+
+/// What to keep of a failed call: for a `gh` command, what `gh` said, without the command. The
+/// panes show its first line; the rest is there for a view of the whole message.
+pub fn failure_text(error: &color_eyre::Report) -> String {
+    match error.downcast_ref::<GhError>() {
+        Some(gh) => gh.output.clone(),
+        None => error.to_string(),
     }
 }
 

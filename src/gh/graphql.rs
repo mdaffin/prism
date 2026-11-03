@@ -2,12 +2,14 @@
 //! answers in, and what turns that into the types the rest of the program uses. `gh pr list` did
 //! several of those conversions for us, so they are done here and tested.
 
+use std::collections::HashMap;
+
 use serde::Deserialize;
 use serde::de::IgnoredAny;
 
 use super::{
-    Author, Check, CheckRun, Conclusion, ContextState, Mergeable, Pr, PrState, ReviewDecision,
-    RunStatus, StatusContext,
+    Author, Check, CheckRun, Conclusion, ContextState, Mergeable, Pr, PrState, PrStatus,
+    ReviewDecision, RunStatus, StatusContext,
 };
 
 /// The most nodes GitHub gives for one `first:`.
@@ -19,41 +21,31 @@ pub const MAX_PAGE: u32 = 100;
 /// `-F`, so the query is passed that way.
 pub const SEARCH_PREFIX: &str = "repo:{owner}/{repo} is:pr";
 
-/// The PRs a query finds, `$first` at a time. The query is only sent in its variables, so what a
-/// user types can't change the shape of the query.
-pub const LIST_QUERY: &str = r#"
-query($q: String!, $first: Int!, $after: String) {
-  search(query: $q, type: ISSUE_ADVANCED, first: $first, after: $after) {
-    pageInfo { hasNextPage endCursor }
+/// What changes under a row that is already listed, and so what the timed refresh asks for. Its
+/// checks are those of the last commit, as on the PR's page.
+const STATUS_FRAGMENT: &str = r#"
+fragment StatusFields on PullRequest {
+  number
+  state
+  mergeable
+  reviewDecision
+  updatedAt
+  commits(last: 1) {
     nodes {
-      ... on PullRequest {
-        number
-        title
-        state
-        mergeable
-        reviewDecision
-        updatedAt
-        url
-        author { __typename login }
-        commits(last: 1) {
-          nodes {
-            commit {
-              statusCheckRollup {
-                contexts(first: 100) {
-                  nodes {
-                    __typename
-                    ... on CheckRun {
-                      name
-                      status
-                      conclusion
-                      startedAt
-                      detailsUrl
-                      checkSuite { workflowRun { workflow { name } } }
-                    }
-                    ... on StatusContext { context state createdAt targetUrl }
-                  }
-                }
+      commit {
+        statusCheckRollup {
+          contexts(first: 100) {
+            nodes {
+              __typename
+              ... on CheckRun {
+                name
+                status
+                conclusion
+                startedAt
+                detailsUrl
+                checkSuite { workflowRun { workflow { name } } }
               }
+              ... on StatusContext { context state createdAt targetUrl }
             }
           }
         }
@@ -62,6 +54,86 @@ query($q: String!, $first: Int!, $after: String) {
   }
 }
 "#;
+
+/// What the table lists: the status, and what doesn't change.
+const LIST_FRAGMENT: &str = r#"
+fragment ListFields on PullRequest {
+  ...StatusFields
+  title
+  url
+  author { __typename login }
+}
+"#;
+
+/// Which of the two sets of fields a query asks for.
+#[derive(Clone, Copy)]
+pub enum Fields {
+    /// [`Status`]: just the status.
+    Status,
+    /// [`GqlPr`]: everything the table lists.
+    List,
+}
+
+impl Fields {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Status => "StatusFields",
+            Self::List => "ListFields",
+        }
+    }
+
+    /// The fragments that the fields are made of, to follow a query that spreads them.
+    fn fragments(self) -> String {
+        match self {
+            Self::Status => STATUS_FRAGMENT.to_string(),
+            Self::List => format!("{LIST_FRAGMENT}{STATUS_FRAGMENT}"),
+        }
+    }
+}
+
+/// A search for the PRs `$q` finds, `$first` at a time. The user's query is only ever sent in a
+/// variable, so what is typed can't change the shape of the query.
+pub fn search_query(fields: Fields) -> String {
+    format!(
+        "query($q: String!, $first: Int!, $after: String) {{
+  search(query: $q, type: ISSUE_ADVANCED, first: $first, after: $after) {{
+    pageInfo {{ hasNextPage endCursor }}
+    nodes {{ ...{} }}
+  }}
+}}
+{}",
+        fields.name(),
+        fields.fragments()
+    )
+}
+
+/// The key of a PR in the answer to [`lookup_query`].
+fn alias(number: u64) -> String {
+    format!("pr{number}")
+}
+
+/// A query for these PRs by number, all in one request. The numbers are written into the query,
+/// which is safe as they are numbers. The repository is in the variables `$owner` and `$name`.
+pub fn lookup_query(numbers: &[u64], fields: Fields) -> String {
+    let lookups: String = numbers
+        .iter()
+        .map(|&number| {
+            format!(
+                "    {}: pullRequest(number: {number}) {{ ...{} }}\n",
+                alias(number),
+                fields.name()
+            )
+        })
+        .collect();
+    format!(
+        "query($owner: String!, $name: String!) {{
+  repository(owner: $owner, name: $name) {{
+{lookups}  }}
+}}
+{}",
+        fields.fragments()
+    )
+}
 
 /// The search string for a user's `query`.
 pub fn search_string(query: &str) -> String {
@@ -74,15 +146,15 @@ pub struct Response<T> {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct SearchData {
-    pub search: Search,
+pub struct SearchData<T> {
+    pub search: Search<T>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Search {
+pub struct Search<T> {
     pub page_info: PageInfo,
-    pub nodes: Vec<Node>,
+    pub nodes: Vec<Node<T>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,25 +167,46 @@ pub struct PageInfo {
 /// A search result. Only PRs are asked for fields, so anything else comes back as `{}`.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
-pub enum Node {
-    Pr(Box<GqlPr>),
+pub enum Node<T> {
+    Pr(Box<T>),
     Other(IgnoredAny),
 }
 
+/// The answer to [`lookup_query`]: each PR under its alias, or `null` for one that wasn't found.
+#[derive(Debug, Deserialize)]
+pub struct LookupData<T> {
+    pub repository: HashMap<String, Option<T>>,
+}
+
+impl<T> LookupData<T> {
+    /// The PR with this number, if the answer has it.
+    pub fn take(&mut self, number: u64) -> Option<T> {
+        self.repository.remove(&alias(number)).flatten()
+    }
+}
+
+/// What a refresh brings for a PR.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GqlPr {
+pub struct GqlStatus {
     number: u64,
-    title: String,
     state: PrState,
     mergeable: Mergeable,
     /// `null` when no review is required, where `gh` gave `""`.
     review_decision: Option<ReviewDecision>,
     updated_at: String,
+    commits: Commits,
+}
+
+/// A PR as the table lists it.
+#[derive(Debug, Deserialize)]
+pub struct GqlPr {
+    #[serde(flatten)]
+    status: GqlStatus,
+    title: String,
     url: String,
     /// `null` for an account that has been deleted.
     author: Option<GqlActor>,
-    commits: Commits,
 }
 
 #[derive(Debug, Deserialize)]
@@ -236,9 +329,9 @@ impl From<GqlCheck> for Check {
     }
 }
 
-impl From<GqlPr> for Pr {
-    fn from(pr: GqlPr) -> Self {
-        let checks = pr
+impl From<GqlStatus> for PrStatus {
+    fn from(status: GqlStatus) -> Self {
+        let checks = status
             .commits
             .nodes
             .into_iter()
@@ -246,15 +339,29 @@ impl From<GqlPr> for Pr {
             .and_then(|node| node.commit.status_check_rollup)
             .map(|rollup| rollup.contexts.nodes)
             .unwrap_or_default();
-        Pr {
-            number: pr.number,
-            title: pr.title,
-            state: pr.state,
+        PrStatus {
+            number: status.number,
+            state: status.state,
             status_check_rollup: checks.into_iter().map(Check::from).collect(),
-            mergeable: pr.mergeable,
-            review_decision: pr.review_decision.unwrap_or(ReviewDecision::Other),
+            mergeable: status.mergeable,
+            review_decision: status.review_decision.unwrap_or(ReviewDecision::Other),
+            updated_at: status.updated_at,
+        }
+    }
+}
+
+impl From<GqlPr> for Pr {
+    fn from(pr: GqlPr) -> Self {
+        let status = PrStatus::from(pr.status);
+        Pr {
+            number: status.number,
+            title: pr.title,
+            state: status.state,
+            status_check_rollup: status.status_check_rollup,
+            mergeable: status.mergeable,
+            review_decision: status.review_decision,
             url: pr.url,
-            updated_at: pr.updated_at,
+            updated_at: status.updated_at,
             author: Author {
                 login: login(pr.author),
             },
@@ -262,13 +369,16 @@ impl From<GqlPr> for Pr {
     }
 }
 
-impl Search {
+impl<T> Search<T> {
     /// The PRs of this page, leaving out anything that isn't one.
-    pub fn prs(self) -> impl Iterator<Item = Pr> {
-        self.nodes.into_iter().filter_map(|node| match node {
-            Node::Pr(pr) => Some(Pr::from(*pr)),
-            Node::Other(_) => None,
-        })
+    pub fn prs(self) -> Vec<T> {
+        self.nodes
+            .into_iter()
+            .filter_map(|node| match node {
+                Node::Pr(pr) => Some(*pr),
+                Node::Other(_) => None,
+            })
+            .collect()
     }
 }
 
@@ -372,11 +482,19 @@ mod tests {
       }}
     }"#;
 
-    fn page() -> Search {
-        serde_json::from_str::<Response<SearchData>>(PAGE)
+    fn page_of<T: serde::de::DeserializeOwned>() -> Search<T> {
+        serde_json::from_str::<Response<SearchData<T>>>(PAGE)
             .unwrap()
             .data
             .search
+    }
+
+    fn page() -> Search<GqlPr> {
+        page_of()
+    }
+
+    fn prs() -> Vec<Pr> {
+        page().prs().into_iter().map(Pr::from).collect()
     }
 
     #[test]
@@ -384,13 +502,17 @@ mod tests {
         let search = page();
         assert!(search.page_info.has_next_page);
         assert_eq!(search.page_info.end_cursor.as_deref(), Some("abc"));
-        let numbers: Vec<u64> = search.prs().map(|pr| pr.number).collect();
+        let numbers: Vec<u64> = search
+            .prs()
+            .into_iter()
+            .map(|pr| Pr::from(pr).number)
+            .collect();
         assert_eq!(numbers, [12, 13, 14]);
     }
 
     #[test]
     fn a_bot_login_has_the_app_prefix_and_a_deleted_account_is_ghost() {
-        let prs: Vec<Pr> = page().prs().collect();
+        let prs = prs();
         assert_eq!(prs[0].author.login, "app/renovate");
         assert_eq!(prs[1].author.login, "alice");
         assert_eq!(prs[2].author.login, "ghost");
@@ -398,7 +520,7 @@ mod tests {
 
     #[test]
     fn checks_get_the_workflow_name_and_the_status_start_that_gh_gave() {
-        let prs: Vec<Pr> = page().prs().collect();
+        let prs = prs();
         let checks = &prs[0].status_check_rollup;
         assert_eq!(checks.len(), 4);
         assert!(matches!(
@@ -426,14 +548,14 @@ mod tests {
 
     #[test]
     fn no_checks_or_no_commit_means_an_empty_rollup() {
-        let prs: Vec<Pr> = page().prs().collect();
+        let prs = prs();
         assert!(prs[1].status_check_rollup.is_empty());
         assert!(prs[2].status_check_rollup.is_empty());
     }
 
     #[test]
     fn a_missing_review_decision_is_what_an_empty_string_was() {
-        let prs: Vec<Pr> = page().prs().collect();
+        let prs = prs();
         assert_eq!(prs[0].review_decision, ReviewDecision::Other);
         assert_eq!(prs[1].review_decision, ReviewDecision::Other);
         assert_eq!(prs[2].review_decision, ReviewDecision::Approved);
@@ -465,5 +587,77 @@ mod tests {
         // JSON with no errors in it is not an error response.
         assert_eq!(error_message(r#"{"data":null}"#), r#"{"data":null}"#);
         assert_eq!(error_message(""), "");
+    }
+
+    #[test]
+    fn a_status_search_gives_the_fields_a_refresh_brings() {
+        let search: Search<GqlStatus> = page_of();
+        let statuses: Vec<PrStatus> = search.prs().into_iter().map(PrStatus::from).collect();
+        assert_eq!(statuses.len(), 3);
+        assert_eq!(statuses[0].number, 12);
+        assert_eq!(statuses[0].status_check_rollup.len(), 4);
+        assert_eq!(statuses[0].review_decision, ReviewDecision::Other);
+        assert_eq!(statuses[1].state, PrState::Merged);
+        assert_eq!(statuses[2].mergeable, Mergeable::Conflicting);
+        assert_eq!(statuses[2].updated_at, "2026-01-02T03:04:08Z");
+    }
+
+    #[test]
+    fn a_status_and_a_listed_pr_have_the_same_checks() {
+        let status: Vec<PrStatus> = page_of::<GqlStatus>()
+            .prs()
+            .into_iter()
+            .map(PrStatus::from)
+            .collect();
+        let listed = prs();
+        for (status, pr) in status.iter().zip(&listed) {
+            assert_eq!(status.number, pr.number);
+            assert_eq!(
+                format!("{:?}", status.status_check_rollup),
+                format!("{:?}", pr.status_check_rollup)
+            );
+        }
+    }
+
+    #[test]
+    fn every_query_defines_the_fragments_it_uses_and_no_others() {
+        // GitHub refuses a query with a fragment it doesn't spread, or spreads and doesn't define.
+        for fields in [Fields::Status, Fields::List] {
+            for query in [search_query(fields), lookup_query(&[1, 2], fields)] {
+                assert!(query.starts_with("query"));
+                assert!(query.contains(&format!("...{}", fields.name())));
+                assert!(query.contains("fragment StatusFields on PullRequest"));
+                let list = query.contains("fragment ListFields on PullRequest");
+                assert_eq!(list, matches!(fields, Fields::List), "{query}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_lookup_asks_for_each_number_under_its_own_alias() {
+        let query = lookup_query(&[12, 7], Fields::Status);
+        assert!(query.contains("pr12: pullRequest(number: 12) { ...StatusFields }"));
+        assert!(query.contains("pr7: pullRequest(number: 7) { ...StatusFields }"));
+        assert!(query.contains("repository(owner: $owner, name: $name)"));
+        // The user's search text is never part of a query, only of its variables.
+        assert!(!search_query(Fields::List).contains("repo:"));
+    }
+
+    #[test]
+    fn a_lookup_answer_gives_each_pr_it_has_and_skips_a_null() {
+        let json = r#"{"data": {"repository": {
+          "pr12": {"number": 12, "state": "OPEN", "mergeable": "MERGEABLE",
+                   "reviewDecision": null, "updatedAt": "2026-01-02T03:04:06Z",
+                   "commits": {"nodes": []}},
+          "pr7": null
+        }}}"#;
+        let mut data = serde_json::from_str::<Response<LookupData<GqlStatus>>>(json)
+            .unwrap()
+            .data;
+        assert!(data.take(7).is_none());
+        assert!(data.take(99).is_none());
+        let status = PrStatus::from(data.take(12).unwrap());
+        assert_eq!(status.number, 12);
+        assert!(status.status_check_rollup.is_empty());
     }
 }

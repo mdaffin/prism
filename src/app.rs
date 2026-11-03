@@ -11,7 +11,7 @@ use tui_input::Input;
 use crate::batch::{
     Batch, BatchItem, Choice, Confirm, ConfirmPr, ItemStatus, Summary, auto_merge, finished_status,
 };
-use crate::gh::{GhError, Pr, PrDetails, PrState, PrStatus, StatusUpdate};
+use crate::gh::{Pr, PrDetails, PrState, PrStatus, StatusUpdate};
 use crate::history::History;
 use crate::model::{self, CheckState, Checks, one_line};
 
@@ -203,14 +203,7 @@ pub enum Typing {
     Columns,
 }
 
-/// What to keep of a failed fetch: for a `gh` command, what `gh` said, without the command. The
-/// panes show its first line; the rest is there for a view of the whole message.
-pub(super) fn failure_text(error: &color_eyre::Report) -> String {
-    match error.downcast_ref::<GhError>() {
-        Some(gh) => gh.output.clone(),
-        None => error.to_string(),
-    }
-}
+pub(super) use crate::gh::failure_text;
 
 /// What `o` opens for the highlighted item of a pane.
 pub enum Page {
