@@ -8,8 +8,8 @@ use serde::Deserialize;
 use serde::de::IgnoredAny;
 
 use super::{
-    Author, Check, CheckRun, Comment, Conclusion, ContextState, Mergeable, Pr, PrDetails, PrState,
-    PrStatus, ReviewDecision, RunStatus, StatusContext,
+    Author, Check, CheckRun, Comment, CommentKind, Conclusion, ContextState, Mergeable, Pr,
+    PrDetails, PrState, PrStatus, Reply, ReviewDecision, RunStatus, StatusContext, Thread, Verdict,
 };
 
 /// The most nodes GitHub gives for one `first:`.
@@ -382,10 +382,13 @@ impl<T> Search<T> {
     }
 }
 
-/// The details of one PR: its first `$after`-onwards page of comments, and the PR's own fields,
-/// which every page repeats. The repository is in `$owner` and `$name`.
+/// The details of one PR: a page of its comments, from `$after` on, and the PR's own fields, which
+/// every page repeats. The reviews and review threads, up to 100 of each and 100 comments in a
+/// thread, come with the first page only (`$withReviews`), as they have no paging here. The
+/// inline comments are taken from the threads alone: a review's own `comments` are the same ones.
+/// The repository is in `$owner` and `$name`.
 pub const DETAILS_QUERY: &str = r#"
-query($owner: String!, $name: String!, $number: Int!, $after: String) {
+query($owner: String!, $name: String!, $number: Int!, $after: String, $withReviews: Boolean!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       headRefName
@@ -395,6 +398,21 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
       comments(first: 100, after: $after) {
         pageInfo { hasNextPage endCursor }
         nodes { author { __typename login } createdAt body url }
+      }
+      reviews(first: 100) @include(if: $withReviews) {
+        nodes { author { __typename login } state body submittedAt url }
+      }
+      reviewThreads(first: 100) @include(if: $withReviews) {
+        nodes {
+          isResolved
+          isOutdated
+          path
+          line
+          originalLine
+          comments(first: 100) {
+            nodes { author { __typename login } createdAt body url }
+          }
+        }
       }
     }
   }
@@ -420,6 +438,51 @@ struct GqlDetails {
     additions: u64,
     deletions: u64,
     comments: GqlComments,
+    /// Left out of the answer, not `null`, after the first page.
+    #[serde(default)]
+    reviews: Option<Nodes<GqlReview>>,
+    #[serde(default)]
+    review_threads: Option<Nodes<GqlThread>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Nodes<T> {
+    nodes: Vec<T>,
+}
+
+/// A review's state as GitHub gives it. `PENDING` is the viewer's own review, not yet submitted;
+/// it, or any state added later, is left out.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum ReviewState {
+    Approved,
+    ChangesRequested,
+    Commented,
+    Dismissed,
+    #[serde(other)]
+    Pending,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GqlReview {
+    author: Option<GqlActor>,
+    state: ReviewState,
+    body: String,
+    submitted_at: Option<String>,
+    url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GqlThread {
+    is_resolved: bool,
+    is_outdated: bool,
+    path: String,
+    /// `null` once the code has changed.
+    line: Option<u64>,
+    original_line: Option<u64>,
+    comments: Nodes<GqlComment>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -439,21 +502,93 @@ struct GqlComment {
     url: Option<String>,
 }
 
+/// Puts the comments in the order they were written (a review by when it was submitted, a thread
+/// by its first comment), so new activity comes last and the comments already listed keep their
+/// places. The sort is stable, so ones from the same moment stay in the order fetched.
+pub fn sort_comments(comments: &mut [Comment]) {
+    comments.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+}
+
+/// A comment's author: `None` for a deleted account, as `gh` gave it.
+fn author(actor: Option<GqlActor>) -> Option<Author> {
+    actor.map(|actor| Author {
+        login: login(Some(actor)),
+    })
+}
+
 impl From<GqlComment> for Comment {
     fn from(comment: GqlComment) -> Self {
         Comment {
-            author: comment.author.map(|actor| Author {
-                login: login(Some(actor)),
-            }),
+            author: author(comment.author),
             created_at: comment.created_at,
             body: comment.body,
             url: comment.url,
+            kind: CommentKind::Comment,
+            replies: Vec::new(),
         }
+    }
+}
+
+impl GqlReview {
+    /// The review as a comment, or `None` if it has nothing to read: one with no text is a
+    /// wrapper for the thread comments made with it, or a bare approval, which is for the
+    /// approvers. A review not yet submitted is the viewer's own draft.
+    fn into_comment(self) -> Option<Comment> {
+        let verdict = match self.state {
+            ReviewState::Approved => Verdict::Approved,
+            ReviewState::ChangesRequested => Verdict::ChangesRequested,
+            ReviewState::Commented => Verdict::Commented,
+            ReviewState::Dismissed => Verdict::Dismissed,
+            ReviewState::Pending => return None,
+        };
+        let created_at = self.submitted_at?;
+        if self.body.trim().is_empty() {
+            return None;
+        }
+        Some(Comment {
+            author: author(self.author),
+            created_at,
+            body: Some(self.body),
+            url: self.url,
+            kind: CommentKind::Review(verdict),
+            replies: Vec::new(),
+        })
+    }
+}
+
+impl GqlThread {
+    /// The thread as one comment, its first comment's, with the rest as replies, or `None` for a
+    /// thread with no comments.
+    fn into_comment(self) -> Option<Comment> {
+        let mut comments = self.comments.nodes.into_iter();
+        let first = comments.next()?;
+        let replies = comments
+            .map(|reply| Reply {
+                author: author(reply.author),
+                created_at: reply.created_at,
+                body: reply.body,
+            })
+            .collect();
+        Some(Comment {
+            author: author(first.author),
+            created_at: first.created_at,
+            body: first.body,
+            url: first.url,
+            kind: CommentKind::Thread(Thread {
+                path: self.path,
+                line: self.line.or(self.original_line),
+                resolved: self.is_resolved,
+                outdated: self.is_outdated,
+            }),
+            replies,
+        })
     }
 }
 
 impl DetailsData {
     /// The details with this page of comments, and the cursor of the next page if there is one.
+    /// The first page also has the reviews and threads, which come after the comments on the PR;
+    /// the caller sorts them all by time once it has every page.
     pub fn into_page(self) -> (PrDetails, Option<String>) {
         let pr = self.repository.pull_request;
         let next = pr
@@ -461,10 +596,18 @@ impl DetailsData {
             .page_info
             .end_cursor
             .filter(|_| pr.comments.page_info.has_next_page);
+        let mut comments: Vec<Comment> = pr.comments.nodes.into_iter().map(Comment::from).collect();
+        let reviews = pr.reviews.into_iter().flat_map(|reviews| reviews.nodes);
+        comments.extend(reviews.filter_map(GqlReview::into_comment));
+        let threads = pr
+            .review_threads
+            .into_iter()
+            .flat_map(|threads| threads.nodes);
+        comments.extend(threads.filter_map(GqlThread::into_comment));
         let details = PrDetails {
             head_ref_name: pr.head_ref_name,
             body: pr.body,
-            comments: pr.comments.nodes.into_iter().map(Comment::from).collect(),
+            comments,
             additions: pr.additions,
             deletions: pr.deletions,
         };
@@ -800,5 +943,119 @@ mod tests {
             Some("next")
         );
         assert_eq!(details_page(false, "last").into_page().1, None);
+    }
+
+    /// A first page with a comment, then every kind of review and thread there is.
+    const REVIEWED: &str = r#"{"repository": {"pullRequest": {
+      "headRefName": "b", "body": "", "additions": 1, "deletions": 1,
+      "comments": {
+        "pageInfo": {"hasNextPage": false, "endCursor": null},
+        "nodes": [{"author": {"__typename": "User", "login": "alice"},
+                   "createdAt": "2026-01-02T05:00:00Z", "body": "on the PR", "url": null}]
+      },
+      "reviews": {"nodes": [
+        {"author": {"__typename": "User", "login": "bob"}, "state": "APPROVED",
+         "body": "Looks good", "submittedAt": "2026-01-02T06:00:00Z", "url": "https://r/1"},
+        {"author": {"__typename": "User", "login": "bob"}, "state": "COMMENTED",
+         "body": "", "submittedAt": "2026-01-02T01:00:00Z", "url": "https://r/2"},
+        {"author": {"__typename": "User", "login": "bob"}, "state": "APPROVED",
+         "body": "  \n", "submittedAt": "2026-01-02T01:30:00Z", "url": "https://r/3"},
+        {"author": {"__typename": "User", "login": "me"}, "state": "PENDING",
+         "body": "draft", "submittedAt": null, "url": null}
+      ]},
+      "reviewThreads": {"nodes": [
+        {"isResolved": true, "isOutdated": false, "path": "src/a.rs", "line": 12,
+         "originalLine": 10, "comments": {"nodes": [
+           {"author": {"__typename": "Bot", "login": "reviewer"},
+            "createdAt": "2026-01-02T04:00:00Z", "body": "why?", "url": "https://t/1"},
+           {"author": null, "createdAt": "2026-01-02T04:30:00Z", "body": "because",
+            "url": "https://t/2"}]}},
+        {"isResolved": false, "isOutdated": true, "path": "src/b.rs", "line": null,
+         "originalLine": 7, "comments": {"nodes": [
+           {"author": {"__typename": "User", "login": "carol"},
+            "createdAt": "2026-01-02T07:00:00Z", "body": "old", "url": "https://t/3"}]}},
+        {"isResolved": false, "isOutdated": false, "path": "src/c.rs", "line": null,
+         "originalLine": null, "comments": {"nodes": []}}
+      ]}
+    }}}"#;
+
+    #[test]
+    fn reviews_and_threads_join_the_comments_in_the_order_they_were_written() {
+        let data: DetailsData = serde_json::from_str(REVIEWED).unwrap();
+        let (mut details, _) = data.into_page();
+        sort_comments(&mut details.comments);
+        // Left out: a review with no text, whatever its state, and one not yet submitted; and a
+        // thread with no comments.
+        let summary: Vec<(&str, &str)> = details
+            .comments
+            .iter()
+            .map(|c| (c.created_at.as_str(), c.body.as_deref().unwrap()))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("2026-01-02T04:00:00Z", "why?"),
+                ("2026-01-02T05:00:00Z", "on the PR"),
+                ("2026-01-02T06:00:00Z", "Looks good"),
+                ("2026-01-02T07:00:00Z", "old"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_thread_is_its_first_comment_with_the_rest_as_replies() {
+        let data: DetailsData = serde_json::from_str(REVIEWED).unwrap();
+        let (details, _) = data.into_page();
+        let thread = details
+            .comments
+            .iter()
+            .find(|c| c.body.as_deref() == Some("why?"))
+            .unwrap();
+        assert_eq!(thread.author.as_ref().unwrap().login, "app/reviewer");
+        assert_eq!(thread.url.as_deref(), Some("https://t/1"));
+        assert_eq!(thread.replies.len(), 1);
+        assert!(thread.replies[0].author.is_none());
+        assert_eq!(thread.replies[0].body.as_deref(), Some("because"));
+        assert_eq!(
+            thread.tags(),
+            ["src/a.rs:12", "1 reply", "resolved"].map(String::from)
+        );
+    }
+
+    #[test]
+    fn an_outdated_thread_keeps_the_line_it_was_on() {
+        let data: DetailsData = serde_json::from_str(REVIEWED).unwrap();
+        let (details, _) = data.into_page();
+        let thread = details
+            .comments
+            .iter()
+            .find(|c| c.body.as_deref() == Some("old"))
+            .unwrap();
+        assert_eq!(thread.tags(), ["src/b.rs:7", "outdated"].map(String::from));
+    }
+
+    #[test]
+    fn a_review_is_headed_by_how_it_ended() {
+        let data: DetailsData = serde_json::from_str(REVIEWED).unwrap();
+        let (details, _) = data.into_page();
+        let review = details
+            .comments
+            .iter()
+            .find(|c| c.body.as_deref() == Some("Looks good"))
+            .unwrap();
+        assert_eq!(review.tags(), ["approved".to_string()]);
+        assert_eq!(review.url.as_deref(), Some("https://r/1"));
+    }
+
+    #[test]
+    fn a_later_page_has_no_reviews_or_threads_and_still_parses() {
+        // `@include(if: false)` leaves the keys out.
+        let json = r#"{"repository": {"pullRequest": {
+          "headRefName": "b", "body": null, "additions": 1, "deletions": 1,
+          "comments": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}
+        }}}"#;
+        let data: DetailsData = serde_json::from_str(json).unwrap();
+        let (details, next) = data.into_page();
+        assert!(details.comments.is_empty() && next.is_none());
     }
 }

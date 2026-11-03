@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span, Text};
 use regex::Regex;
 use unicode_width::UnicodeWidthChar;
 
-use crate::gh::{Check, Conclusion, ContextState, Mergeable, ReviewDecision, RunStatus};
+use crate::gh::{Check, Comment, Conclusion, ContextState, Mergeable, ReviewDecision, RunStatus};
 
 /// The state of a single check, or of all a PR's checks together.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,6 +253,30 @@ pub fn render_markdown(body: &str) -> Markdown {
         text: Text::from(lines),
         links,
     }
+}
+
+/// A comment's body rendered as markdown. A thread's replies follow it, each under a line saying
+/// who wrote it and when. Each body is rendered on its own, so an unclosed code fence in one can't
+/// swallow the ones after it.
+pub fn render_comment(comment: &Comment) -> Markdown {
+    let mut rendered = render_markdown(&clean_body(comment.body.as_deref()));
+    for reply in &comment.replies {
+        let author = reply.author.as_ref().map_or("ghost", |a| a.login.as_str());
+        // `2026-01-02T03:04:05Z` as `2026-01-02 03:04`.
+        let when = reply.created_at.get(..16).unwrap_or(&reply.created_at);
+        let header = format!("@{author} · {}", when.replace('T', " "));
+        let body = render_markdown(&clean_body(reply.body.as_deref()));
+        rendered.text.lines.push(Line::default());
+        rendered.links.push(Vec::new());
+        rendered.text.lines.push(Line::styled(
+            header,
+            Style::new().add_modifier(Modifier::BOLD),
+        ));
+        rendered.links.push(Vec::new());
+        rendered.text.lines.extend(body.text.lines);
+        rendered.links.extend(body.links);
+    }
+    rendered
 }
 
 /// How `tui-markdown` styles a link's label and destination.

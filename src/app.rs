@@ -636,13 +636,7 @@ impl App {
             }
             Msg::DetailsLoaded(number, _, Ok(details)) => {
                 let body = model::render_markdown(&model::clean_body(details.body.as_deref()));
-                let comment_bodies = details
-                    .comments
-                    .iter()
-                    .map(|comment| {
-                        model::render_markdown(&model::clean_body(comment.body.as_deref()))
-                    })
-                    .collect();
+                let comment_bodies = details.comments.iter().map(model::render_comment).collect();
                 self.details.insert(
                     number,
                     Fetch::Loaded(Details {

@@ -583,6 +583,43 @@ fn o_opens_the_highlighted_comment_and_falls_back_to_the_pr() {
 }
 
 #[test]
+fn o_opens_a_reviews_page_and_a_threads_first_comment() {
+    let mut app = app_with_check_pages();
+    let details = serde_json::from_value(serde_json::json!({
+        "headRefName": "branch",
+        "body": "",
+        "comments": [
+            {"createdAt": "2026-01-02T03:00:00Z", "body": "approved",
+             "url": "https://example.test/pull/1#pullrequestreview-1",
+             "kind": {"Review": "APPROVED"}},
+            {"createdAt": "2026-01-02T04:00:00Z", "body": "first",
+             "url": "https://example.test/pull/1#discussion_r1",
+             "kind": {"Thread": {"path": "a.rs", "line": 3, "resolved": false, "outdated": false}},
+             "replies": [{"createdAt": "2026-01-02T05:00:00Z", "body": "reply"}]},
+        ],
+        "additions": 1,
+        "deletions": 1,
+    }))
+    .unwrap();
+    app.details_loaded(1, Ok(details));
+    app.drawn.comment_layout = CommentLayout {
+        items: vec![(0, 1), (1, 1)],
+        viewport: 5,
+    };
+    focus(&mut app, Pane::Comments);
+    press(&mut app, "o");
+    assert_eq!(
+        app.pages_to_run(),
+        ["https://example.test/pull/1#pullrequestreview-1"]
+    );
+    press(&mut app, "jo");
+    assert_eq!(
+        app.pages_to_run(),
+        ["https://example.test/pull/1#discussion_r1"]
+    );
+}
+
+#[test]
 fn o_in_the_table_opens_only_the_highlighted_pr() {
     let mut app = app_with_rows(3);
     press(&mut app, " j");

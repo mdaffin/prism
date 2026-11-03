@@ -334,6 +334,8 @@ impl Gh {
                 Variable::Typed("owner", "{owner}".to_string()),
                 Variable::Typed("name", "{repo}".to_string()),
                 Variable::Typed("number", number.to_string()),
+                // The reviews and threads come with the first page only.
+                Variable::Typed("withReviews", details.is_none().to_string()),
             ];
             if let Some(cursor) = &after {
                 variables.push(Variable::Text("after", cursor));
@@ -351,7 +353,9 @@ impl Gh {
             }
         }
         // The loop runs at least once, and fails rather than leaving `details` empty.
-        details.ok_or_else(|| eyre!("no details were fetched"))
+        let mut details = details.ok_or_else(|| eyre!("no details were fetched"))?;
+        graphql::sort_comments(&mut details.comments);
+        Ok(details)
     }
 
     /// The PR's diff, with the ANSI colour codes gh adds. Without `--color=always` gh leaves
@@ -607,10 +611,97 @@ pub enum PrState {
 #[cfg_attr(test, serde(rename_all = "camelCase"))]
 pub struct Comment {
     pub author: Option<Author>,
+    /// When it was written; for a review, when it was submitted. The comments are in this order.
     pub created_at: String,
     pub body: Option<String>,
-    /// The comment's page in the web UI.
+    /// The comment's page in the web UI. For a thread, its first comment's.
     pub url: Option<String>,
+    #[cfg_attr(test, serde(default))]
+    pub kind: CommentKind,
+    /// The comments after the first in a thread.
+    #[cfg_attr(test, serde(default))]
+    pub replies: Vec<Reply>,
+}
+
+/// What a comment is: one on the PR itself, a review's own comment, or a review thread on a line
+/// of the diff.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[cfg_attr(test, derive(Deserialize))]
+pub enum CommentKind {
+    #[default]
+    Comment,
+    Review(Verdict),
+    Thread(Thread),
+}
+
+/// How a review ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Verdict {
+    Approved,
+    ChangesRequested,
+    Commented,
+    Dismissed,
+}
+
+/// A review thread, whose first comment is the `Comment` it is in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(test, derive(Deserialize))]
+pub struct Thread {
+    pub path: String,
+    /// The line it is on, or the one it was on if the code has changed since. `None` for a
+    /// comment on the whole file.
+    pub line: Option<u64>,
+    pub resolved: bool,
+    /// Whether the code it is on has changed since.
+    pub outdated: bool,
+}
+
+/// A comment in a thread after the first.
+#[derive(Debug)]
+#[cfg_attr(test, derive(Deserialize))]
+#[cfg_attr(test, serde(rename_all = "camelCase"))]
+pub struct Reply {
+    pub author: Option<Author>,
+    pub created_at: String,
+    pub body: Option<String>,
+}
+
+impl Comment {
+    /// What to say about the comment in its header, after who wrote it: nothing for a comment on
+    /// the PR, how a review ended, and where a thread is and how it stands.
+    pub fn tags(&self) -> Vec<String> {
+        match &self.kind {
+            CommentKind::Comment => Vec::new(),
+            CommentKind::Review(verdict) => vec![
+                match verdict {
+                    Verdict::Approved => "approved",
+                    Verdict::ChangesRequested => "changes requested",
+                    Verdict::Commented => "reviewed",
+                    Verdict::Dismissed => "dismissed review",
+                }
+                .to_string(),
+            ],
+            CommentKind::Thread(thread) => {
+                let mut tags = vec![match thread.line {
+                    Some(line) => format!("{}:{line}", thread.path),
+                    None => thread.path.clone(),
+                }];
+                match self.replies.len() {
+                    0 => {}
+                    1 => tags.push("1 reply".to_string()),
+                    n => tags.push(format!("{n} replies")),
+                }
+                if thread.resolved {
+                    tags.push("resolved".to_string());
+                }
+                if thread.outdated {
+                    tags.push("outdated".to_string());
+                }
+                tags
+            }
+        }
+    }
 }
 
 /// Who wrote a PR or a comment. A bot's login has the `app/` prefix that `author:` takes in a

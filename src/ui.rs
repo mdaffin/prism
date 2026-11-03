@@ -1243,10 +1243,11 @@ fn comment_document(
             .as_ref()
             .map_or("ghost", |a| a.login.as_str());
         let marker = if is_open { '▼' } else { '▶' };
-        let mut header = Line::from(format!(
-            "{marker} @{author} · {}",
-            model::ago(&comment.created_at, now)
-        ));
+        // Who, what it is if it isn't a plain comment, and when.
+        let mut parts = vec![format!("@{author}")];
+        parts.extend(comment.tags());
+        parts.push(model::ago(&comment.created_at, now));
+        let mut header = Line::from(format!("{marker} {}", parts.join(" · ")));
         if i == selected {
             header = header.reversed();
         }
@@ -2144,6 +2145,50 @@ mod tests {
         // And it scrolls back.
         press(&mut app, "h");
         assert!(app.scroll.description_x < at_end);
+    }
+
+    #[test]
+    fn reviews_and_threads_are_headed_by_what_they_are_and_a_thread_shows_its_replies() {
+        let mut app = app_with(vec![pr_checked(1, "MERGEABLE", vec![])]);
+        let details = serde_json::from_value(serde_json::json!({
+            "headRefName": "branch",
+            "body": "",
+            "comments": [
+                {"author": {"login": "alice"}, "createdAt": "2026-01-02T03:00:00Z", "body": "plain"},
+                {"author": {"login": "bob"}, "createdAt": "2026-01-02T04:00:00Z",
+                 "body": "Looks good", "kind": {"Review": "APPROVED"}},
+                {"author": {"login": "carol"}, "createdAt": "2026-01-02T05:00:00Z",
+                 "body": "Why this?", "kind": {"Thread": {
+                    "path": "src/main.rs", "line": 12, "resolved": true, "outdated": false}},
+                 "replies": [
+                    {"author": {"login": "dave"}, "createdAt": "2026-01-02T05:30:00Z",
+                     "body": "Because."}]},
+                {"author": {"login": "erin"}, "createdAt": "2026-01-02T06:00:00Z",
+                 "body": "Old", "kind": {"Thread": {
+                    "path": "src/lib.rs", "line": null, "resolved": false, "outdated": true}}},
+            ],
+            "additions": 1,
+            "deletions": 1,
+        }))
+        .unwrap();
+        app.details_loaded(1, Ok(details));
+        app.focus = Pane::Comments;
+        let screen = lines(&draw(&mut app, 200, 40));
+        let has = |text: &str| screen.iter().any(|line| line.contains(text));
+        assert!(has("▶ @alice · "));
+        assert!(!has("@alice · approved"));
+        assert!(has("▶ @bob · approved · "));
+        assert!(has("▶ @carol · src/main.rs:12 · 1 reply · resolved · "));
+        assert!(has("▶ @erin · src/lib.rs · outdated · "));
+        assert!(!has("Because."));
+
+        // Opening the thread shows the first comment, then each reply under who wrote it.
+        press(&mut app, "jj ");
+        let screen = lines(&draw(&mut app, 200, 40));
+        let has = |text: &str| screen.iter().any(|line| line.contains(text));
+        assert!(has("Why this?"));
+        assert!(has("@dave · 2026-01-02 05:30"));
+        assert!(has("Because."));
     }
 
     #[test]
