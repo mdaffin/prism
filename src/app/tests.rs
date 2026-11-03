@@ -2714,3 +2714,47 @@ fn all_three_boxes_take_the_word_editing_keys() {
     app.update(alt(KeyCode::Backspace));
     assert_eq!(app.columns_input.value(), "(?<a>x) ");
 }
+
+#[test]
+fn ctrl_enter_reviews_the_selection_like_ctrl_g() {
+    let open = |app: &mut App| matches!(app.mode, Mode::Confirm(_));
+    let ctrl_enter = Msg::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+    let mut with_g = app_with(vec![pr_with(
+        1,
+        "Bump",
+        "OPEN",
+        "",
+        "MERGEABLE",
+        serde_json::json!([]),
+    )]);
+    let mut with_enter = app_with(vec![pr_with(
+        1,
+        "Bump",
+        "OPEN",
+        "",
+        "MERGEABLE",
+        serde_json::json!([]),
+    )]);
+    for app in [&mut with_g, &mut with_enter] {
+        press(app, " ");
+    }
+    ctrl_g(&mut with_g);
+    with_enter.update(ctrl_enter);
+    assert!(open(&mut with_g) && open(&mut with_enter));
+    let numbers = |app: &App| match &app.mode {
+        Mode::Confirm(confirm) => confirm.prs.iter().map(|pr| pr.number).collect::<Vec<_>>(),
+        _ => unreachable!(),
+    };
+    assert_eq!(numbers(&with_g), numbers(&with_enter));
+    // A plain Enter still reviews only the highlighted PR through its own path, and is not this.
+    let mut plain = app_with(vec![pr_with(
+        1,
+        "Bump",
+        "OPEN",
+        "",
+        "MERGEABLE",
+        serde_json::json!([]),
+    )]);
+    plain.update(Msg::Key(KeyCode::Enter.into()));
+    assert!(matches!(plain.mode, Mode::Confirm(_)));
+}

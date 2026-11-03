@@ -121,6 +121,11 @@ pub const KEYS: &[KeyHelp] = &[
     key("Ctrl-O", "Open the selected PRs in the browser", None),
     key("Ctrl-G", "Review the selected PRs", None),
     key(
+        "Ctrl-Enter",
+        "Like Ctrl-G, in a terminal with the kitty keyboard protocol (kitty, WezTerm, Ghostty, iTerm2); elsewhere it is Enter",
+        None,
+    ),
+    key(
         "Ctrl-A",
         "Select every visible PR with passing checks",
         None,

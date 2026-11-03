@@ -303,7 +303,8 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('o') => self.open_selected(),
-                KeyCode::Char('g') => self.review_selected(),
+                // Ctrl-Enter reaches us only from a terminal with the kitty keyboard protocol.
+                KeyCode::Char('g') | KeyCode::Enter => self.review_selected(),
                 KeyCode::Char('a') => self.select_passing(),
                 KeyCode::Char('r') => self.refresh_list(),
                 _ => {}
