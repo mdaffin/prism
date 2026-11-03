@@ -8,8 +8,8 @@ use serde::Deserialize;
 use serde::de::IgnoredAny;
 
 use super::{
-    Author, Check, CheckRun, Conclusion, ContextState, Mergeable, Pr, PrState, PrStatus,
-    ReviewDecision, RunStatus, StatusContext,
+    Author, Check, CheckRun, Comment, Conclusion, ContextState, Mergeable, Pr, PrDetails, PrState,
+    PrStatus, ReviewDecision, RunStatus, StatusContext,
 };
 
 /// The most nodes GitHub gives for one `first:`.
@@ -382,6 +382,96 @@ impl<T> Search<T> {
     }
 }
 
+/// The details of one PR: its first `$after`-onwards page of comments, and the PR's own fields,
+/// which every page repeats. The repository is in `$owner` and `$name`.
+pub const DETAILS_QUERY: &str = r#"
+query($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      headRefName
+      body
+      additions
+      deletions
+      comments(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { author { __typename login } createdAt body url }
+      }
+    }
+  }
+}
+"#;
+
+#[derive(Debug, Deserialize)]
+pub struct DetailsData {
+    repository: DetailsRepository,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DetailsRepository {
+    pull_request: GqlDetails,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GqlDetails {
+    head_ref_name: String,
+    body: Option<String>,
+    additions: u64,
+    deletions: u64,
+    comments: GqlComments,
+}
+
+#[derive(Debug, Deserialize)]
+struct GqlComments {
+    #[serde(rename = "pageInfo")]
+    page_info: PageInfo,
+    nodes: Vec<GqlComment>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GqlComment {
+    /// `null` for an account that has been deleted, as `gh` gave it.
+    author: Option<GqlActor>,
+    created_at: String,
+    body: Option<String>,
+    url: Option<String>,
+}
+
+impl From<GqlComment> for Comment {
+    fn from(comment: GqlComment) -> Self {
+        Comment {
+            author: comment.author.map(|actor| Author {
+                login: login(Some(actor)),
+            }),
+            created_at: comment.created_at,
+            body: comment.body,
+            url: comment.url,
+        }
+    }
+}
+
+impl DetailsData {
+    /// The details with this page of comments, and the cursor of the next page if there is one.
+    pub fn into_page(self) -> (PrDetails, Option<String>) {
+        let pr = self.repository.pull_request;
+        let next = pr
+            .comments
+            .page_info
+            .end_cursor
+            .filter(|_| pr.comments.page_info.has_next_page);
+        let details = PrDetails {
+            head_ref_name: pr.head_ref_name,
+            body: pr.body,
+            comments: pr.comments.nodes.into_iter().map(Comment::from).collect(),
+            additions: pr.additions,
+            deletions: pr.deletions,
+        };
+        (details, next)
+    }
+}
+
 /// What a failed `gh api graphql` said, made short. For an error in the query or in what it
 /// asked for, `gh` prints the whole response, JSON and all, so this keeps its `errors[].message`s.
 /// Anything else, such as a failed login or no network, is already a message and is left alone.
@@ -659,5 +749,56 @@ mod tests {
         let status = PrStatus::from(data.take(12).unwrap());
         assert_eq!(status.number, 12);
         assert!(status.status_check_rollup.is_empty());
+    }
+
+    fn details_page(has_next: bool, cursor: &str) -> DetailsData {
+        let json = format!(
+            r#"{{"repository": {{"pullRequest": {{
+              "headRefName": "renovate/example-lib-2.x",
+              "body": "",
+              "additions": 3,
+              "deletions": 1,
+              "comments": {{
+                "pageInfo": {{"hasNextPage": {has_next}, "endCursor": "{cursor}"}},
+                "nodes": [
+                  {{"author": {{"__typename": "Bot", "login": "renovate"}},
+                    "createdAt": "2026-01-02T03:04:05Z", "body": "hello",
+                    "url": "https://example.test/pull/1#issuecomment-1"}},
+                  {{"author": null, "createdAt": "2026-01-02T03:04:06Z", "body": "gone",
+                    "url": null}}
+                ]
+              }}
+            }}}}}}"#
+        );
+        serde_json::from_str(&json).unwrap()
+    }
+
+    #[test]
+    fn details_have_the_comments_authors_as_gh_gave_them() {
+        let (details, _) = details_page(false, "x").into_page();
+        assert_eq!(details.head_ref_name, "renovate/example-lib-2.x");
+        assert_eq!((details.additions, details.deletions), (3, 1));
+        assert_eq!(details.comments.len(), 2);
+        assert_eq!(
+            details.comments[0].author.as_ref().unwrap().login,
+            "app/renovate"
+        );
+        assert_eq!(
+            details.comments[0].url.as_deref(),
+            Some("https://example.test/pull/1#issuecomment-1")
+        );
+        // A deleted account has no author and the comment keeps its text.
+        assert!(details.comments[1].author.is_none());
+        assert_eq!(details.comments[1].body.as_deref(), Some("gone"));
+        assert!(details.comments[1].url.is_none());
+    }
+
+    #[test]
+    fn a_page_of_comments_gives_the_cursor_of_the_next_only_when_there_is_one() {
+        assert_eq!(
+            details_page(true, "next").into_page().1.as_deref(),
+            Some("next")
+        );
+        assert_eq!(details_page(false, "last").into_page().1, None);
     }
 }

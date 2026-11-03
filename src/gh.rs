@@ -30,8 +30,8 @@ const NAMES_PER_PAGE: usize = 100;
 /// The most pages of users or of teams fetched, so at most a thousand of each.
 const MAX_NAME_PAGES: usize = 10;
 
-/// Fields requested from `gh pr view --json` for the highlighted PR.
-const DETAIL_FIELDS: &str = "headRefName,body,comments,additions,deletions";
+/// The most pages of comments fetched for a PR, so at most [`graphql::MAX_PAGE`] times this.
+const MAX_COMMENT_PAGES: usize = 20;
 
 #[derive(Clone)]
 pub struct Gh {
@@ -198,13 +198,6 @@ impl Gh {
         Ok(statuses.into_iter().map(PrStatus::from).collect())
     }
 
-    /// `gh pr view` for one PR with these `--json` fields.
-    async fn view_json<T: DeserializeOwned>(&self, number: u64, fields: &str) -> Result<T> {
-        let number = number.to_string();
-        let stdout = self.run(&["pr", "view", &number, "--json", fields]).await?;
-        Ok(serde_json::from_slice(&stdout)?)
-    }
-
     /// One PR with the same fields as the list, to refresh its row.
     pub async fn pr(&self, number: u64) -> Result<Pr> {
         let found: Vec<graphql::GqlPr> = self.lookup(&[number], graphql::Fields::List).await?;
@@ -331,8 +324,34 @@ impl Gh {
         Ok(names)
     }
 
+    /// The details of a PR, with its comments a page at a time, up to [`MAX_COMMENT_PAGES`] of
+    /// them. A PR with more has the newest left out.
     pub async fn pr_details(&self, number: u64) -> Result<PrDetails> {
-        self.view_json(number, DETAIL_FIELDS).await
+        let mut details: Option<PrDetails> = None;
+        let mut after: Option<String> = None;
+        for _ in 0..MAX_COMMENT_PAGES {
+            let mut variables = vec![
+                Variable::Typed("owner", "{owner}".to_string()),
+                Variable::Typed("name", "{repo}".to_string()),
+                Variable::Typed("number", number.to_string()),
+            ];
+            if let Some(cursor) = &after {
+                variables.push(Variable::Text("after", cursor));
+            }
+            let response: graphql::Response<graphql::DetailsData> =
+                self.graphql(graphql::DETAILS_QUERY, &variables).await?;
+            let (page, next) = response.data.into_page();
+            match &mut details {
+                Some(details) => details.comments.extend(page.comments),
+                None => details = Some(page),
+            }
+            match next {
+                Some(cursor) => after = Some(cursor),
+                None => break,
+            }
+        }
+        // The loop runs at least once, and fails rather than leaving `details` empty.
+        details.ok_or_else(|| eyre!("no details were fetched"))
     }
 
     /// The PR's diff, with the ANSI colour codes gh adds. Without `--color=always` gh leaves
@@ -564,8 +583,9 @@ pub enum ContextState {
 }
 
 /// The rest of a PR, fetched only when it is highlighted.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
+#[cfg_attr(test, derive(Deserialize))]
+#[cfg_attr(test, serde(rename_all = "camelCase"))]
 pub struct PrDetails {
     pub head_ref_name: String,
     pub body: Option<String>,
@@ -582,8 +602,9 @@ pub enum PrState {
     Merged,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
+#[cfg_attr(test, derive(Deserialize))]
+#[cfg_attr(test, serde(rename_all = "camelCase"))]
 pub struct Comment {
     pub author: Option<Author>,
     pub created_at: String,
@@ -671,17 +692,6 @@ mod tests {
       }
     ]"#;
 
-    const DETAIL_FIXTURE: &str = r#"{
-      "headRefName": "renovate/example-lib-2.x",
-      "body": null,
-      "comments": [
-        {"author": null, "createdAt": "2026-01-02T03:04:05Z", "body": "hello"},
-        {"author": {"login": "someone"}, "createdAt": "2026-01-02T03:04:06Z", "body": null}
-      ],
-      "additions": 1,
-      "deletions": 1
-    }"#;
-
     #[test]
     fn parses_pr_list() {
         let prs: Vec<Pr> = serde_json::from_str(LIST_FIXTURE).unwrap();
@@ -745,14 +755,6 @@ mod tests {
         assert!(pr.status_check_rollup.is_empty());
         // The title isn't part of a refresh.
         assert_eq!(pr.title, "ABC-1: Update example-lib to v2");
-    }
-
-    #[test]
-    fn parses_pr_details() {
-        let details: PrDetails = serde_json::from_str(DETAIL_FIXTURE).unwrap();
-        assert!(details.body.is_none());
-        assert!(details.comments[0].author.is_none());
-        assert!(details.comments[1].body.is_none());
     }
 
     #[tokio::test]
