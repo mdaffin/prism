@@ -23,6 +23,12 @@ const STATUS_FIELDS: &str = "number,state,statusCheckRollup,mergeable,reviewDeci
 /// The most PRs a refresh looks up one by one because the list no longer returns them.
 const MAX_MISSING_LOOKUPS: usize = 10;
 
+/// The branches asked for at a time. This is the most GitHub gives.
+const BRANCHES_PER_PAGE: usize = 100;
+
+/// The most pages of branches fetched.
+const MAX_BRANCH_PAGES: usize = 5;
+
 /// Fields requested from `gh pr view --json` for the highlighted PR.
 const DETAIL_FIELDS: &str = "headRefName,body,comments,additions,deletions";
 
@@ -161,6 +167,40 @@ impl Gh {
         }
     }
 
+    /// The names of the repository's labels, for completing `label:`.
+    pub async fn labels(&self) -> Result<Vec<String>> {
+        #[derive(Deserialize)]
+        struct Label {
+            name: String,
+        }
+        let stdout = self
+            .run(&["label", "list", "--json", "name", "--limit", "1000"])
+            .await?;
+        let labels: Vec<Label> = serde_json::from_slice(&stdout)?;
+        Ok(labels.into_iter().map(|label| label.name).collect())
+    }
+
+    /// The names of the repository's branches, for completing `base:` and `head:`, up to
+    /// [`MAX_BRANCH_PAGES`] pages of [`BRANCHES_PER_PAGE`]. A repository with more has the rest
+    /// left out, which only means fewer suggestions.
+    pub async fn branches(&self) -> Result<Vec<String>> {
+        let mut branches = Vec::new();
+        for page in 1..=MAX_BRANCH_PAGES {
+            let path = format!(
+                "repos/{{owner}}/{{repo}}/branches?per_page={BRANCHES_PER_PAGE}&page={page}"
+            );
+            let stdout = self
+                .exec_in(&["api", &path, "--jq", ".[].name"], true, true)
+                .await?;
+            let before = branches.len();
+            branches.extend(String::from_utf8_lossy(&stdout).lines().map(str::to_string));
+            if branches.len() - before < BRANCHES_PER_PAGE {
+                break;
+            }
+        }
+        Ok(branches)
+    }
+
     pub async fn pr_details(&self, number: u64) -> Result<PrDetails> {
         self.view_json(number, DETAIL_FIELDS).await
     }
@@ -184,11 +224,22 @@ impl Gh {
     /// killed if the caller stops waiting. Actions leave it off: stopping one halfway could leave
     /// a PR approved but not merged, or the reverse, with nothing to show for it.
     async fn exec(&self, args: &[&str], kill_on_drop: bool) -> Result<Vec<u8>> {
+        self.exec_in(args, kill_on_drop, false).await
+    }
+
+    /// `gh api` has no `--repo`, so `{owner}` and `{repo}` in its path are those of the repository
+    /// in `GH_REPO` instead, which is set when there is a `--repo`.
+    async fn exec_in(&self, args: &[&str], kill_on_drop: bool, api: bool) -> Result<Vec<u8>> {
         let mut args: Vec<&str> = args.to_vec();
+        let mut command = Command::new("gh");
         if let Some(repo) = &self.repo {
-            args.extend(["--repo", repo]);
+            if api {
+                command.env("GH_REPO", repo);
+            } else {
+                args.extend(["--repo", repo]);
+            }
         }
-        let output = Command::new("gh")
+        let output = command
             .args(&args)
             .stdin(Stdio::null())
             .kill_on_drop(kill_on_drop)

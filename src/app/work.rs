@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use ratatui::text::Text;
 
-use super::{App, Mode, RefreshId};
+use super::{App, Mode, RefreshId, Typing};
 use crate::batch::{ItemStatus, auto_merge};
 use crate::gh::{PrDetails, PrState};
 use crate::model::Markdown;
@@ -101,6 +101,64 @@ pub(super) fn is_current<T>(fetches: &HashMap<u64, Fetch<T>>, number: u64, id: F
 /// Drops the failed fetches, so they are tried again.
 pub(super) fn forget_failed<T>(fetches: &mut HashMap<u64, Fetch<T>>) {
     fetches.retain(|_, fetch| !matches!(fetch, Fetch::Failed(_)));
+}
+
+/// The labels and branches the repository has, fetched when the search box is first opened to
+/// complete `label:`, `base:` and `head:`. `None` until asked for.
+#[derive(Default)]
+pub struct RepoNames {
+    pub(super) labels: Option<Fetch<Vec<String>>>,
+    pub(super) branches: Option<Fetch<Vec<String>>>,
+}
+
+/// The names fetches that [`App::names_to_fetch`] started, with their ids.
+#[derive(Default, Debug, PartialEq)]
+pub struct NamesToFetch {
+    pub labels: Option<FetchId>,
+    pub branches: Option<FetchId>,
+}
+
+impl RepoNames {
+    /// The labels fetched, or none while they load or if that failed.
+    pub fn labels(&self) -> &[String] {
+        loaded(&self.labels)
+    }
+
+    /// The branches fetched, or none while they load or if that failed.
+    pub fn branches(&self) -> &[String] {
+        loaded(&self.branches)
+    }
+
+    /// Drops a failed fetch, so that it is tried again the next time the box is opened.
+    pub(super) fn forget_failed(&mut self) {
+        for fetch in [&mut self.labels, &mut self.branches] {
+            if matches!(fetch, Some(Fetch::Failed(_))) {
+                *fetch = None;
+            }
+        }
+    }
+}
+
+fn loaded(fetch: &Option<Fetch<Vec<String>>>) -> &[String] {
+    match fetch {
+        Some(Fetch::Loaded(names)) => names,
+        _ => &[],
+    }
+}
+
+/// Takes a result into `fetch` if it is the one it waits for, and drops it otherwise.
+pub(super) fn names_loaded(
+    fetch: &mut Option<Fetch<Vec<String>>>,
+    id: FetchId,
+    result: color_eyre::Result<Vec<String>>,
+) {
+    if !matches!(fetch, Some(Fetch::Loading(current)) if *current == id) {
+        return;
+    }
+    *fetch = Some(match result {
+        Ok(names) => Fetch::Loaded(names),
+        Err(e) => Fetch::Failed(super::failure_text(&e)),
+    });
 }
 
 /// A timed status refresh for the caller to start.
@@ -241,6 +299,26 @@ impl App {
             query: self.list.shown_query.clone(),
             candidates,
         })
+    }
+
+    /// The labels and branches to fetch now, if the search box is open and they haven't been
+    /// asked for. Marks them as loading, so the caller must start the fetches.
+    pub fn names_to_fetch(&mut self) -> NamesToFetch {
+        let mut started = NamesToFetch::default();
+        if self.typing != Typing::Search {
+            return started;
+        }
+        for (fetch, id) in [
+            (&mut self.names.labels, &mut started.labels),
+            (&mut self.names.branches, &mut started.branches),
+        ] {
+            if fetch.is_none() {
+                self.next_fetch_id += 1;
+                *fetch = Some(Fetch::Loading(self.next_fetch_id));
+                *id = Some(self.next_fetch_id);
+            }
+        }
+        started
     }
 
     /// PRs whose details haven't been requested yet, as many as there are free fetch slots, with

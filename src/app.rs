@@ -20,8 +20,8 @@ mod panes;
 mod work;
 
 pub use panes::{ChecksLayout, CommentLayout, Drawn, Pane, Scroll, to_u16};
-pub use work::{Details, Diff, Fetch, FetchId};
-use work::{forget_failed, is_current};
+pub use work::{Details, Diff, Fetch, FetchId, RepoNames};
+use work::{forget_failed, is_current, names_loaded};
 
 /// The most failed row refreshes, and the most failed opens, to list above the status bar.
 const MAX_LISTED_ERRORS: usize = 3;
@@ -90,7 +90,9 @@ pub struct App {
     pub details: HashMap<u64, Fetch<Details>>,
     /// Diffs by PR number. An entry is added when its fetch starts, so a PR is fetched once.
     pub diffs: HashMap<u64, Fetch<Diff>>,
-    /// The id of the latest details or diff fetch started: see [`FetchId`].
+    /// The labels and branches for completing the search query.
+    pub names: RepoNames,
+    /// The id of the latest details, diff or names fetch started: see [`FetchId`].
     next_fetch_id: FetchId,
     /// Rows to fetch again after a batch, so they show their new state without replacing the
     /// list.
@@ -194,7 +196,7 @@ pub enum Typing {
 
 /// What to keep of a failed fetch: for a `gh` command, what `gh` said, without the command. The
 /// panes show its first line; the rest is there for a view of the whole message.
-fn failure_text(error: &color_eyre::Report) -> String {
+pub(super) fn failure_text(error: &color_eyre::Report) -> String {
     match error.downcast_ref::<GhError>() {
         Some(gh) => gh.output.clone(),
         None => error.to_string(),
@@ -323,6 +325,10 @@ pub enum Msg {
     DetailsLoaded(u64, FetchId, Result<PrDetails>),
     /// Likewise for a diff.
     DiffLoaded(u64, FetchId, Result<String>),
+    /// The repository's labels, or its branches, from the fetch with this id, dropped if it is
+    /// not the latest.
+    LabelsLoaded(FetchId, Result<Vec<String>>),
+    BranchesLoaded(FetchId, Result<Vec<String>>),
     /// The result of approving this PR, in the batch with this epoch (see
     /// [`App::batch_epoch`]). One from an earlier batch, such as a cancelled one, is dropped.
     Approved(u64, u64, Result<()>),
@@ -380,6 +386,7 @@ impl App {
             selected: HashSet::new(),
             details: HashMap::new(),
             diffs: HashMap::new(),
+            names: RepoNames::default(),
             next_fetch_id: 0,
             to_refresh: Vec::new(),
             refreshing: HashSet::new(),
@@ -582,6 +589,8 @@ impl App {
             }
             Msg::Opened(_, Ok(())) | Msg::PageOpened(Ok(())) => {}
             Msg::PrRefreshed(number, result) => self.row_refreshed(number, result),
+            Msg::LabelsLoaded(id, result) => names_loaded(&mut self.names.labels, id, result),
+            Msg::BranchesLoaded(id, result) => names_loaded(&mut self.names.branches, id, result),
             Msg::DetailsLoaded(number, id, _) if !is_current(&self.details, number, id) => {}
             Msg::DiffLoaded(number, id, _) if !is_current(&self.diffs, number, id) => {}
             Msg::DetailsLoaded(number, _, Err(e)) => {
@@ -667,6 +676,7 @@ impl App {
             // failed ones another chance.
             forget_failed(&mut self.details);
             forget_failed(&mut self.diffs);
+            self.names.forget_failed();
         }
         self.errors.clear();
         self.list.searching = false;

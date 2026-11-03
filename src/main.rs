@@ -138,6 +138,17 @@ fn start_work(
             Msg::DiffLoaded(number, id, gh.pr_diff(number).await)
         });
     }
+    let names = app.names_to_fetch();
+    if let Some(id) = names.labels {
+        spawn(gh, tx, async move |gh| {
+            Msg::LabelsLoaded(id, gh.labels().await)
+        });
+    }
+    if let Some(id) = names.branches {
+        spawn(gh, tx, async move |gh| {
+            Msg::BranchesLoaded(id, gh.branches().await)
+        });
+    }
     for number in app.refreshes_to_fetch() {
         spawn(gh, tx, async move |gh| {
             Msg::PrRefreshed(number, gh.pr(number).await)
