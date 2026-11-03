@@ -223,7 +223,11 @@ fn mode_hints(app: &App) -> Option<&'static str> {
         Mode::Running(_) => Some(keys::RUNNING_HINTS),
         Mode::Results(_) => Some(keys::RESULTS_HINTS),
         Mode::Loading | Mode::List => match app.typing {
-            Typing::Search => Some(keys::SEARCH_HINTS),
+            Typing::Search => Some(match app.completion() {
+                Some((_, Some(_))) => keys::CHOSEN_HINTS,
+                Some((_, None)) => keys::SUGGESTIONS_HINTS,
+                None => keys::SEARCH_HINTS,
+            }),
             Typing::Filter => Some(keys::FILTER_HINTS),
             Typing::Nothing => None,
         },
@@ -937,8 +941,8 @@ fn suggestions(app: &App, frame: &mut Frame, search_area: Rect, body: Rect) {
     let x = (search_area.x + 1 + before.saturating_sub(scroll) as u16)
         .min(search_area.right().saturating_sub(width));
     let area = Rect::new(x, top, width, rows as u16 + 2);
-    // Scrolled just far enough to keep the highlight in view.
-    let first = (selected + 1).saturating_sub(rows);
+    // Scrolled just far enough to keep the chosen one in view.
+    let first = selected.map_or(0, |selected| (selected + 1).saturating_sub(rows));
     let lines: Vec<Line> = completion
         .suggestions
         .iter()
@@ -947,7 +951,11 @@ fn suggestions(app: &App, frame: &mut Frame, search_area: Rect, body: Rect) {
         .take(rows)
         .map(|(i, suggestion)| {
             let line = Line::from(format!(" {suggestion} "));
-            if i == selected { line.reversed() } else { line }
+            if Some(i) == selected {
+                line.reversed()
+            } else {
+                line
+            }
         })
         .collect();
     frame.render_widget(Clear, area);
@@ -2471,7 +2479,7 @@ mod tests {
     }
 
     #[test]
-    fn the_suggestions_are_listed_under_the_word_with_the_highlight_reversed() {
+    fn the_suggestions_are_listed_under_the_word_with_the_chosen_one_reversed() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "/ la");
         let buffer = draw(&mut app, 200, 40);
@@ -2480,12 +2488,22 @@ mod tests {
         // Inside the box's border, which starts under the word: "is:pr " is six columns.
         assert_eq!(label.y, search.bottom() + 1);
         assert_eq!(label.x, search.x + 1 + 6 + 1);
-        assert!(buffer[label].modifier.contains(Modifier::REVERSED));
         let language = find(&buffer, " language ").unwrap();
         assert_eq!(language.y, label.y + 1);
+        // Nothing is chosen to begin with, and the hints say Enter searches.
+        assert!(!buffer[label].modifier.contains(Modifier::REVERSED));
         assert!(!buffer[language].modifier.contains(Modifier::REVERSED));
+        let status = lines(&buffer).pop().unwrap();
+        assert!(status.contains("Enter: Search | Tab/Up/Down: Choose"));
 
-        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Tab);
+        let buffer = draw(&mut app, 200, 40);
+        assert!(buffer[label].modifier.contains(Modifier::REVERSED));
+        assert!(!buffer[language].modifier.contains(Modifier::REVERSED));
+        // Now the hints say Enter takes it.
+        assert!(lines(&buffer).pop().unwrap().contains("Enter: Take"));
+
+        key(&mut app, KeyCode::Tab);
         let buffer = draw(&mut app, 200, 40);
         assert!(!buffer[label].modifier.contains(Modifier::REVERSED));
         assert!(buffer[language].modifier.contains(Modifier::REVERSED));

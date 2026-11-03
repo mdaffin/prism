@@ -2147,40 +2147,9 @@ fn no_suggestions_until_the_query_has_been_changed() {
 }
 
 #[test]
-fn tab_accepts_the_highlighted_suggestion_and_goes_on_to_its_values() {
-    let mut app = app_completing(" la");
-    assert_eq!(suggestions(&app), ["label", "language"]);
-    key(&mut app, KeyCode::Tab);
-    assert_eq!(app.query.value(), "is:pr label:");
-    assert_eq!(app.query.cursor(), 12);
-    // The labels the repository has, sorted.
-    assert_eq!(suggestions(&app), ["bug", "deps"]);
-    key(&mut app, KeyCode::Down);
-    key(&mut app, KeyCode::Tab);
-    assert_eq!(app.query.value(), "is:pr label:deps ");
-    assert!(app.completion().is_none());
-}
-
-#[test]
 fn authors_come_from_the_rows_listed() {
     let app = app_completing(" author:");
     assert_eq!(suggestions(&app), ["alice"]);
-}
-
-#[test]
-fn up_and_down_move_in_the_suggestions_round_the_ends() {
-    let mut app = app_completing(" la");
-    let selected = |app: &App| app.completion().unwrap().1;
-    key(&mut app, KeyCode::Down);
-    assert_eq!(selected(&app), 1);
-    key(&mut app, KeyCode::Down);
-    assert_eq!(selected(&app), 0);
-    key(&mut app, KeyCode::Up);
-    assert_eq!(selected(&app), 1);
-    // The text is as it was, and a key that changes it starts the highlight again.
-    assert_eq!(app.query.value(), "is:pr la");
-    press(&mut app, "n");
-    assert_eq!(selected(&app), 0);
 }
 
 #[test]
@@ -2231,16 +2200,6 @@ fn esc_closes_the_list_before_it_cancels_the_edit() {
 }
 
 #[test]
-fn enter_searches_the_text_as_it_is_with_the_list_open() {
-    let mut app = app_completing(" la");
-    key(&mut app, KeyCode::Down);
-    key(&mut app, KeyCode::Enter);
-    assert!(app.typing != Typing::Search);
-    let (_, query) = app.list_to_fetch().unwrap();
-    assert_eq!(query, "is:pr la");
-}
-
-#[test]
 fn tab_with_no_suggestions_does_nothing_to_the_query() {
     let mut app = app_completing(" zzz");
     key(&mut app, KeyCode::Tab);
@@ -2275,4 +2234,77 @@ fn users_and_teams_are_fetched_when_a_qualifier_that_uses_them_is_typed() {
     key(&mut app, KeyCode::Esc);
     press(&mut app, " review-requested:");
     assert_eq!(suggestions(&app), ["alice", "bob"]);
+}
+
+#[test]
+fn the_list_opens_with_nothing_chosen_and_enter_still_searches() {
+    let mut app = app_completing(" la");
+    assert_eq!(suggestions(&app), ["label", "language"]);
+    assert_eq!(app.completion().unwrap().1, None);
+    key(&mut app, KeyCode::Enter);
+    assert!(app.typing != Typing::Search);
+    let (_, query) = app.list_to_fetch().unwrap();
+    assert_eq!(query, "is:pr la");
+}
+
+#[test]
+fn tab_and_down_choose_the_first_suggestion_then_the_next_round_the_ends() {
+    let chosen = |app: &App| app.completion().unwrap().1;
+    for next in [KeyCode::Tab, KeyCode::Down] {
+        let mut app = app_completing(" la");
+        key(&mut app, next);
+        assert_eq!(chosen(&app), Some(0));
+        key(&mut app, next);
+        assert_eq!(chosen(&app), Some(1));
+        key(&mut app, next);
+        assert_eq!(chosen(&app), Some(0));
+        // Choosing doesn't change the text.
+        assert_eq!(app.query.value(), "is:pr la");
+    }
+}
+
+#[test]
+fn shift_tab_and_up_choose_the_first_suggestion_then_the_previous_round_the_ends() {
+    let chosen = |app: &App| app.completion().unwrap().1;
+    for previous in [KeyCode::BackTab, KeyCode::Up] {
+        let mut app = app_completing(" la");
+        key(&mut app, previous);
+        assert_eq!(chosen(&app), Some(0));
+        key(&mut app, previous);
+        assert_eq!(chosen(&app), Some(1));
+        key(&mut app, KeyCode::Tab);
+        assert_eq!(chosen(&app), Some(0));
+    }
+}
+
+#[test]
+fn a_key_that_changes_the_text_takes_the_choice_back() {
+    let mut app = app_completing(" la");
+    key(&mut app, KeyCode::Tab);
+    assert_eq!(app.completion().unwrap().1, Some(0));
+    press(&mut app, "n");
+    assert_eq!(app.completion().unwrap().1, None);
+}
+
+#[test]
+fn enter_takes_the_chosen_suggestion_and_does_not_search() {
+    let mut app = app_completing(" la");
+    key(&mut app, KeyCode::Tab);
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.query.value(), "is:pr label:");
+    assert_eq!(app.query.cursor(), 12);
+    assert!(app.typing == Typing::Search);
+    assert_eq!(app.list_to_fetch(), None);
+    // Now its values are listed, with nothing chosen, the labels the repository has sorted.
+    assert_eq!(suggestions(&app), ["bug", "deps"]);
+    assert_eq!(app.completion().unwrap().1, None);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.query.value(), "is:pr label:deps ");
+    assert!(app.completion().is_none());
+    // With nothing chosen and no list, Enter searches.
+    key(&mut app, KeyCode::Enter);
+    assert!(app.typing != Typing::Search);
+    assert_eq!(app.list_to_fetch().unwrap().1, "is:pr label:deps ");
 }

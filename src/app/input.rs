@@ -190,12 +190,15 @@ impl App {
     fn on_search_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Enter => {
-                self.typing = Typing::Nothing;
-                self.submitted_query = self.query.value().to_string();
-                self.history.record(&self.submitted_query);
-                self.list.query_to_fetch = Some(self.submitted_query.clone());
-                self.list.refresh_requested = false;
-                self.errors.clear();
+                // With a suggestion chosen, Enter takes it and does not search.
+                if !self.accept_completion() {
+                    self.typing = Typing::Nothing;
+                    self.submitted_query = self.query.value().to_string();
+                    self.history.record(&self.submitted_query);
+                    self.list.query_to_fetch = Some(self.submitted_query.clone());
+                    self.list.refresh_requested = false;
+                    self.errors.clear();
+                }
             }
             // The list of suggestions, when it is open, comes before the box in what Esc and Up and
             // Down do.
@@ -205,8 +208,9 @@ impl App {
                     self.query = Input::new(self.submitted_query.clone());
                 }
             }
-            KeyCode::Tab => {
-                self.accept_completion();
+            // Tab and Shift-Tab do what Down and Up do in the list, and nothing without one.
+            KeyCode::Tab | KeyCode::BackTab => {
+                self.move_completion(if key.code == KeyCode::Tab { 1 } else { -1 });
             }
             KeyCode::Up | KeyCode::Down => {
                 let step = if key.code == KeyCode::Up { -1 } else { 1 };

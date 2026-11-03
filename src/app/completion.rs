@@ -13,15 +13,16 @@ use crate::query::{self, Candidates, Completion};
 pub struct CompletionView {
     /// The text and the cursor this is about.
     key: (String, usize),
-    selected: usize,
+    /// The suggestion chosen, if one has been: the list opens with none.
+    selected: Option<usize>,
     dismissed: bool,
 }
 
 impl App {
-    /// The suggestions for the word at the cursor, and the one highlighted. `None` while the box
+    /// The suggestions for the word at the cursor, and the one chosen, if any. `None` while the box
     /// is not being edited, before its text has been changed (so that opening the box and then
     /// Esc is not met by a list), when nothing fits, or when the list was closed with Esc.
-    pub fn completion(&self) -> Option<(Completion, usize)> {
+    pub fn completion(&self) -> Option<(Completion, Option<usize>)> {
         if self.typing != Typing::Search || self.query.value() == self.submitted_query {
             return None;
         }
@@ -40,8 +41,8 @@ impl App {
             teams: self.names.teams(),
         };
         let completion = query::complete(&key.0, key.1, &have)?;
-        let selected = if current { view.selected } else { 0 };
-        let selected = selected.min(completion.suggestions.len() - 1);
+        let selected = view.selected.filter(|_| current);
+        let selected = selected.map(|s| s.min(completion.suggestions.len() - 1));
         Some((completion, selected))
     }
 
@@ -69,9 +70,10 @@ impl App {
         &mut self.completion_view
     }
 
-    /// Tab: puts the highlighted suggestion in the query. Returns whether there was one.
+    /// Enter: puts the suggestion that was chosen in the query, which closes the list unless what
+    /// it was followed by has suggestions of its own. Returns whether one was chosen.
     pub(super) fn accept_completion(&mut self) -> bool {
-        let Some((completion, selected)) = self.completion() else {
+        let Some((completion, Some(selected))) = self.completion() else {
             return false;
         };
         let (accepted, cursor) = completion.accept(self.query.value(), selected);
@@ -79,15 +81,19 @@ impl App {
         true
     }
 
-    /// Up and Down while the list is open: moves the highlight by `step`, round the ends.
-    /// Returns whether the list was open.
+    /// Tab and Down, or Shift-Tab and Up with `step` of -1: chooses the next suggestion, round the
+    /// ends. The first press chooses the first, whichever way it goes. Returns whether the list
+    /// was open.
     pub(super) fn move_completion(&mut self, step: isize) -> bool {
         let Some((completion, selected)) = self.completion() else {
             return false;
         };
         let count = completion.suggestions.len();
-        let moved = (selected + count).wrapping_add_signed(step) % count;
-        self.view().selected = moved;
+        let moved = match selected {
+            Some(selected) => (selected + count).wrapping_add_signed(step) % count,
+            None => 0,
+        };
+        self.view().selected = Some(moved);
         true
     }
 

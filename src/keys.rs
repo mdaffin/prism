@@ -11,7 +11,11 @@ pub const HELP_HINTS: &str = "Esc ? q: Close";
 pub const RUNNING_HINTS: &str = "q: Cancel | Ctrl-C: Quit";
 pub const RESULTS_HINTS: &str = "Enter/Esc: Close";
 /// Editing the search box.
-pub const SEARCH_HINTS: &str = "Enter: Search | Tab: Complete | Up/Down: History | Esc: Cancel";
+pub const SEARCH_HINTS: &str = "Enter: Search | Up/Down: History | Esc: Cancel";
+/// Editing the search box with suggestions listed and none chosen.
+pub const SUGGESTIONS_HINTS: &str = "Enter: Search | Tab/Up/Down: Choose | Esc: Close";
+/// Editing the search box with a suggestion chosen.
+pub const CHOSEN_HINTS: &str = "Enter: Take | Tab/Down: Next | Shift-Tab/Up: Previous | Esc: Close";
 /// Editing the filter box.
 pub const FILTER_HINTS: &str = "Enter: Keep filter | Esc: Clear filter";
 
@@ -108,10 +112,14 @@ pub const KEYS: &[KeyHelp] = &[
         Some("Quit"),
     ),
     key("Ctrl-C", "Quit from anywhere", None),
-    key("Search box: Tab", "Accept the highlighted suggestion", None),
     key(
-        "Search box: Up/Down",
-        "Move in the suggestions, or else through the queries searched before",
+        "Search box: Tab, Down",
+        "Choose the next suggestion, the first to begin with; Enter takes the chosen one",
+        None,
+    ),
+    key(
+        "Search box: Shift-Tab, Up",
+        "Choose the previous suggestion; without a list, Up goes through the queries searched before",
         None,
     ),
     pane_key(
