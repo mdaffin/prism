@@ -150,6 +150,8 @@ pub struct PaneAreas {
     pub table_header: Vec<(Rect, Sort)>,
     /// The position in `visible` of the first row drawn.
     pub table_offset: usize,
+    /// The scrollbars drawn, which a click or drag can use. Emptied at the start of each draw.
+    pub scrollbars: Vec<ScrollbarHit>,
     pub checks: Rect,
     pub approvers: Rect,
     pub comments: Rect,
@@ -526,4 +528,34 @@ impl PopupView {
         let last = self.content.saturating_sub(self.viewport);
         self.offset.saturating_add_signed(by).min(last)
     }
+}
+
+/// What a scrollbar scrolls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollTarget {
+    /// The first row of the table that is shown.
+    Table,
+    Checks,
+    Approvers,
+    Comments,
+    Description,
+    Diff,
+    /// The columns the table is scrolled sideways.
+    ListX,
+    ChecksX,
+    DiffX,
+}
+
+/// A scrollbar as drawn, for the mouse: where its track is, and the lengths it was drawn from.
+#[derive(Debug, Clone, Copy)]
+pub struct ScrollbarHit {
+    pub target: ScrollTarget,
+    /// Whether it runs down the right border, not along the bottom one.
+    pub vertical: bool,
+    /// The cells of its track.
+    pub track: Rect,
+    /// The rows or columns of content, how many fit, and the first one shown.
+    pub content: usize,
+    pub viewport: usize,
+    pub offset: usize,
 }

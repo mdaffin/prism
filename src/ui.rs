@@ -14,7 +14,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{
     self, App, ChecksLayout, CommentLayout, ConfirmOpen, Details, Failure, Fetch, Mode, Page, Pane,
-    PopupView, Typing, to_u16,
+    PopupView, ScrollTarget, ScrollbarHit, Typing, to_u16,
 };
 use crate::batch::{Batch, Confirm, ItemStatus, Summary};
 use crate::gh::{Approvers, Comment, PrState, Reviewer, Verdict};
@@ -158,6 +158,7 @@ fn pane_layout(body: Rect, approvers_rows: u16) -> PaneLayout {
 }
 
 pub fn view(app: &mut App, frame: &mut Frame) {
+    app.drawn.areas.scrollbars.clear();
     let error = app.errors.text();
     let error_rows = error
         .as_deref()
@@ -510,24 +511,32 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
                     frozen_width(&shown),
                     x,
                 );
-                hscrollbar(
+                pane_hscrollbar(
+                    app,
                     frame,
+                    ScrollTarget::ListX,
                     area,
-                    usize::from(total),
-                    usize::from(table_area.width),
-                    usize::from(x),
+                    (
+                        usize::from(total),
+                        usize::from(table_area.width),
+                        usize::from(x),
+                    ),
                 );
             } else {
                 app.list_x = 0;
                 frame.render_stateful_widget(table, table_area, &mut app.table);
             }
             // One row of the table is its header.
-            scrollbar(
+            pane_scrollbar(
+                app,
                 frame,
+                ScrollTarget::Table,
                 area,
-                app.visible.len(),
-                usize::from(table_area.height.saturating_sub(1)),
-                app.table.offset(),
+                (
+                    app.visible.len(),
+                    usize::from(table_area.height.saturating_sub(1)),
+                    app.table.offset(),
+                ),
             );
             // The header is one row.
             app.drawn.areas.table_rows = Rect {
@@ -1008,7 +1017,7 @@ fn popup_scrolled(
         height: content_area.height + 2,
         ..area
     };
-    scrollbar(frame, bar_area, rows, viewport, offset);
+    let _ = scrollbar(frame, bar_area, rows, viewport, offset);
     let view = PopupView {
         content: rows,
         viewport,
@@ -1253,38 +1262,51 @@ fn set_page(app: &mut App, pane: Pane, height: u16, kept: u16) {
 /// The furthest a pane can scroll: until its last row is at the bottom.
 /// A scrollbar down the right border of `area`, drawn only while the pane's `content` rows don't
 /// all fit in its `viewport`. `offset` is the first row shown.
-fn scrollbar(frame: &mut Frame, area: Rect, content: usize, viewport: usize, offset: usize) {
+fn scrollbar(
+    frame: &mut Frame,
+    area: Rect,
+    content: usize,
+    viewport: usize,
+    offset: usize,
+) -> Option<Rect> {
     let margin = Margin::new(0, 1);
     render_scrollbar(
         frame,
         area.inner(margin),
         ScrollbarOrientation::VerticalRight,
         (content, viewport, offset),
-    );
+    )
 }
 
 /// A scrollbar along the bottom border of `area`, drawn only while the pane's `content` columns
 /// don't all fit in its `viewport`. `offset` is the first column shown.
-fn hscrollbar(frame: &mut Frame, area: Rect, content: usize, viewport: usize, offset: usize) {
+fn hscrollbar(
+    frame: &mut Frame,
+    area: Rect,
+    content: usize,
+    viewport: usize,
+    offset: usize,
+) -> Option<Rect> {
     let margin = Margin::new(1, 0);
     render_scrollbar(
         frame,
         area.inner(margin),
         ScrollbarOrientation::HorizontalBottom,
         (content, viewport, offset),
-    );
+    )
 }
 
 /// Draws a scrollbar on the edge of `area`, which is already inside the corners of the border,
-/// for the `(content, viewport, offset)` lengths along its axis.
+/// for the `(content, viewport, offset)` lengths along its axis. Returns the cells of its track, or
+/// `None` when nothing was drawn because the content fits.
 fn render_scrollbar(
     frame: &mut Frame,
     area: Rect,
     orientation: ScrollbarOrientation,
     (content, viewport, offset): (usize, usize, usize),
-) {
-    if content <= viewport {
-        return;
+) -> Option<Rect> {
+    if content <= viewport || area.is_empty() {
+        return None;
     }
     // The position runs from 0 to the last offset, which is when the thumb reaches the end.
     let mut state = ScrollbarState::new(content - viewport + 1)
@@ -1300,6 +1322,52 @@ fn render_scrollbar(
             .track_symbol(Some(HORIZONTAL_TRACK));
     }
     frame.render_stateful_widget(bar, area, &mut state);
+    Some(if horizontal {
+        Rect::new(area.x, area.bottom() - 1, area.width, 1)
+    } else {
+        Rect::new(area.right() - 1, area.y, 1, area.height)
+    })
+}
+
+/// Draws the vertical scrollbar of the pane that `bar` is the target of, and records where it is
+/// for the mouse.
+fn pane_scrollbar(
+    app: &mut App,
+    frame: &mut Frame,
+    bar: ScrollTarget,
+    area: Rect,
+    (content, viewport, offset): (usize, usize, usize),
+) {
+    if let Some(track) = scrollbar(frame, area, content, viewport, offset) {
+        app.drawn.areas.scrollbars.push(ScrollbarHit {
+            target: bar,
+            vertical: true,
+            track,
+            content,
+            viewport,
+            offset,
+        });
+    }
+}
+
+/// Like [`pane_scrollbar`], for the horizontal one.
+fn pane_hscrollbar(
+    app: &mut App,
+    frame: &mut Frame,
+    bar: ScrollTarget,
+    area: Rect,
+    (content, viewport, offset): (usize, usize, usize),
+) {
+    if let Some(track) = hscrollbar(frame, area, content, viewport, offset) {
+        app.drawn.areas.scrollbars.push(ScrollbarHit {
+            target: bar,
+            vertical: false,
+            track,
+            content,
+            viewport,
+            offset,
+        });
+    }
 }
 
 fn max_scroll(content_rows: usize, area_rows: u16) -> u16 {
@@ -1406,8 +1474,20 @@ fn checks(app: &mut App, frame: &mut Frame, area: Rect) {
     let mut state = TableState::default().with_offset(usize::from(scroll));
     frame.render_stateful_widget(table, inner, &mut state);
     let viewport = usize::from(inner.height.saturating_sub(1));
-    scrollbar(frame, area, rows_count, viewport, usize::from(scroll));
-    hscrollbar(frame, area, widest, usize::from(names_width), x);
+    pane_scrollbar(
+        app,
+        frame,
+        ScrollTarget::Checks,
+        area,
+        (rows_count, viewport, usize::from(scroll)),
+    );
+    pane_hscrollbar(
+        app,
+        frame,
+        ScrollTarget::ChecksX,
+        area,
+        (widest, usize::from(names_width), x),
+    );
     app.drawn.checks_layout = ChecksLayout {
         count,
         first,
@@ -1469,12 +1549,12 @@ fn approvers(app: &mut App, frame: &mut Frame, area: Rect) {
         Paragraph::new(Text::from(laid.lines)).scroll((scroll, 0)),
         inner,
     );
-    scrollbar(
+    pane_scrollbar(
+        app,
         frame,
+        ScrollTarget::Approvers,
         area,
-        rows,
-        usize::from(inner.height),
-        usize::from(scroll),
+        (rows, usize::from(inner.height), usize::from(scroll)),
     );
     app.scroll.approvers = scroll;
 }
@@ -1598,12 +1678,12 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     let pane = Paragraph::new(Text::from(document));
     let scroll = app.scroll.comments.min(max_scroll(total, inner.height));
     frame.render_widget(pane.scroll((scroll, 0)), inner);
-    scrollbar(
+    pane_scrollbar(
+        app,
         frame,
+        ScrollTarget::Comments,
         area,
-        total,
-        usize::from(inner.height),
-        usize::from(scroll),
+        (total, usize::from(inner.height), usize::from(scroll)),
     );
 
     set_page(app, Pane::Comments, inner.height, 1);
@@ -1716,19 +1796,19 @@ fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
         pane = pane.wrap(Wrap { trim: false });
     }
     frame.render_widget(pane, area);
-    scrollbar(
+    pane_scrollbar(
+        app,
         frame,
+        ScrollTarget::Diff,
         area,
-        lines,
-        usize::from(inner.height),
-        usize::from(scroll),
+        (lines, usize::from(inner.height), usize::from(scroll)),
     );
-    hscrollbar(
+    pane_hscrollbar(
+        app,
         frame,
+        ScrollTarget::DiffX,
         area,
-        widest,
-        usize::from(inner.width),
-        usize::from(x),
+        (widest, usize::from(inner.width), usize::from(x)),
     );
     app.scroll.diff = scroll;
     app.scroll.diff_x = x;
@@ -1801,12 +1881,12 @@ fn description(app: &mut App, frame: &mut Frame, area: Rect) {
     // Already wrapped, so the links can be found from where they are drawn.
     let pane = Paragraph::new(Text::from(laid.lines)).scroll((scroll, 0));
     frame.render_widget(pane.block(block), area);
-    scrollbar(
+    pane_scrollbar(
+        app,
         frame,
+        ScrollTarget::Description,
         area,
-        lines,
-        usize::from(inner.height),
-        usize::from(scroll),
+        (lines, usize::from(inner.height), usize::from(scroll)),
     );
     app.scroll.description = scroll;
     app.drawn.description_links = laid.links;
@@ -2884,6 +2964,148 @@ mod tests {
         description: Position,
         diff: Position,
         comments: Position,
+    }
+
+    /// A mouse event of `kind` at `position`.
+    fn mouse(app: &mut App, kind: crossterm::event::MouseEventKind, position: Position) {
+        app.update(Msg::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column: position.x,
+            row: position.y,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        }));
+    }
+
+    fn press_at(app: &mut App, position: Position) {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        mouse(app, MouseEventKind::Down(MouseButton::Left), position);
+    }
+
+    fn drag_to(app: &mut App, position: Position) {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        mouse(app, MouseEventKind::Drag(MouseButton::Left), position);
+    }
+
+    fn release_at(app: &mut App, position: Position) {
+        use crossterm::event::{MouseButton, MouseEventKind};
+        mouse(app, MouseEventKind::Up(MouseButton::Left), position);
+    }
+
+    /// The scrollbar drawn for `target`.
+    fn bar(app: &App, target: ScrollTarget) -> ScrollbarHit {
+        *app.drawn
+            .areas
+            .scrollbars
+            .iter()
+            .find(|hit| hit.target == target)
+            .unwrap_or_else(|| panic!("no scrollbar for {target:?}"))
+    }
+
+    #[test]
+    fn a_click_on_a_vertical_track_pages_towards_it() {
+        let mut app = app_with_long_panes();
+        let hit = bar(&app, ScrollTarget::Diff);
+        assert!(hit.vertical && hit.offset == 0);
+        // Just above the bottom of the track, which is below the thumb.
+        let below = Position::new(hit.track.x, hit.track.bottom() - 1);
+        press_at(&mut app, below);
+        release_at(&mut app, below);
+        draw(&mut app, 200, 40);
+        let after = bar(&app, ScrollTarget::Diff);
+        assert_eq!(after.offset, hit.viewport, "a page down");
+        // And a click above the thumb pages back up to the start.
+        let above = Position::new(hit.track.x, hit.track.y);
+        press_at(&mut app, above);
+        release_at(&mut app, above);
+        draw(&mut app, 200, 40);
+        assert_eq!(bar(&app, ScrollTarget::Diff).offset, 0);
+        // Nothing else happened to the click: the focus stays where it was.
+        assert!(app.focus == Pane::Table);
+    }
+
+    #[test]
+    fn dragging_a_vertical_thumb_scrolls_in_proportion_even_off_the_bar() {
+        let mut app = app_with_long_panes();
+        let hit = bar(&app, ScrollTarget::Diff);
+        // Take hold of the thumb at the top of the track, and pull it to the very bottom with the
+        // pointer far to the left, off the bar.
+        press_at(&mut app, Position::new(hit.track.x, hit.track.y));
+        let off_bar = Position::new(2, hit.track.bottom() + 5);
+        drag_to(&mut app, off_bar);
+        draw(&mut app, 200, 40);
+        let end = bar(&app, ScrollTarget::Diff);
+        assert_eq!(end.offset, end.content - end.viewport, "to the end");
+        // Back to the middle of the track: about the middle of the content.
+        let middle = Position::new(2, hit.track.y + hit.track.height / 2);
+        drag_to(&mut app, middle);
+        draw(&mut app, 200, 40);
+        let mid = bar(&app, ScrollTarget::Diff).offset;
+        let max = end.content - end.viewport;
+        assert!(mid > max / 4 && mid < max * 3 / 4, "{mid} of {max}");
+        // Once released, a drag does nothing.
+        release_at(&mut app, middle);
+        drag_to(&mut app, Position::new(2, hit.track.y));
+        draw(&mut app, 200, 40);
+        assert_eq!(bar(&app, ScrollTarget::Diff).offset, mid);
+    }
+
+    #[test]
+    fn dragging_the_lists_thumb_scrolls_the_list_and_keeps_the_highlight_on_screen() {
+        let prs: Vec<Pr> = (1..=60).map(|n| by("alice", n, "Bump alpha")).collect();
+        let mut app = app_with(prs);
+        draw(&mut app, 200, 40);
+        let hit = bar(&app, ScrollTarget::Table);
+        press_at(&mut app, Position::new(hit.track.x, hit.track.y));
+        drag_to(&mut app, Position::new(hit.track.x, hit.track.bottom() - 1));
+        draw(&mut app, 200, 40);
+        let after = bar(&app, ScrollTarget::Table);
+        assert_eq!(after.offset, after.content - after.viewport);
+        let selected = app.table.selected().unwrap();
+        assert!(
+            (after.offset..after.offset + after.viewport).contains(&selected),
+            "{selected} is off screen"
+        );
+    }
+
+    #[test]
+    fn dragging_a_horizontal_thumb_scrolls_sideways() {
+        let mut app = app_with_a_long_title();
+        draw(&mut app, 100, 40);
+        let hit = bar(&app, ScrollTarget::ListX);
+        assert!(!hit.vertical);
+        press_at(&mut app, Position::new(hit.track.x, hit.track.y));
+        // Off the bar, below it, as far right as the track goes.
+        drag_to(
+            &mut app,
+            Position::new(hit.track.right() + 3, hit.track.y + 4),
+        );
+        draw(&mut app, 100, 40);
+        let end = bar(&app, ScrollTarget::ListX);
+        assert_eq!(end.offset, end.content - end.viewport);
+        assert_eq!(usize::from(app.list_x), end.offset);
+        release_at(&mut app, Position::new(0, 0));
+        // A click on the track left of the thumb pages back.
+        press_at(&mut app, Position::new(hit.track.x, hit.track.y));
+        release_at(&mut app, Position::new(hit.track.x, hit.track.y));
+        draw(&mut app, 100, 40);
+        assert!(bar(&app, ScrollTarget::ListX).offset < end.offset);
+    }
+
+    #[test]
+    fn a_bar_that_is_not_drawn_has_nothing_to_click() {
+        let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
+        draw(&mut app, 200, 40);
+        assert!(
+            !app.drawn
+                .areas
+                .scrollbars
+                .iter()
+                .any(|h| h.target == ScrollTarget::Table)
+        );
+        // A click on the table's right border focuses it as before.
+        let table = app.drawn.areas.table;
+        press_at(&mut app, Position::new(table.right() - 1, table.y + 3));
+        assert!(app.focus == Pane::Table);
     }
 
     #[test]

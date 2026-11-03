@@ -32,6 +32,7 @@ impl App {
     /// any other day.
     pub(super) fn on_mouse(&mut self, mouse: MouseEvent) {
         if !matches!(self.mode, Mode::Loading | Mode::List) {
+            self.bar_drag = None;
             let wheel = match mouse.kind {
                 MouseEventKind::ScrollDown => Some(3),
                 MouseEventKind::ScrollUp => Some(-3),
@@ -51,6 +52,9 @@ impl App {
             }
             self.typing = Typing::Nothing;
         } else if self.typing != Typing::Nothing {
+            return;
+        }
+        if self.on_scrollbar(mouse) {
             return;
         }
         let Some(pane) = self.drawn.areas.at(position) else {

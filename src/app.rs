@@ -20,9 +20,12 @@ mod completion;
 mod editing;
 mod input;
 mod panes;
+mod scrollbars;
 mod work;
 
-pub use panes::{ChecksLayout, CommentLayout, Drawn, Pane, PopupView, Scroll, to_u16};
+pub use panes::{
+    ChecksLayout, CommentLayout, Drawn, Pane, PopupView, Scroll, ScrollTarget, ScrollbarHit, to_u16,
+};
 pub use work::{Details, Diff, Fetch, FetchId, RepoNames};
 use work::{forget_failed, is_current, names_loaded};
 
@@ -77,6 +80,8 @@ pub struct App {
     pub columns_error: Option<String>,
     /// The columns hidden with `v`, for the session. A hidden column keeps its sort.
     pub hidden: Vec<Column>,
+    /// The drag on a scrollbar's thumb that is in progress, if any.
+    bar_drag: Option<scrollbars::BarDrag>,
     /// The highlighted row, as a position in `visible`.
     pub table: TableState,
     /// Columns the table is scrolled sideways, past its first columns. The view clamps it. Unlike
@@ -448,6 +453,7 @@ impl App {
             columns_input: Input::default(),
             columns_error: None,
             hidden: Vec::new(),
+            bar_drag: None,
             dry_run,
             mode: Mode::Loading,
             query: Input::new(query.clone()),
