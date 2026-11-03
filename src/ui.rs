@@ -377,6 +377,7 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
     app.drawn.areas.table = area;
     app.drawn.areas.table_rows = Rect::default();
     app.drawn.areas.table_checkboxes = Rect::default();
+    app.drawn.areas.table_header = Vec::new();
     let table_area = table_block.inner(area);
     frame.render_widget(table_block, area);
     // One row of the table is its header.
@@ -507,8 +508,45 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
                 ..app.drawn.areas.table_rows
             };
             app.drawn.areas.table_offset = app.table.offset();
+            let full_width = if scrolling { total } else { table_area.width };
+            app.drawn.areas.table_header = header_hits(table_area, author, full_width, app.list_x);
         }
     }
+}
+
+/// Where each sortable column's header is on screen, for a click: the number, checks and review
+/// columns, and one area for all the title columns, to the end of the table. The table is
+/// `full_width` columns wide, scrolled `x` columns past its frozen ones, as drawn above. The
+/// checkbox and the author have nothing to sort by.
+fn header_hits(area: Rect, author: bool, full_width: u16, x: u16) -> Vec<(Rect, Sort)> {
+    // The columns, in the table's own coordinates, with the one column between each.
+    let number = (CHECKBOX_WIDTH + 1, NUMBER_WIDTH);
+    let checks = (number.0 + number.1 + 1, CHECKS_WIDTH);
+    let review = (checks.0 + checks.1 + 1, REVIEW_WIDTH);
+    let after_review = review.0 + review.1 + 1;
+    let title_start = after_review + if author { AUTHOR_WIDTH + 1 } else { 0 };
+    let columns = [
+        (number.0, number.0 + number.1, Sort::Number),
+        (checks.0, checks.0 + checks.1, Sort::Checks),
+        (review.0, review.0 + review.1, Sort::Review),
+        (title_start, full_width, Sort::Title),
+    ];
+    columns
+        .into_iter()
+        .filter_map(|(start, end, sort)| {
+            // The frozen columns stay; the rest move with the scroll, and can't go under them.
+            let (start, end) = if end <= FROZEN_WIDTH {
+                (start, end)
+            } else {
+                (
+                    start.saturating_sub(x).max(FROZEN_WIDTH),
+                    end.saturating_sub(x),
+                )
+            };
+            let end = end.min(area.width);
+            (start < end).then(|| (Rect::new(area.x + start, area.y, end - start, 1), sort))
+        })
+        .collect()
 }
 
 /// The widest cell of each title column, the header included, as far as is worth showing.
@@ -1659,6 +1697,177 @@ mod tests {
             "{}",
             screen[0]
         );
+    }
+
+    /// The middle of the header cell that sorts by `sort`, as last drawn.
+    fn header_cell(app: &App, sort: Sort) -> Position {
+        let (area, _) = app
+            .drawn
+            .areas
+            .table_header
+            .iter()
+            .find(|(_, s)| *s == sort)
+            .unwrap_or_else(|| panic!("no header for {sort:?}"));
+        Position::new(area.x + area.width / 2, area.y)
+    }
+
+    fn click_header(app: &mut App, sort: Sort) {
+        let at = header_cell(app, sort);
+        click(app, at);
+    }
+
+    #[test]
+    fn the_sortable_headers_are_where_they_are_drawn() {
+        let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
+        let buffer = draw(&mut app, 200, 30);
+        let header = &app.drawn.areas.table_header;
+        let sorts: Vec<Sort> = header.iter().map(|(_, sort)| *sort).collect();
+        assert_eq!(
+            sorts,
+            [Sort::Number, Sort::Checks, Sort::Review, Sort::Title]
+        );
+        // Each is on the header row, over its own text, and none overlap.
+        let text_at = |area: &Rect| -> String {
+            (area.x..area.right())
+                .map(|x| buffer[(x, area.y)].symbol())
+                .collect()
+        };
+        assert!(text_at(&header[0].0).trim().starts_with('#'));
+        assert!(text_at(&header[1].0).trim().starts_with("Checks"));
+        assert!(text_at(&header[2].0).trim().starts_with("Review"));
+        assert!(text_at(&header[3].0).trim().starts_with("Title"));
+        for pair in header.windows(2) {
+            assert!(pair[0].0.right() <= pair[1].0.x);
+            assert_eq!(pair[0].0.y, pair[1].0.y);
+        }
+        // The title columns reach the end of the table.
+        let title = header[3].0;
+        assert_eq!(title.right(), app.drawn.areas.table.right() - 1);
+    }
+
+    #[test]
+    fn clicking_a_header_sorts_by_it_then_reverses_it_then_goes_back_to_the_default() {
+        let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
+        draw(&mut app, 200, 30);
+        // The default is checks, smallest first, so the first click on it reverses it.
+        for expected in [
+            (Sort::Checks, true),
+            (Sort::Checks, false),
+            (Sort::Checks, true),
+        ] {
+            click_header(&mut app, Sort::Checks);
+            draw(&mut app, 200, 30);
+            assert_eq!(app.sort(), expected);
+        }
+        // Another column: smallest first, then reversed, then back to the default.
+        for expected in [
+            (Sort::Review, false),
+            (Sort::Review, true),
+            (Sort::Checks, false),
+        ] {
+            click_header(&mut app, Sort::Review);
+            draw(&mut app, 200, 30);
+            assert_eq!(app.sort(), expected);
+        }
+        for expected in [(Sort::Number, false), (Sort::Number, true)] {
+            click_header(&mut app, Sort::Number);
+            draw(&mut app, 200, 30);
+            assert_eq!(app.sort(), expected);
+        }
+        // Any title column is the title; clicking another column changes over.
+        click_header(&mut app, Sort::Title);
+        draw(&mut app, 200, 30);
+        assert_eq!(app.sort(), (Sort::Title, false));
+    }
+
+    #[test]
+    fn a_click_on_a_header_reorders_the_rows_and_moves_the_arrow() {
+        let mut app = app_with(vec![
+            by("alice", 9, "Bump zulu"),
+            by("alice", 3, "Bump alpha"),
+        ]);
+        draw(&mut app, 200, 30);
+        click_header(&mut app, Sort::Number);
+        let screen = lines(&draw(&mut app, 200, 30));
+        let header = screen.iter().find(|l| l.contains(" # ")).unwrap();
+        assert!(
+            header.contains("# ▲") && !header.contains("Checks ▲"),
+            "{header}"
+        );
+        let row = |number: &str| {
+            screen
+                .iter()
+                .position(|line| line.contains(number) && line.contains("[ ]"))
+                .unwrap()
+        };
+        assert!(row("#3") < row("#9"));
+        // The highlight stayed on the PR it was on, which was the first listed.
+        assert_eq!(app.highlighted().unwrap().pr.number, 9);
+        assert!(app.focus == Pane::Table);
+    }
+
+    #[test]
+    fn a_click_on_the_checkbox_or_author_header_does_not_sort() {
+        let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
+        draw(&mut app, 200, 30);
+        let table = app.drawn.areas.table;
+        let header_y = table.y + 1;
+        // The checkbox is the first column inside the border.
+        click(&mut app, Position::new(table.x + 1, header_y));
+        assert_eq!(app.sort(), (Sort::Checks, false));
+        // Between the review and the title is the author.
+        let review = app
+            .drawn
+            .areas
+            .table_header
+            .iter()
+            .find(|(_, s)| *s == Sort::Review)
+            .unwrap()
+            .0;
+        click(&mut app, Position::new(review.right() + 3, header_y));
+        assert_eq!(app.sort(), (Sort::Checks, false));
+    }
+
+    #[test]
+    fn the_headers_follow_a_table_that_scrolls_sideways_and_stay_clear_of_the_frozen_columns() {
+        let mut app = app_with_a_long_title();
+        draw(&mut app, 100, 40);
+        let before = app.drawn.areas.table_header.clone();
+        let number = before.iter().find(|(_, s)| *s == Sort::Number).unwrap().0;
+        for _ in 0..8 {
+            press(&mut app, "l");
+        }
+        draw(&mut app, 100, 40);
+        assert!(app.list_x > 0);
+        let table = app.drawn.areas.table;
+        let after = &app.drawn.areas.table_header;
+        // The number is frozen and stays; the others have moved left, or are out of sight, and none
+        // reach under the frozen columns or past the table.
+        let number_after = after.iter().find(|(_, s)| *s == Sort::Number).unwrap().0;
+        assert_eq!(number_after, number);
+        for (area, sort) in after {
+            if *sort != Sort::Number {
+                assert!(area.x >= table.x + 1 + FROZEN_WIDTH, "{sort:?}");
+            }
+            assert!(area.right() <= table.right() - 1, "{sort:?}");
+        }
+        // The title is still there to click, and sorts by title.
+        click_header(&mut app, Sort::Title);
+        assert_eq!(app.sort(), (Sort::Title, false));
+    }
+
+    #[test]
+    fn there_are_no_headers_to_click_with_no_rows_and_a_dialog_ignores_clicks() {
+        let mut app = app_with(vec![]);
+        draw(&mut app, 200, 30);
+        assert!(app.drawn.areas.table_header.is_empty());
+
+        let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
+        draw(&mut app, 200, 30);
+        let cell = header_cell(&app, Sort::Number);
+        press(&mut app, "?");
+        click(&mut app, cell);
+        assert_eq!(app.sort(), (Sort::Checks, false));
     }
 
     #[test]

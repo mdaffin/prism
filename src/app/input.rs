@@ -60,6 +60,9 @@ impl App {
                     Pane::Checks => self.click_check(position),
                     _ => {}
                 }
+                if let Some(sort) = self.sort_at(position) {
+                    self.click_sort(sort);
+                }
                 if self.drawn.areas.table_rows.contains(position) {
                     let row = usize::from(position.y - self.drawn.areas.table_rows.y);
                     // Below the last row there is nothing to click.

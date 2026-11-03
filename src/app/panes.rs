@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use ratatui::layout::{Position, Rect};
 
 use super::{App, toggle};
-use crate::model::LinkSpan;
+use crate::model::{LinkSpan, Sort};
 
 /// Rows scrolled off the top of the checks, description, comments and diff panes. They go back to
 /// the top when the highlight moves. The view clamps them to the content it draws.
@@ -142,6 +142,9 @@ pub struct PaneAreas {
     pub table_rows: Rect,
     /// The checkbox column of `table_rows`.
     pub table_checkboxes: Rect,
+    /// The headers of the columns the table can sort by, and what each sorts by. Empty while no
+    /// rows are drawn.
+    pub table_header: Vec<(Rect, Sort)>,
     /// The position in `visible` of the first row drawn.
     pub table_offset: usize,
     pub checks: Rect,

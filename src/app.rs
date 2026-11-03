@@ -4,6 +4,7 @@ use std::hash::Hash;
 use ansi_to_tui::IntoText;
 use color_eyre::eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
+use ratatui::layout::Position;
 use ratatui::widgets::TableState;
 use regex::Regex;
 use tui_input::Input;
@@ -534,6 +535,30 @@ impl App {
     pub(super) fn cycle_sort(&mut self) {
         self.sort = self.sort.next();
         self.descending = false;
+        self.resort();
+    }
+
+    /// The sort that the header at `position` stands for, if there is one.
+    pub(super) fn sort_at(&self, position: Position) -> Option<Sort> {
+        let header = &self.drawn.areas.table_header;
+        header
+            .iter()
+            .find(|(area, _)| area.contains(position))
+            .map(|&(_, sort)| sort)
+    }
+
+    /// A click on a header: sorts by its column, smallest first; clicked again, the other way
+    /// round; and again, back to how the list is sorted to begin with.
+    pub(super) fn click_sort(&mut self, sort: Sort) {
+        if self.sort != sort {
+            self.sort = sort;
+            self.descending = false;
+        } else if !self.descending {
+            self.descending = true;
+        } else {
+            self.sort = Sort::default();
+            self.descending = false;
+        }
         self.resort();
     }
 
