@@ -8,6 +8,7 @@ use crate::app::Pane;
 /// Choosing in the confirm dialogs.
 pub const CHOOSE_HINTS: &str = "←/→ Tab: Choose | Enter: Confirm | Esc: Cancel";
 pub const HELP_HINTS: &str = "Up/Down PgUp/PgDn Home/End: Scroll | Esc ? q: Close";
+pub const FAILURE_HINTS: &str = "Up/Down PgUp/PgDn Home/End: Scroll | Esc e q: Close";
 /// Choosing the columns to show.
 pub const PICK_COLUMNS_HINTS: &str = "Up/Down: Move | Space: Show or hide | Enter/Esc: Close";
 pub const RUNNING_HINTS: &str = "q: Cancel | Ctrl-C: Quit";
@@ -93,6 +94,11 @@ pub const KEYS: &[KeyHelp] = &[
     key(
         "v",
         "Choose which columns the table shows (Space hides or shows one, for the session)",
+        None,
+    ),
+    key(
+        "e",
+        "Show the whole message of a failed fetch, which the panes cut to its first line",
         None,
     ),
     key("Tab / Shift-Tab", "Move focus between the panes", None),

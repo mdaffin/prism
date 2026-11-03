@@ -35,17 +35,15 @@ impl App {
     /// any other day.
     pub(super) fn on_mouse(&mut self, mouse: MouseEvent) {
         if !matches!(self.mode, Mode::Loading | Mode::List) {
-            match (mouse.kind, &mut self.mode) {
-                (MouseEventKind::Down(MouseButton::Left), _) => {
-                    self.click_button(Position::new(mouse.column, mouse.row));
-                }
-                (MouseEventKind::ScrollDown, Mode::Help(offset)) => {
-                    *offset = self.drawn.popup.wheeled(3)
-                }
-                (MouseEventKind::ScrollUp, Mode::Help(offset)) => {
-                    *offset = self.drawn.popup.wheeled(-3)
-                }
-                _ => {}
+            let wheel = match mouse.kind {
+                MouseEventKind::ScrollDown => Some(3),
+                MouseEventKind::ScrollUp => Some(-3),
+                _ => None,
+            };
+            if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                self.click_button(Position::new(mouse.column, mouse.row));
+            } else if let (Some(by), Some(offset)) = (wheel, self.mode.scroll_offset_mut()) {
+                *offset = self.drawn.popup.wheeled(by);
             }
             return;
         }
@@ -124,7 +122,9 @@ impl App {
                 self.on_key(KeyCode::Enter.into());
             }
             // Enter does not close these, but Esc and `q` do, and OK says the same.
-            Mode::Help(_) | Mode::PickColumns(_) | Mode::Results(_) => self.mode = Mode::List,
+            Mode::Help(_) | Mode::Failure(_) | Mode::PickColumns(_) | Mode::Results(_) => {
+                self.mode = Mode::List
+            }
             _ => {}
         }
     }
@@ -178,10 +178,18 @@ impl App {
                 Some(false) => self.mode = Mode::List,
                 None => {}
             },
-            Mode::Help(offset) => {
-                if matches!(key.code, KeyCode::Esc | KeyCode::Char('?' | 'q')) {
+            Mode::Help(_) | Mode::Failure(_) => {
+                let closes = match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') => true,
+                    KeyCode::Char('?') => matches!(self.mode, Mode::Help(_)),
+                    KeyCode::Char('e') => matches!(self.mode, Mode::Failure(_)),
+                    _ => false,
+                };
+                if closes {
                     self.mode = Mode::List;
-                } else if let Some(to) = self.drawn.popup.scrolled_by(key.code) {
+                } else if let Some(to) = self.drawn.popup.scrolled_by(key.code)
+                    && let Some(offset) = self.mode.scroll_offset_mut()
+                {
                     *offset = to;
                 }
             }
@@ -309,6 +317,7 @@ impl App {
             KeyCode::Char('/') => self.typing = Typing::Search,
             KeyCode::Char('f') => self.typing = Typing::Filter,
             KeyCode::Char('c') => self.edit_columns(),
+            KeyCode::Char('e') => self.show_failure(),
             KeyCode::Char('v') => self.mode = Mode::PickColumns(0),
             KeyCode::Char('s') => self.cycle_sort(),
             KeyCode::Char('S') => self.reverse_sort(),

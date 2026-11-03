@@ -228,6 +228,8 @@ pub enum Mode {
     ConfirmOpen(ConfirmOpen),
     /// Listing every key, scrolled this many rows.
     Help(usize),
+    /// Showing the whole message of a failed fetch.
+    Failure(Failure),
     /// Choosing which columns to show: the position in `Column::ALL` of the highlighted one.
     PickColumns(usize),
     /// Approving PRs.
@@ -1001,6 +1003,37 @@ impl App {
         }
     }
 
+    /// `e`: opens the whole message of the highlighted PR's failed fetch: the diff's in the diff
+    /// pane, the details' in any other (where it is shown), or the other's if only that failed. The
+    /// panes show only its first line.
+    pub(super) fn show_failure(&mut self) {
+        let Some(number) = self.highlighted().map(|row| row.pr.number) else {
+            return;
+        };
+        let details = match self.details.get(&number) {
+            Some(Fetch::Failed(text)) => Some(("Details", text.clone())),
+            _ => None,
+        };
+        let diff = match self.diffs.get(&number) {
+            Some(Fetch::Failed(text)) => Some(("Diff", text.clone())),
+            _ => None,
+        };
+        let (first, second) = if self.focus == Pane::Diff {
+            (diff, details)
+        } else {
+            (details, diff)
+        };
+        let Some((what, text)) = first.or(second) else {
+            self.note = Some("Nothing has failed to load for this PR".to_string());
+            return;
+        };
+        self.mode = Mode::Failure(Failure {
+            title: format!("{what} of #{number} failed to load"),
+            text,
+            offset: 0,
+        });
+    }
+
     /// `y`: copies what `o` would open: the URL of the highlighted item, or the PR's where it has
     /// none of its own. The description and the diff have nothing to copy.
     fn copy_focused(&mut self) {
@@ -1220,3 +1253,22 @@ fn toggle<T: Eq + Hash>(set: &mut HashSet<T>, value: T) {
 
 #[cfg(test)]
 mod tests;
+
+/// The popup with a failed fetch's whole message.
+pub struct Failure {
+    pub title: String,
+    pub text: String,
+    /// How many rows it is scrolled.
+    pub offset: usize,
+}
+
+impl Mode {
+    /// How far the popup is scrolled, for the modes that are text that scrolls.
+    pub fn scroll_offset_mut(&mut self) -> Option<&mut usize> {
+        match self {
+            Self::Help(offset) => Some(offset),
+            Self::Failure(failure) => Some(&mut failure.offset),
+            _ => None,
+        }
+    }
+}

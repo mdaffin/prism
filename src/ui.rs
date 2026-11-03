@@ -13,7 +13,7 @@ use regex::Regex;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{
-    self, App, ChecksLayout, CommentLayout, ConfirmOpen, Details, Fetch, Mode, Page, Pane,
+    self, App, ChecksLayout, CommentLayout, ConfirmOpen, Details, Failure, Fetch, Mode, Page, Pane,
     PopupView, Typing, to_u16,
 };
 use crate::batch::{Batch, Confirm, ItemStatus, Summary};
@@ -250,6 +250,11 @@ fn draw_dialog(app: &mut App, frame: &mut Frame, area: Rect) {
             scrolled = Some(view);
             buttons
         }
+        Mode::Failure(failure) => {
+            let (buttons, view) = failure_popup(failure, frame, area);
+            scrolled = Some(view);
+            buttons
+        }
         Mode::PickColumns(at) => columns_popup(app, *at, frame, area),
         Mode::Running(batch) => running_popup(batch, app.dry_run, spinner(app), frame, area),
         Mode::Results(summary) => results_popup(summary, app.dry_run, frame, area),
@@ -258,7 +263,7 @@ fn draw_dialog(app: &mut App, frame: &mut Frame, area: Rect) {
     app.drawn.buttons = buttons;
     // Scrolled too far (the terminal grew, or End was pressed), it is brought back.
     app.drawn.popup = scrolled.unwrap_or_default();
-    if let (Mode::Help(offset), Some(view)) = (&mut app.mode, scrolled) {
+    if let (Some(offset), Some(view)) = (app.mode.scroll_offset_mut(), scrolled) {
         *offset = view.offset;
     }
 }
@@ -269,6 +274,7 @@ fn mode_hints(app: &App) -> Option<&'static str> {
     match &app.mode {
         Mode::Confirm(_) | Mode::ConfirmOpen(_) => Some(keys::CHOOSE_HINTS),
         Mode::Help(_) => Some(keys::HELP_HINTS),
+        Mode::Failure(_) => Some(keys::FAILURE_HINTS),
         Mode::PickColumns(_) => Some(keys::PICK_COLUMNS_HINTS),
         Mode::Running(_) => Some(keys::RUNNING_HINTS),
         Mode::Results(_) => Some(keys::RESULTS_HINTS),
@@ -415,6 +421,7 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
         | Mode::Confirm(_)
         | Mode::ConfirmOpen(_)
         | Mode::Help(_)
+        | Mode::Failure(_)
         | Mode::PickColumns(_)
         | Mode::Running(_)
         | Mode::Results(_) => {
@@ -772,6 +779,36 @@ fn help_popup(offset: usize, frame: &mut Frame, area: Rect) -> (Vec<Rect>, Popup
         buttons: buttons.widths,
     };
     popup_scrolled(frame, area, help, offset)
+}
+
+/// The popup with a failed fetch's whole message, wrapped here (so that the rows it takes are
+/// known, for scrolling) and scrolled like the keys popup.
+fn failure_popup(failure: &Failure, frame: &mut Frame, area: Rect) -> (Vec<Rect>, PopupView) {
+    let width = usize::from(
+        area.width
+            .saturating_sub(4)
+            .min(MAX_POPUP_WIDTH)
+            .saturating_sub(2),
+    );
+    let text = Text::from(
+        failure
+            .text
+            .lines()
+            .map(|line| Line::from(line.trim_end().to_string()))
+            .collect::<Vec<_>>(),
+    );
+    let lines = model::layout_plain(&text, width.max(1)).lines;
+    let buttons = button_row(["OK"], 0);
+    let footer = vec![Line::default(), buttons.line];
+    let dialog = Popup {
+        title: failure.title.clone(),
+        dry_run: false,
+        lines,
+        wrap: false,
+        footer,
+        buttons: buttons.widths,
+    };
+    popup_scrolled(frame, area, dialog, failure.offset)
 }
 
 fn running_popup(
@@ -4688,6 +4725,63 @@ mod tests {
             !pane.contains("more detail") && !pane.contains("gh pr view"),
             "{pane}"
         );
+    }
+
+    /// A failure of many lines, one of them too long for the popup, with a last line to scroll to.
+    fn long_failure() -> color_eyre::Report {
+        let lines: Vec<String> = (1..=30).map(|n| format!("detail line {n}")).collect();
+        crate::gh::GhError {
+            command: "gh api graphql".to_string(),
+            output: format!(
+                "GraphQL: first line.\n{}\n{}\nthe very last line",
+                "a-very-long-line-without-spaces-".repeat(6),
+                lines.join("\n")
+            ),
+        }
+        .into()
+    }
+
+    #[test]
+    fn e_opens_the_whole_failure_which_scrolls_and_wraps_and_closes() {
+        for focus_diff in [false, true] {
+            let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+            if focus_diff {
+                app.diff_loaded(1, Err(long_failure()));
+                app.focus = Pane::Diff;
+            } else {
+                app.details_loaded(1, Err(long_failure()));
+            }
+            draw(&mut app, 120, 20);
+            press(&mut app, "e");
+            assert!(matches!(app.mode, Mode::Failure(_)), "{focus_diff}");
+            let screen = lines(&draw(&mut app, 120, 20)).join("\n");
+            assert!(screen.contains("failed to load"), "{screen}");
+            assert!(screen.contains("first line."), "{screen}");
+            // The long line is wrapped to the popup rather than cut off, so its end is in view
+            // somewhere, and the end of the message needs scrolling to.
+            assert!(!screen.contains("the very last line"), "{screen}");
+            assert!(app.drawn.popup.content > app.drawn.popup.viewport);
+            assert!(screen.contains("OK"), "{screen}");
+            key(&mut app, KeyCode::End);
+            let screen = lines(&draw(&mut app, 120, 20)).join("\n");
+            assert!(screen.contains("the very last line"), "{screen}");
+            assert!(!screen.contains("first line."), "{screen}");
+            assert!(screen.contains("OK"), "{screen}");
+            // It closes with e or Esc.
+            press(&mut app, "e");
+            assert!(matches!(app.mode, Mode::List));
+            press(&mut app, "e");
+            key(&mut app, KeyCode::Esc);
+            assert!(matches!(app.mode, Mode::List));
+        }
+    }
+
+    #[test]
+    fn e_with_nothing_failed_says_so_and_opens_nothing() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        press(&mut app, "e");
+        assert!(matches!(app.mode, Mode::List));
+        assert!(status_bar(&mut app, 160).contains("Nothing has failed"));
     }
 
     #[test]
