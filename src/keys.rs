@@ -107,6 +107,13 @@ pub const KEYS: &[KeyHelp] = &[
         None,
     ),
     key("0", "Show every pane", None),
+    key(
+        "+ / -",
+        "Make the focused pane taller or shorter (or drag the border between two panes with the mouse)",
+        None,
+    ),
+    key("> / <", "Make the focused pane wider or narrower", None),
+    key("=", "Put every pane back to its usual size", None),
     key("Tab / Shift-Tab", "Move focus between the panes", None),
     key(
         "Up/Down, j/k",

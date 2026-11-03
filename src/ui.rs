@@ -13,8 +13,9 @@ use regex::Regex;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{
-    self, App, ChecksLayout, CommentLayout, ConfirmOpen, Details, Failure, Fetch, Mode, Page, Pane,
-    PopupView, ScrollTarget, ScrollbarHit, Typing, to_u16,
+    self, App, ChecksLayout, CommentLayout, ConfirmOpen, Details, Divider, Failure, Fetch,
+    MIN_WEIGHT, Mode, Page, Pane, PopupView, ScrollTarget, ScrollbarHit, Sizes, StackId, Typing,
+    to_u16,
 };
 use crate::batch::{Batch, Confirm, ItemStatus, Summary};
 use crate::gh::{Approvers, Comment, PrState, Reviewer, Verdict};
@@ -91,6 +92,8 @@ struct PaneLayout {
     pull_request: Rect,
     description: Rect,
     diff: Rect,
+    /// The borders between panes, for the mouse and the resize keys.
+    dividers: Vec<Divider>,
 }
 
 /// Splits `area` between the `items` that are on, each with its constraint, down or across, and
@@ -141,14 +144,74 @@ fn approvers_over_diff(area: Rect, wanted: u16, (approvers, diff): (bool, bool))
     (pieces[0], pieces[1])
 }
 
+/// The constraint of item `index` of `stack`: its weight once the stack has been resized, else
+/// `default`.
+fn sized(sizes: &Sizes, stack: StackId, index: usize, default: Constraint) -> Constraint {
+    match sizes.of(stack) {
+        Some(weights) => Constraint::Fill(weights[index].max(MIN_WEIGHT)),
+        None => default,
+    }
+}
+
+/// One item of a stack of panes: its number in the stack, the panes in it, and where it is (empty
+/// when it is not shown).
+struct Item<'a> {
+    index: usize,
+    panes: &'a [Pane],
+    rect: Rect,
+}
+
+/// The borders between the items of a stack that are shown, `stacked` one over the other or side
+/// by side, for the mouse and the resize keys.
+fn dividers_of(stack: StackId, stacked: bool, items: &[Item]) -> Vec<Divider> {
+    let shown: Vec<&Item> = items.iter().filter(|item| !item.rect.is_empty()).collect();
+    let length = |item: &Item| {
+        if stacked {
+            item.rect.height
+        } else {
+            item.rect.width
+        }
+    };
+    let first = |item: &Item| if stacked { item.rect.y } else { item.rect.x };
+    shown
+        .windows(2)
+        .map(|pair| {
+            let (a, b) = (pair[0], pair[1]);
+            // The two borders that meet there: a's last row or column and b's first.
+            let hit = if stacked {
+                Rect::new(a.rect.x, a.rect.bottom() - 1, a.rect.width, 2)
+            } else {
+                Rect::new(a.rect.right() - 1, a.rect.y, 2, a.rect.height)
+            };
+            Divider {
+                stack,
+                stacked,
+                hit,
+                between: (a.index, b.index),
+                before: a.panes.to_vec(),
+                after: b.panes.to_vec(),
+                items: shown
+                    .iter()
+                    .map(|item| (item.index, length(item)))
+                    .collect(),
+                boundary: first(b),
+                start: first(a),
+                end: first(b) + length(b),
+            }
+        })
+        .collect()
+}
+
 /// With room, the list is above the checks and comments on the left and the PR's details are on
 /// the right. In a narrow terminal that would leave the table too little width, so the list takes
 /// the full width on top. Under it, what is read most gets the space: the description beside the
 /// diff, with the checks and comments in a short row at the bottom. The approvers are in the
 /// details, above the diff, and take `approvers_rows` if they can. A pane in `hidden` is left out
 /// (its rectangle is empty) and the others share its room; with all of a side's panes hidden, the
-/// other side takes the width, and the Pull request box goes with the details.
-fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane]) -> PaneLayout {
+/// other side takes the width, and the Pull request box goes with the details. A stack that has
+/// been resized (`sizes`) shares its room by the weights it has, and every border between two
+/// panes is returned in `dividers`.
+fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane], sizes: &Sizes) -> PaneLayout {
     let shown = |pane| !hidden.contains(&pane);
     let (checks_on, comments_on) = (shown(Pane::Checks), shown(Pane::Comments));
     let (description_on, approvers_on, diff_on) = (
@@ -157,22 +220,26 @@ fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane]) -> PaneLayout {
         shown(Pane::Diff),
     );
     let details_on = description_on || approvers_on || diff_on;
+    let fill = Constraint::Fill(1);
     if body.width >= WIDE_LAYOUT_MIN_WIDTH {
         let sides = split(
             body,
             false,
             &[
-                (true, Constraint::Fill(1)),
-                (details_on, Constraint::Fill(1)),
+                (true, sized(sizes, StackId::Columns, 0, fill)),
+                (details_on, sized(sizes, StackId::Columns, 1, fill)),
             ],
         );
         let left = split(
             sides[0],
             true,
             &[
-                (true, Constraint::Fill(2)),
-                (checks_on, Constraint::Fill(1)),
-                (comments_on, Constraint::Max(MAX_COMMENTS_ROWS)),
+                (true, sized(sizes, StackId::Left, 0, Constraint::Fill(2))),
+                (checks_on, sized(sizes, StackId::Left, 1, fill)),
+                (
+                    comments_on,
+                    sized(sizes, StackId::Left, 2, Constraint::Max(MAX_COMMENTS_ROWS)),
+                ),
             ],
         );
         let detail = split(
@@ -180,12 +247,68 @@ fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane]) -> PaneLayout {
             true,
             &[
                 (details_on, Constraint::Length(PULL_REQUEST_ROWS)),
-                (description_on, Constraint::Fill(1)),
-                (approvers_on || diff_on, Constraint::Fill(2)),
+                (description_on, sized(sizes, StackId::Detail, 0, fill)),
+                (
+                    approvers_on || diff_on,
+                    sized(sizes, StackId::Detail, 1, Constraint::Fill(2)),
+                ),
             ],
         );
         let (approvers, diff) =
             approvers_over_diff(detail[2], approvers_rows, (approvers_on, diff_on));
+        let mut dividers = dividers_of(
+            StackId::Columns,
+            false,
+            &[
+                Item {
+                    index: 0,
+                    panes: &[Pane::Table, Pane::Checks, Pane::Comments],
+                    rect: sides[0],
+                },
+                Item {
+                    index: 1,
+                    panes: &[Pane::Description, Pane::Approvers, Pane::Diff],
+                    rect: sides[1],
+                },
+            ],
+        );
+        dividers.extend(dividers_of(
+            StackId::Left,
+            true,
+            &[
+                Item {
+                    index: 0,
+                    panes: &[Pane::Table],
+                    rect: left[0],
+                },
+                Item {
+                    index: 1,
+                    panes: &[Pane::Checks],
+                    rect: left[1],
+                },
+                Item {
+                    index: 2,
+                    panes: &[Pane::Comments],
+                    rect: left[2],
+                },
+            ],
+        ));
+        dividers.extend(dividers_of(
+            StackId::Detail,
+            true,
+            &[
+                Item {
+                    index: 0,
+                    panes: &[Pane::Description],
+                    rect: detail[1],
+                },
+                Item {
+                    index: 1,
+                    panes: &[Pane::Approvers, Pane::Diff],
+                    rect: detail[2],
+                },
+            ],
+        ));
         PaneLayout {
             list: left[0],
             checks: left[1],
@@ -194,6 +317,7 @@ fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane]) -> PaneLayout {
             pull_request: detail[0],
             description: detail[1],
             diff,
+            dividers,
         }
     } else {
         let lower_on = checks_on || comments_on;
@@ -202,9 +326,15 @@ fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane]) -> PaneLayout {
             body,
             true,
             &[
-                (true, Constraint::Fill(2)),
-                (details_on, Constraint::Fill(3)),
-                (lower_on, Constraint::Length(lower_rows)),
+                (true, sized(sizes, StackId::Rows, 0, Constraint::Fill(2))),
+                (
+                    details_on,
+                    sized(sizes, StackId::Rows, 1, Constraint::Fill(3)),
+                ),
+                (
+                    lower_on,
+                    sized(sizes, StackId::Rows, 2, Constraint::Length(lower_rows)),
+                ),
             ],
         );
         let right_on = approvers_on || diff_on;
@@ -212,8 +342,11 @@ fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane]) -> PaneLayout {
             rows[1],
             false,
             &[
-                (description_on, Constraint::Fill(1)),
-                (right_on, Constraint::Fill(1)),
+                (
+                    description_on,
+                    sized(sizes, StackId::DetailColumns, 0, fill),
+                ),
+                (right_on, sized(sizes, StackId::DetailColumns, 1, fill)),
             ],
         );
         // The Pull request box is over the description, or over the diff if that is hidden.
@@ -242,10 +375,63 @@ fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane]) -> PaneLayout {
             rows[2],
             false,
             &[
-                (checks_on, Constraint::Fill(1)),
-                (comments_on, Constraint::Fill(1)),
+                (checks_on, sized(sizes, StackId::Lower, 0, fill)),
+                (comments_on, sized(sizes, StackId::Lower, 1, fill)),
             ],
         );
+        let mut dividers = dividers_of(
+            StackId::Rows,
+            true,
+            &[
+                Item {
+                    index: 0,
+                    panes: &[Pane::Table],
+                    rect: rows[0],
+                },
+                Item {
+                    index: 1,
+                    panes: &[Pane::Description, Pane::Approvers, Pane::Diff],
+                    rect: rows[1],
+                },
+                Item {
+                    index: 2,
+                    panes: &[Pane::Checks, Pane::Comments],
+                    rect: rows[2],
+                },
+            ],
+        );
+        dividers.extend(dividers_of(
+            StackId::DetailColumns,
+            false,
+            &[
+                Item {
+                    index: 0,
+                    panes: &[Pane::Description],
+                    rect: columns[0],
+                },
+                Item {
+                    index: 1,
+                    panes: &[Pane::Approvers, Pane::Diff],
+                    rect: columns[1],
+                },
+            ],
+        ));
+        dividers.extend(dividers_of(
+            StackId::Lower,
+            false,
+            &[
+                Item {
+                    index: 0,
+                    panes: &[Pane::Checks],
+                    rect: lower[0],
+                },
+                Item {
+                    index: 1,
+                    panes: &[Pane::Comments],
+                    rect: lower[1],
+                },
+            ],
+        ));
         PaneLayout {
             list: rows[0],
             checks: lower[0],
@@ -254,6 +440,7 @@ fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane]) -> PaneLayout {
             pull_request: if description_on { left[0] } else { right[0] },
             description: left[1],
             diff,
+            dividers,
         }
     }
 }
@@ -279,10 +466,12 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         pull_request: pull_request_area,
         description: description_area,
         diff: diff_area,
+        dividers,
     } = pane_layout(
         body_area,
         approvers_rows(app, body_area.width / 2),
         &app.hidden_panes,
+        &app.sizes,
     );
     // The filter box is only there while it is being edited or has text in it.
     let filter_rows = if app.typing == Typing::Filter || !app.filter.value().is_empty() {
@@ -306,6 +495,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
 
     frame.render_widget(Line::from(app.title()).bold().reversed(), title_area);
     app.drawn.areas.search = search_area;
+    app.drawn.areas.dividers = dividers;
     app.drawn.areas.filter = if filter_rows > 0 {
         filter_area
     } else {
@@ -2029,6 +2219,8 @@ fn description(app: &mut App, frame: &mut Frame, area: Rect) {
 mod tests {
     use std::collections::HashSet;
 
+    use crate::app::{MIN_COLUMNS, MIN_ROWS};
+
     use crossterm::event::KeyCode;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -3266,6 +3458,190 @@ mod tests {
             b.target,
             ScrollTarget::Checks | ScrollTarget::Comments | ScrollTarget::Description
         )));
+    }
+
+    /// The divider between the items `a` and `b` of `stack`, as last drawn.
+    fn divider(app: &App, stack: StackId, a: usize, b: usize) -> Divider {
+        app.drawn
+            .areas
+            .dividers
+            .iter()
+            .find(|d| d.stack == stack && d.between == (a, b))
+            .unwrap_or_else(|| panic!("no divider {stack:?} {a} {b}"))
+            .clone()
+    }
+
+    /// Drags the border of `divider` to `to` along its axis, as a mouse would, and draws.
+    fn drag_divider(app: &mut App, divider: &Divider, to: u16, size: (u16, u16)) {
+        // In the middle of the border, away from the corners, which belong to other things.
+        let from = Position::new(
+            divider.hit.x + divider.hit.width / 2,
+            divider.hit.y + divider.hit.height / 2,
+        );
+        press_at(app, from);
+        let target = if divider.stacked {
+            Position::new(from.x + 3, to)
+        } else {
+            Position::new(to, from.y + 3)
+        };
+        drag_to(app, target);
+        release_at(app, target);
+        draw(app, size.0, size.1);
+    }
+
+    #[test]
+    fn dragging_the_border_between_the_columns_resizes_them_and_clamps() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        draw(&mut app, 200, 40);
+        let columns = divider(&app, StackId::Columns, 0, 1);
+        assert_eq!(app.drawn.areas.table.width, 100);
+        drag_divider(&mut app, &columns, 60, (200, 40));
+        assert_eq!(app.drawn.areas.table.width, 60);
+        assert_eq!(app.drawn.areas.diff.x, 60);
+        // As far as the pointer goes either way, the panes keep a minimum.
+        let columns = divider(&app, StackId::Columns, 0, 1);
+        drag_divider(&mut app, &columns, 0, (200, 40));
+        assert_eq!(app.drawn.areas.table.width, MIN_COLUMNS);
+        let columns = divider(&app, StackId::Columns, 0, 1);
+        drag_divider(&mut app, &columns, 199, (200, 40));
+        assert_eq!(app.drawn.areas.diff.width, MIN_COLUMNS);
+    }
+
+    #[test]
+    fn dragging_a_border_inside_a_column_resizes_the_two_panes_beside_it() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        draw(&mut app, 200, 40);
+        let (list, checks, comments) = (
+            app.drawn.areas.table,
+            app.drawn.areas.checks,
+            app.drawn.areas.comments,
+        );
+        let border = divider(&app, StackId::Left, 0, 1);
+        // Down by five rows: the list grows and the checks lose what it gained.
+        drag_divider(&mut app, &border, checks.y + 5, (200, 40));
+        let after = (
+            app.drawn.areas.table,
+            app.drawn.areas.checks,
+            app.drawn.areas.comments,
+        );
+        assert_eq!(after.0.height, list.height + 5);
+        assert_eq!(after.1.height + 5, checks.height);
+        // The comments, on the other side of the checks, were not touched.
+        assert_eq!(after.2.height, comments.height);
+        // The Description over the diff, on the right, is its own stack.
+        let detail = divider(&app, StackId::Detail, 0, 1);
+        let description = app.drawn.areas.description;
+        drag_divider(&mut app, &detail, description.bottom() + 4, (200, 40));
+        assert!(app.drawn.areas.description.height > description.height);
+    }
+
+    #[test]
+    fn a_resized_layout_keeps_its_fractions_when_the_terminal_changes_size() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        draw(&mut app, 200, 40);
+        let columns = divider(&app, StackId::Columns, 0, 1);
+        drag_divider(&mut app, &columns, 50, (200, 40));
+        assert_eq!(app.drawn.areas.table.width, 50);
+        // Twice as wide: still a quarter. And narrow enough for the other layout, the width
+        // limit still decides which layout it is.
+        draw(&mut app, 400, 40);
+        assert_eq!(app.drawn.areas.table.width, 100);
+        draw(&mut app, 120, 40);
+        assert_eq!(
+            app.drawn.areas.table.width, 120,
+            "narrow: the list is on top"
+        );
+        assert!(app.drawn.areas.checks.y > app.drawn.areas.table.y);
+    }
+
+    #[test]
+    fn the_narrow_layouts_borders_can_be_dragged_too() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        draw(&mut app, 100, 40);
+        let list = app.drawn.areas.table;
+        let rows = divider(&app, StackId::Rows, 0, 1);
+        drag_divider(&mut app, &rows, list.bottom() + 6, (100, 40));
+        assert_eq!(app.drawn.areas.table.height, list.height + 6);
+        let sides = divider(&app, StackId::DetailColumns, 0, 1);
+        let before = app.drawn.areas.description.width;
+        drag_divider(&mut app, &sides, 30, (100, 40));
+        assert!(app.drawn.areas.description.width < before);
+        let lower = divider(&app, StackId::Lower, 0, 1);
+        drag_divider(&mut app, &lower, 20, (100, 40));
+        assert_eq!(app.drawn.areas.checks.width, 20);
+    }
+
+    #[test]
+    fn a_click_on_a_border_still_focuses_and_does_not_resize() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        draw(&mut app, 200, 40);
+        let checks = app.drawn.areas.checks;
+        press_at(&mut app, Position::new(checks.x + 4, checks.y));
+        release_at(&mut app, Position::new(checks.x + 4, checks.y));
+        assert!(app.focus == Pane::Checks);
+        assert!(app.sizes.is_default());
+    }
+
+    #[test]
+    fn plus_and_minus_and_the_arrows_resize_the_focused_pane_and_equals_resets() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        draw(&mut app, 200, 40);
+        let list = app.drawn.areas.table;
+        press(&mut app, "+");
+        draw(&mut app, 200, 40);
+        assert!(app.drawn.areas.table.height > list.height);
+        // A draw between the presses, as there is in use: the border is read from the last one.
+        press(&mut app, "-");
+        draw(&mut app, 200, 40);
+        press(&mut app, "-");
+        draw(&mut app, 200, 40);
+        assert!(app.drawn.areas.table.height < list.height);
+        // Wider and narrower, and from the details' side the other way round.
+        press(&mut app, ">");
+        draw(&mut app, 200, 40);
+        assert!(app.drawn.areas.table.width > list.width);
+        key(&mut app, KeyCode::Tab);
+        key(&mut app, KeyCode::Tab);
+        key(&mut app, KeyCode::Tab);
+        assert!(app.focus == Pane::Description);
+        let width = app.drawn.areas.description.width;
+        press(&mut app, ">");
+        draw(&mut app, 200, 40);
+        assert!(app.drawn.areas.description.width > width);
+        // The last pane of a stack has the border before it to move, and `=` puts it all back.
+        press(&mut app, "=");
+        draw(&mut app, 200, 40);
+        assert!(app.sizes.is_default());
+        assert_eq!(app.drawn.areas.table, list);
+    }
+
+    #[test]
+    fn a_pane_with_no_border_to_move_that_way_says_so() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        // Narrow: the list takes the whole width, so there is no wider or narrower for it.
+        draw(&mut app, 100, 40);
+        press(&mut app, ">");
+        assert!(
+            app.note
+                .as_deref()
+                .unwrap()
+                .contains("can't be made wider or narrower")
+        );
+        assert!(app.sizes.is_default());
+    }
+
+    #[test]
+    fn a_pane_hidden_when_the_stack_was_resized_does_not_come_back_squashed() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        press(&mut app, "1");
+        draw(&mut app, 200, 40);
+        let border = divider(&app, StackId::Left, 0, 2);
+        let top = app.drawn.areas.table;
+        drag_divider(&mut app, &border, top.bottom() + 2, (200, 40));
+        press(&mut app, "1");
+        draw(&mut app, 200, 40);
+        let checks = app.drawn.areas.checks;
+        assert!(checks.height >= MIN_ROWS, "{checks:?}");
     }
 
     #[test]

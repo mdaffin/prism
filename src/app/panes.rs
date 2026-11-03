@@ -186,6 +186,8 @@ pub struct PaneAreas {
     pub table_offset: usize,
     /// The scrollbars drawn, which a click or drag can use. Emptied at the start of each draw.
     pub scrollbars: Vec<ScrollbarHit>,
+    /// The borders between panes, which a drag can move. Set at each draw.
+    pub dividers: Vec<super::resize::Divider>,
     pub checks: Rect,
     pub approvers: Rect,
     pub comments: Rect,

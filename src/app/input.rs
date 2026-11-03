@@ -33,6 +33,7 @@ impl App {
     pub(super) fn on_mouse(&mut self, mouse: MouseEvent) {
         if !matches!(self.mode, Mode::Loading | Mode::List) {
             self.bar_drag = None;
+            self.divider_drag = None;
             let wheel = match mouse.kind {
                 MouseEventKind::ScrollDown => Some(3),
                 MouseEventKind::ScrollUp => Some(-3),
@@ -54,7 +55,7 @@ impl App {
         } else if self.typing != Typing::Nothing {
             return;
         }
-        if self.on_scrollbar(mouse) {
+        if self.on_scrollbar(mouse) || self.on_divider(mouse) {
             return;
         }
         let Some(pane) = self.drawn.areas.at(position) else {
@@ -326,6 +327,11 @@ impl App {
                 self.toggle_pane(pane);
             }
             KeyCode::Char('0') => self.show_all_panes(),
+            KeyCode::Char('+') => self.resize_focused(true, true),
+            KeyCode::Char('-') => self.resize_focused(true, false),
+            KeyCode::Char('>') => self.resize_focused(false, true),
+            KeyCode::Char('<') => self.resize_focused(false, false),
+            KeyCode::Char('=') => self.reset_sizes(),
             KeyCode::Char('s') => self.cycle_sort(),
             KeyCode::Char('S') => self.reverse_sort(),
             KeyCode::Char('?') => self.mode = Mode::Help(0),

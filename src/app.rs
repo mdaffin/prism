@@ -20,12 +20,16 @@ mod completion;
 mod editing;
 mod input;
 mod panes;
+mod resize;
 mod scrollbars;
 mod work;
 
 pub use panes::{
     ChecksLayout, CommentLayout, Drawn, Pane, PopupView, Scroll, ScrollTarget, ScrollbarHit, to_u16,
 };
+pub use resize::{Divider, MIN_WEIGHT, Sizes, StackId};
+#[cfg(test)]
+pub use resize::{MIN_COLUMNS, MIN_ROWS};
 pub use work::{Details, Diff, Fetch, FetchId, RepoNames};
 use work::{forget_failed, is_current, names_loaded};
 
@@ -84,6 +88,9 @@ pub struct App {
     pub hidden_panes: Vec<Pane>,
     /// The drag on a scrollbar's thumb that is in progress, if any.
     bar_drag: Option<scrollbars::BarDrag>,
+    /// How the panes have been resized, and the drag on a border that is in progress.
+    pub sizes: resize::Sizes,
+    divider_drag: Option<resize::DividerDrag>,
     /// The highlighted row, as a position in `visible`.
     pub table: TableState,
     /// Columns the table is scrolled sideways, past its first columns. The view clamps it. Unlike
@@ -457,6 +464,8 @@ impl App {
             hidden: Vec::new(),
             hidden_panes: Vec::new(),
             bar_drag: None,
+            sizes: resize::Sizes::default(),
+            divider_drag: None,
             dry_run,
             mode: Mode::Loading,
             query: Input::new(query.clone()),
