@@ -496,6 +496,24 @@ pub struct Laid {
     pub lines: Vec<Line<'static>>,
     /// The links of each of `lines`, in columns of that line as drawn.
     pub links: Vec<Vec<LinkSpan>>,
+    /// How each of `lines` goes on from the one before, so that text selected over several rows
+    /// can be put back as the lines it was written in.
+    pub joins: Vec<Join>,
+    /// Whether each of `lines` is a row of a table.
+    pub tables: Vec<bool>,
+}
+
+/// How a laid-out row goes on from the row before it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Join {
+    /// It starts a line of its own.
+    #[default]
+    New,
+    /// The line was wrapped between two words: the space between them is at the end of the row
+    /// before, or was dropped for want of room.
+    Word,
+    /// The line was wrapped inside a word too long for a row, such as a URL.
+    Split,
 }
 
 /// Lays a body out in `width` columns. A table line is cropped to `width` columns starting `x`
@@ -517,10 +535,14 @@ pub fn layout_markdown(markdown: &Markdown, width: usize, x: usize) -> Laid {
                 })
             });
             laid.links.push(shifted.collect());
+            laid.joins.push(Join::New);
+            laid.tables.push(true);
         } else {
-            let (lines, links) = wrap_line(line, links, width);
+            let (lines, links, joins) = wrap_rows(line, links, width);
+            laid.tables.extend(lines.iter().map(|_| false));
             laid.lines.extend(lines);
             laid.links.extend(links);
+            laid.joins.extend(joins);
         }
     }
     laid
@@ -530,12 +552,14 @@ pub fn layout_markdown(markdown: &Markdown, width: usize, x: usize) -> Laid {
 pub fn layout_plain(text: &Text<'static>, width: usize) -> Laid {
     let mut laid = Laid::default();
     for line in &text.lines {
-        let (lines, links) = wrap_line(line, &[], width);
+        let (lines, links, joins) = wrap_rows(line, &[], width);
+        laid.tables.extend(lines.iter().map(|_| false));
         laid.lines.extend(lines.into_iter().map(|mut row| {
             row.style = text.style.patch(row.style);
             row
         }));
         laid.links.extend(links);
+        laid.joins.extend(joins);
     }
     laid
 }
@@ -553,11 +577,22 @@ struct Glyph {
 /// a row, such as a URL. A space that fits at the end of a row stays, as does one that starts a
 /// line, and one with no room is dropped. Returns the rows, and the links of each in columns of
 /// that row.
+#[cfg(test)]
 pub fn wrap_line(
     line: &Line<'static>,
     links: &[LinkSpan],
     width: usize,
 ) -> (Vec<Line<'static>>, Vec<Vec<LinkSpan>>) {
+    let (lines, links, _) = wrap_rows(line, links, width);
+    (lines, links)
+}
+
+/// [`wrap_line`], also saying how each row goes on from the one before.
+pub fn wrap_rows(
+    line: &Line<'static>,
+    links: &[LinkSpan],
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<Vec<LinkSpan>>, Vec<Join>) {
     let width = width.max(1);
     let mut glyphs = Vec::new();
     let mut column = 0;
@@ -575,6 +610,8 @@ pub fn wrap_line(
     }
 
     let mut rows: Vec<Vec<usize>> = vec![Vec::new()];
+    // How each row goes on from the one before it.
+    let mut joins = vec![Join::New];
     let mut used = 0;
     let mut i = 0;
     while i < glyphs.len() {
@@ -596,15 +633,18 @@ pub fn wrap_line(
             used += run_width;
         } else if run_width <= width {
             rows.push((i..end).collect());
+            joins.push(Join::Word);
             used = run_width;
         } else {
             if used > 0 {
                 rows.push(Vec::new());
+                joins.push(Join::Word);
                 used = 0;
             }
             for k in i..end {
                 if used > 0 && used + glyphs[k].width > width {
                     rows.push(Vec::new());
+                    joins.push(Join::Split);
                     used = 0;
                 }
                 rows.last_mut().unwrap().push(k);
@@ -662,7 +702,7 @@ pub fn wrap_line(
         });
         row_links.push(regions);
     }
-    (lines, row_links)
+    (lines, row_links, joins)
 }
 
 /// `width` columns of a line starting `x` columns in.

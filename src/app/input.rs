@@ -48,6 +48,10 @@ impl App {
         }
         let position = Position::new(mouse.column, mouse.row);
         if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+            // Any press starts over: the old selection goes, and a new one only begins where the
+            // press was on text.
+            self.selection = None;
+            self.select_from = None;
             if self.click_box(position) {
                 return;
             }
@@ -55,7 +59,7 @@ impl App {
         } else if self.typing != Typing::Nothing {
             return;
         }
-        if self.on_scrollbar(mouse) || self.on_divider(mouse) {
+        if self.on_scrollbar(mouse) || self.on_divider(mouse) || self.on_selection(mouse) {
             return;
         }
         let Some(pane) = self.drawn.areas.at(position) else {
@@ -69,6 +73,10 @@ impl App {
                     Pane::Description => self.click_description(position),
                     Pane::Checks => self.click_check(position),
                     _ => {}
+                }
+                // A drag from here selects text, unless the press was on a link or a header.
+                if matches!(pane, Pane::Comments | Pane::Description) {
+                    self.begin_selection(pane, position);
                 }
                 if let Some(sort) = self.sort_at(position) {
                     self.click_sort(sort);
@@ -341,6 +349,9 @@ impl App {
             KeyCode::Char('q') => self.should_quit = true,
             // Esc never quits: it is too easy to hit by accident. It clears the filter, then
             // the selection.
+            // Esc clears the text selected with the mouse, then the filter, then the selection of
+            // PRs: whichever is nearest.
+            KeyCode::Esc if self.selection.is_some() => self.selection = None,
             KeyCode::Esc if !self.filter.value().is_empty() => self.clear_filter(),
             KeyCode::Esc => self.selected.clear(),
             KeyCode::Tab => self.focus = self.focus.next(&self.hidden_panes),

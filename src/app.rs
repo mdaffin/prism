@@ -22,6 +22,7 @@ mod input;
 mod panes;
 mod resize;
 mod scrollbars;
+mod selection;
 mod work;
 
 pub use panes::{
@@ -30,6 +31,7 @@ pub use panes::{
 pub use resize::{Divider, MIN_WEIGHT, Sizes, StackId};
 #[cfg(test)]
 pub use resize::{MIN_COLUMNS, MIN_ROWS};
+pub use selection::{TextRow, TextView};
 pub use work::{Details, Diff, Fetch, FetchId, RepoNames};
 use work::{forget_failed, is_current, names_loaded};
 
@@ -91,6 +93,10 @@ pub struct App {
     /// How the panes have been resized, and the drag on a border that is in progress.
     pub sizes: resize::Sizes,
     divider_drag: Option<resize::DividerDrag>,
+    /// The text selected with the mouse in the description or the comments, and the press that a
+    /// drag would select from.
+    selection: Option<selection::Selection>,
+    select_from: Option<selection::Selection>,
     /// The highlighted row, as a position in `visible`.
     pub table: TableState,
     /// Columns the table is scrolled sideways, past its first columns. The view clamps it. Unlike
@@ -466,6 +472,8 @@ impl App {
             bar_drag: None,
             sizes: resize::Sizes::default(),
             divider_drag: None,
+            selection: None,
+            select_from: None,
             dry_run,
             mode: Mode::Loading,
             query: Input::new(query.clone()),
@@ -1056,6 +1064,10 @@ impl App {
     /// `y`: copies what `o` would open: the URL of the highlighted item, or the PR's where it has
     /// none of its own. The description and the diff have nothing to copy.
     fn copy_focused(&mut self) {
+        // Text selected with the mouse in this pane is what is wanted, before any URL.
+        if self.selection().is_some_and(|s| s.pane == self.focus) && self.copy_selection() {
+            return;
+        }
         let (text, note) = match (self.focus, self.highlighted_page()) {
             (_, Some(Page::Url(url))) => (url, "Copied the URL"),
             (Pane::Checks, _) => {

@@ -14,8 +14,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{
     self, App, ChecksLayout, CommentLayout, ConfirmOpen, Details, Divider, Failure, Fetch,
-    MIN_WEIGHT, Mode, Page, Pane, PopupView, ScrollTarget, ScrollbarHit, Sizes, StackId, Typing,
-    to_u16,
+    MIN_WEIGHT, Mode, Page, Pane, PopupView, ScrollTarget, ScrollbarHit, Sizes, StackId, TextRow,
+    TextView, Typing, to_u16,
 };
 use crate::batch::{Batch, Confirm, ItemStatus, Summary};
 use crate::gh::{Approvers, Comment, PrState, Reviewer, Verdict};
@@ -532,6 +532,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         app.drawn.areas.comments = Rect::default();
         app.drawn.comment_layout = CommentLayout::default();
         app.drawn.comment_links = Vec::new();
+        app.drawn.comment_text = TextView::default();
     } else {
         comments(app, frame, comments_area);
     }
@@ -541,6 +542,7 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     if app.pane_hidden(Pane::Description) {
         app.drawn.areas.description = Rect::default();
         app.drawn.description_links = Vec::new();
+        app.drawn.description_text = TextView::default();
     } else {
         description(app, frame, description_area);
     }
@@ -1950,6 +1952,7 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     app.drawn.areas.comments = area;
     app.drawn.comment_layout = CommentLayout::default();
     app.drawn.comment_links = Vec::new();
+    app.drawn.comment_text = TextView::default();
     let count = loaded_details(app).map_or(0, |d| d.comments.len());
     let block = pane_block(
         counted_title("Comments", count),
@@ -1988,7 +1991,12 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
         .unwrap_or(0);
     let x = usize::from(app.scroll.comment_x).min(widest.saturating_sub(width));
 
-    let (document, items, links) = comment_document(
+    let CommentDocument {
+        lines: document,
+        items,
+        links,
+        rows,
+    } = comment_document(
         comments,
         bodies,
         &app.scroll.comments_open,
@@ -2001,6 +2009,13 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     let pane = Paragraph::new(Text::from(document));
     let scroll = app.scroll.comments.min(max_scroll(total, inner.height));
     frame.render_widget(pane.scroll((scroll, 0)), inner);
+    let view = TextView {
+        inner,
+        scroll: usize::from(scroll),
+        rows,
+    };
+    highlight_selection(app, frame, Pane::Comments, &view);
+    app.drawn.comment_text = view;
     pane_scrollbar(
         app,
         frame,
@@ -2020,9 +2035,18 @@ fn comments(app: &mut App, frame: &mut Frame, area: Rect) {
     app.scroll.comments = scroll;
 }
 
+/// The comments as one document, as laid out for a pane.
+struct CommentDocument {
+    lines: Vec<Line<'static>>,
+    /// Each comment's first line and height, counted as wrapped to the width, as that layout is
+    /// what `update` steps through.
+    items: Vec<(usize, usize)>,
+    links: Vec<Vec<model::LinkSpan>>,
+    /// The rows as text, for selecting.
+    rows: Vec<TextRow>,
+}
+
 /// The comments as one document: a header per comment, and the body under it when it is open.
-/// Also each comment's first line and height, counted as wrapped to `width`, as that layout is
-/// what `update` steps through.
 fn comment_document(
     comments: &[Comment],
     bodies: &[model::Markdown],
@@ -2030,15 +2054,12 @@ fn comment_document(
     selected: usize,
     width: u16,
     x: usize,
-) -> (
-    Vec<Line<'static>>,
-    Vec<(usize, usize)>,
-    Vec<Vec<model::LinkSpan>>,
-) {
+) -> CommentDocument {
     let now = jiff::Timestamp::now();
     let width = usize::from(width);
     let mut document = Vec::new();
     let mut links = Vec::new();
+    let mut rows = Vec::new();
     let mut items = Vec::with_capacity(comments.len());
     for (i, comment) in comments.iter().enumerate() {
         let is_open = open.contains(&i);
@@ -2056,19 +2077,41 @@ fn comment_document(
             header = header.reversed();
         }
         let start = document.len();
-        let (rows, row_links) = model::wrap_line(&header, &[], width);
-        document.extend(rows);
+        let (header_rows, row_links, joins) = model::wrap_rows(&header, &[], width);
+        for (row, join) in header_rows.iter().zip(joins) {
+            rows.push(TextRow {
+                text: line_text(row),
+                join,
+                table: false,
+                header: true,
+            });
+        }
+        document.extend(header_rows);
         links.extend(row_links);
         if is_open {
             let laid = model::layout_markdown(&bodies[i], width, x);
+            for ((row, &join), &table) in laid.lines.iter().zip(&laid.joins).zip(&laid.tables) {
+                rows.push(TextRow {
+                    text: line_text(row),
+                    join,
+                    table,
+                    header: false,
+                });
+            }
             document.extend(laid.lines);
             links.extend(laid.links);
             document.push(Line::default());
             links.push(Vec::new());
+            rows.push(TextRow::default());
         }
         items.push((start, document.len() - start));
     }
-    (document, items, links)
+    CommentDocument {
+        lines: document,
+        items,
+        links,
+        rows,
+    }
 }
 
 fn diff(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -2167,6 +2210,33 @@ fn pull_request(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(vec![title, Line::from(summary)]), inner);
 }
 
+/// The text of a laid-out row, as drawn.
+fn line_text(line: &Line) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+/// Reverses the selected cells of `view`, the rows a pane drew, if the selection is in `pane`.
+fn highlight_selection(app: &App, frame: &mut Frame, pane: Pane, view: &TextView) {
+    let Some(selection) = app.selection().filter(|s| s.pane == pane) else {
+        return;
+    };
+    for y in 0..usize::from(view.inner.height) {
+        let Some(row) = view.rows.get(view.scroll + y) else {
+            break;
+        };
+        let Some((from, to)) = selection.columns_on(view.scroll + y, App::row_width(row)) else {
+            continue;
+        };
+        let x = view.inner.x + to_u16(from);
+        let width = to_u16(to - from).min(view.inner.right().saturating_sub(x));
+        let cells = Rect::new(x, view.inner.y + to_u16(y), width, 1);
+        frame.buffer_mut().set_style(cells, Modifier::REVERSED);
+    }
+}
+
 fn description(app: &mut App, frame: &mut Frame, area: Rect) {
     app.drawn.areas.description = area;
     app.drawn.description_links = Vec::new();
@@ -2201,9 +2271,28 @@ fn description(app: &mut App, frame: &mut Frame, area: Rect) {
     let block = pane_block(title, app.focus == Pane::Description);
     let lines = laid.lines.len();
     let scroll = app.scroll.description.min(max_scroll(lines, inner.height));
+    // What a drag can select: the rows as drawn.
+    let rows = laid
+        .lines
+        .iter()
+        .zip(&laid.joins)
+        .zip(&laid.tables)
+        .map(|((line, &join), &table)| TextRow {
+            text: line_text(line),
+            join,
+            table,
+            header: false,
+        })
+        .collect();
+    let view = TextView {
+        inner,
+        scroll: usize::from(scroll),
+        rows,
+    };
     // Already wrapped, so the links can be found from where they are drawn.
     let pane = Paragraph::new(Text::from(laid.lines)).scroll((scroll, 0));
     frame.render_widget(pane.block(block), area);
+    highlight_selection(app, frame, Pane::Description, &view);
     pane_scrollbar(
         app,
         frame,
@@ -2213,6 +2302,7 @@ fn description(app: &mut App, frame: &mut Frame, area: Rect) {
     );
     app.scroll.description = scroll;
     app.drawn.description_links = laid.links;
+    app.drawn.description_text = view;
 }
 
 #[cfg(test)]
@@ -3642,6 +3732,188 @@ mod tests {
         draw(&mut app, 200, 40);
         let checks = app.drawn.areas.checks;
         assert!(checks.height >= MIN_ROWS, "{checks:?}");
+    }
+
+    /// An app whose description is `body`, and one open comment of `comment_body`, drawn at 200
+    /// by 40.
+    fn app_with_text(body: &str, comment_body: &str) -> App {
+        let mut app = app_with(vec![
+            pr(1, "Bump alpha", "OPEN", ""),
+            pr(2, "Bump beta", "OPEN", ""),
+        ]);
+        let details = serde_json::from_value(serde_json::json!({
+            "headRefName": "branch",
+            "body": body,
+            "comments": [{
+                "author": {"login": "someone"},
+                "createdAt": "2026-01-02T03:00:00Z",
+                "body": comment_body,
+            }],
+            "additions": 1,
+            "deletions": 1,
+        }))
+        .unwrap();
+        app.details_loaded(1, Ok(details));
+        draw(&mut app, 200, 40);
+        app
+    }
+
+    /// The cell of row `row`, column `column` of a pane's text, as last drawn.
+    fn text_cell(view: &TextView, row: usize, column: u16) -> Position {
+        Position::new(
+            view.inner.x + column,
+            view.inner.y + u16::try_from(row - view.scroll).unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_drag_over_wrapped_text_copies_it_as_the_one_line_it_was() {
+        let body: String = (1..=90)
+            .map(|n| format!("w{n}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut app = app_with_text(&body, "");
+        let view = app.drawn.description_text.clone();
+        assert!(
+            view.rows.len() > 2,
+            "it should have wrapped: {}",
+            view.rows.len()
+        );
+        let last = view.rows.len() - 1;
+        let end_column = u16::try_from(view.rows[last].text.chars().count() - 1).unwrap();
+        press_at(&mut app, text_cell(&view, 0, 0));
+        drag_to(&mut app, text_cell(&view, last, end_column));
+        release_at(&mut app, text_cell(&view, last, end_column));
+        assert_eq!(app.copy_to_run().as_deref(), Some(body.as_str()));
+        assert!(status_bar(&mut app, 160).contains("Copied"));
+        // The cells under the drag are drawn reversed, the others are not.
+        let buffer = draw(&mut app, 200, 40);
+        let first = text_cell(&view, 0, 0);
+        assert!(
+            buffer[first]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED)
+        );
+        // The border is never in it.
+        let border = Position::new(view.inner.x - 1, view.inner.y);
+        assert!(
+            !buffer[border]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED)
+        );
+    }
+
+    #[test]
+    fn a_selection_in_part_of_a_row_copies_only_that_part_and_y_copies_it_again() {
+        let mut app = app_with_text("hello brave new world", "");
+        let view = app.drawn.description_text.clone();
+        // "brave" is columns 6 to 10; the drag goes from right to left.
+        press_at(&mut app, text_cell(&view, 0, 10));
+        drag_to(&mut app, text_cell(&view, 0, 6));
+        release_at(&mut app, text_cell(&view, 0, 6));
+        assert_eq!(app.copy_to_run().as_deref(), Some("brave"));
+        // `y` in the description copies it again; elsewhere it is what it always was.
+        app.focus = Pane::Description;
+        press(&mut app, "y");
+        assert_eq!(app.copy_to_run().as_deref(), Some("brave"));
+        // Esc clears the selection, and then `y` is the URL's.
+        key(&mut app, KeyCode::Esc);
+        assert!(app.selection().is_none());
+        draw(&mut app, 200, 40);
+        let buffer = draw(&mut app, 200, 40);
+        assert!(
+            !buffer[text_cell(&view, 0, 6)]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED)
+        );
+    }
+
+    #[test]
+    fn a_drag_across_a_tables_box_copies_its_cells_with_tabs() {
+        let table =
+            "┌──────┬──────┐\n│ Name │ Val  │\n├──────┼──────┤\n│ a    │ 1    │\n└──────┴──────┘";
+        // A table in Markdown is drawn with its box characters by the renderer.
+        let md = "intro\n\n| Name | Val |\n|---|---|\n| a | 1 |\n\noutro";
+        let mut app = app_with_text(md, "");
+        let view = app.drawn.description_text.clone();
+        let last = view.rows.len() - 1;
+        press_at(&mut app, text_cell(&view, 0, 0));
+        drag_to(&mut app, text_cell(&view, last, 10));
+        release_at(&mut app, text_cell(&view, last, 10));
+        let copied = app.copy_to_run().unwrap();
+        assert!(
+            !copied.contains(|c| "┌┐└┘├┤┬┴┼─│".contains(c)),
+            "{copied:?}"
+        );
+        assert!(copied.contains("Name\tVal"), "{copied:?}");
+        assert!(copied.contains("a\t1"), "{copied:?}");
+        assert!(
+            copied.starts_with("intro\n") && copied.ends_with("outro"),
+            "{copied:?}"
+        );
+    }
+
+    #[test]
+    fn a_drag_in_an_open_comment_selects_its_text_but_not_from_a_header_or_a_link() {
+        let mut app = app_with_text("body", "first line of the comment");
+        // Open the comment by clicking its header.
+        let header = {
+            let area = app.drawn.areas.comments;
+            Position::new(area.x + 3, area.y + 1)
+        };
+        click(&mut app, header);
+        draw(&mut app, 200, 40);
+        let view = app.drawn.comment_text.clone();
+        assert!(view.rows[0].header && view.rows.len() > 1);
+        // From the body: the text is selected.
+        press_at(&mut app, text_cell(&view, 1, 0));
+        drag_to(&mut app, text_cell(&view, 1, 4));
+        release_at(&mut app, text_cell(&view, 1, 4));
+        assert_eq!(app.copy_to_run().as_deref(), Some("first"));
+        // From the header: it is a click, which toggles the comment, and selects nothing.
+        press_at(&mut app, text_cell(&view, 0, 2));
+        drag_to(&mut app, text_cell(&view, 1, 4));
+        release_at(&mut app, text_cell(&view, 1, 4));
+        assert!(app.copy_to_run().is_none());
+        assert!(app.selection().is_none());
+    }
+
+    #[test]
+    fn a_selection_is_dropped_by_a_press_elsewhere_and_belongs_to_one_pr() {
+        let mut app = app_with_text("hello brave new world", "");
+        let view = app.drawn.description_text.clone();
+        press_at(&mut app, text_cell(&view, 0, 0));
+        drag_to(&mut app, text_cell(&view, 0, 4));
+        release_at(&mut app, text_cell(&view, 0, 4));
+        assert!(app.selection().is_some());
+        // Another PR highlighted: it is not that text any more.
+        app.focus = Pane::Table;
+        key(&mut app, KeyCode::Down);
+        assert_eq!(app.highlighted().unwrap().pr.number, 2);
+        assert!(app.selection().is_none());
+        key(&mut app, KeyCode::Up);
+        // Back on the first, the selection is what it was, until a press elsewhere clears it.
+        assert!(app.selection().is_some());
+        click(&mut app, Position::new(0, 0));
+        assert!(app.selection().is_none());
+    }
+
+    #[test]
+    fn dragging_past_the_bottom_of_the_description_scrolls_it() {
+        let body = vec!["a line"; 100].join("\n\n");
+        let mut app = app_with_text(&body, "");
+        let view = app.drawn.description_text.clone();
+        press_at(&mut app, text_cell(&view, 0, 0));
+        let below = Position::new(view.inner.x + 2, view.inner.bottom() + 1);
+        for _ in 0..5 {
+            drag_to(&mut app, below);
+            draw(&mut app, 200, 40);
+        }
+        assert_eq!(app.scroll.description, 5);
+        release_at(&mut app, below);
+        // The text from the first row to the last one shown is copied.
+        let copied = app.copy_to_run().unwrap();
+        assert!(copied.lines().count() > 10, "{copied:?}");
     }
 
     #[test]

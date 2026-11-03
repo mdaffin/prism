@@ -149,7 +149,16 @@ pub const KEYS: &[KeyHelp] = &[
         "Pause or resume the timed refresh, which also pauses while the terminal is out of focus",
         None,
     ),
-    key("Esc", "Clear the filter, then the selection", None),
+    key(
+        "Esc",
+        "Clear selected text, then the filter, then the selection of PRs",
+        None,
+    ),
+    key(
+        "Mouse drag",
+        "Select text in the description or an open comment and copy it when the button is released, or with y; Shift-drag (Option-drag in iTerm2) uses the terminal's own selection instead",
+        None,
+    ),
     key(
         "q",
         "Quit, close the current dialog, or cancel a running batch",

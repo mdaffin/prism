@@ -144,6 +144,9 @@ pub struct Drawn {
     /// a click can find the one under it. Empty while a pane is not drawn.
     pub description_links: Vec<Vec<LinkSpan>>,
     pub comment_links: Vec<Vec<LinkSpan>>,
+    /// The rows of text the description and the comments drew, for selecting.
+    pub description_text: super::selection::TextView,
+    pub comment_text: super::selection::TextView,
 }
 
 impl Default for Drawn {
@@ -158,6 +161,8 @@ impl Default for Drawn {
             checks_layout: ChecksLayout::default(),
             description_links: Vec::new(),
             comment_links: Vec::new(),
+            description_text: Default::default(),
+            comment_text: Default::default(),
         }
     }
 }
