@@ -622,10 +622,10 @@ pub fn wrap_rows(
         }
         let run_width: usize = glyphs[i..end].iter().map(|g| g.width).sum();
         if space {
-            for k in i..end {
-                if used + glyphs[k].width <= width {
+            for (k, glyph) in glyphs.iter().enumerate().take(end).skip(i) {
+                if used + glyph.width <= width {
                     rows.last_mut().unwrap().push(k);
-                    used += glyphs[k].width;
+                    used += glyph.width;
                 }
             }
         } else if used + run_width <= width {
@@ -641,14 +641,14 @@ pub fn wrap_rows(
                 joins.push(Join::Word);
                 used = 0;
             }
-            for k in i..end {
-                if used > 0 && used + glyphs[k].width > width {
+            for (k, glyph) in glyphs.iter().enumerate().take(end).skip(i) {
+                if used > 0 && used + glyph.width > width {
                     rows.push(Vec::new());
                     joins.push(Join::Split);
                     used = 0;
                 }
                 rows.last_mut().unwrap().push(k);
-                used += glyphs[k].width;
+                used += glyph.width;
             }
         }
         i = end;

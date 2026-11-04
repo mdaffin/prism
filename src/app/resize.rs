@@ -173,8 +173,8 @@ impl App {
         }
         let (a, b) = divider.between;
         let pair = u32::from(weights[a]) + u32::from(weights[b]);
-        if first + second > 0 {
-            let new_a = (pair * first / (first + second)) as u16;
+        if let Some(new_a) = (pair * first).checked_div(first + second) {
+            let new_a = new_a as u16;
             weights[a] = new_a;
             weights[b] = (pair - u32::from(new_a)) as u16;
         }

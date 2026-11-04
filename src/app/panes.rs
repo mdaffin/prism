@@ -169,6 +169,35 @@ impl Default for Drawn {
     }
 }
 
+impl Drawn {
+    /// Clears what a pane recorded of itself, as it is hidden and nothing should act on it.
+    pub fn forget(&mut self, pane: Pane) {
+        match pane {
+            Pane::Table => {}
+            Pane::Checks => {
+                self.areas.checks = Rect::default();
+                self.checks_layout = ChecksLayout::default();
+            }
+            Pane::Approvers => self.areas.approvers = Rect::default(),
+            Pane::Comments => {
+                self.areas.comments = Rect::default();
+                self.comment_layout = CommentLayout::default();
+                self.comment_links = Vec::new();
+                self.comment_text = Default::default();
+            }
+            Pane::Description => {
+                self.areas.description = Rect::default();
+                self.description_links = Vec::new();
+                self.description_text = Default::default();
+            }
+            Pane::Diff => {
+                self.areas.diff = Rect::default();
+                self.diff_text = Default::default();
+            }
+        }
+    }
+}
+
 /// The lines that a notch of the wheel scrolls a pane.
 const WHEEL_LINES: isize = 3;
 

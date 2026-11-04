@@ -496,16 +496,8 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     frame.render_widget(Line::from(app.title()).bold().reversed(), title_area);
     app.drawn.areas.search = search_area;
     app.drawn.areas.dividers = dividers;
-    app.drawn.areas.filter = if filter_rows > 0 {
-        filter_area
-    } else {
-        Rect::default()
-    };
-    app.drawn.areas.columns = if columns_rows > 0 {
-        columns_area
-    } else {
-        Rect::default()
-    };
+    app.drawn.areas.filter = none_if_empty(filter_area);
+    app.drawn.areas.columns = none_if_empty(columns_area);
     search(app, frame, search_area);
     if filter_rows > 0 {
         filter(app, frame, filter_area);
@@ -515,43 +507,14 @@ pub fn view(app: &mut App, frame: &mut Frame) {
     }
 
     pr_table(app, frame, table_area);
-    // A hidden pane is not drawn, and what it recorded of itself is cleared so that nothing acts
-    // on a pane that is not there.
-    if app.pane_hidden(Pane::Checks) {
-        app.drawn.areas.checks = Rect::default();
-        app.drawn.checks_layout = ChecksLayout::default();
-    } else {
-        checks(app, frame, checks_area);
-    }
-    if app.pane_hidden(Pane::Approvers) {
-        app.drawn.areas.approvers = Rect::default();
-    } else {
-        approvers(app, frame, approvers_area);
-    }
-    if app.pane_hidden(Pane::Comments) {
-        app.drawn.areas.comments = Rect::default();
-        app.drawn.comment_layout = CommentLayout::default();
-        app.drawn.comment_links = Vec::new();
-        app.drawn.comment_text = TextView::default();
-    } else {
-        comments(app, frame, comments_area);
-    }
+    draw_pane(app, frame, Pane::Checks, checks_area, checks);
+    draw_pane(app, frame, Pane::Approvers, approvers_area, approvers);
+    draw_pane(app, frame, Pane::Comments, comments_area, comments);
     if !pull_request_area.is_empty() {
         pull_request(app, frame, pull_request_area);
     }
-    if app.pane_hidden(Pane::Description) {
-        app.drawn.areas.description = Rect::default();
-        app.drawn.description_links = Vec::new();
-        app.drawn.description_text = TextView::default();
-    } else {
-        description(app, frame, description_area);
-    }
-    if app.pane_hidden(Pane::Diff) {
-        app.drawn.areas.diff = Rect::default();
-        app.drawn.diff_text = TextView::default();
-    } else {
-        diff(app, frame, diff_area);
-    }
+    draw_pane(app, frame, Pane::Description, description_area, description);
+    draw_pane(app, frame, Pane::Diff, diff_area, diff);
 
     if let Some(error) = error {
         let error = Paragraph::new(error).red().wrap(Wrap { trim: false });
@@ -564,6 +527,32 @@ pub fn view(app: &mut App, frame: &mut Frame) {
         Line::from(status).style(Style::new().reversed()),
         status_area,
     );
+}
+
+/// Draws a pane in `area`, unless it is hidden. A hidden pane is not drawn, and what it recorded of
+/// itself is cleared so that nothing acts on a pane that is not there.
+fn draw_pane(
+    app: &mut App,
+    frame: &mut Frame,
+    pane: Pane,
+    area: Rect,
+    draw: fn(&mut App, &mut Frame, Rect),
+) {
+    if app.pane_hidden(pane) {
+        app.drawn.forget(pane);
+    } else {
+        draw(app, frame, area);
+    }
+}
+
+/// `area`, or the default empty one if it has no room, so that a stale rectangle can't catch a
+/// click.
+fn none_if_empty(area: Rect) -> Rect {
+    if area.is_empty() {
+        Rect::default()
+    } else {
+        area
+    }
 }
 
 /// The popup over the table that the mode asks for, if any. Records where its buttons are.
@@ -2784,7 +2773,7 @@ mod tests {
             if *sort != Sort::Number {
                 assert!(area.x >= table.x + 1 + FROZEN_WIDTH, "{sort:?}");
             }
-            assert!(area.right() <= table.right() - 1, "{sort:?}");
+            assert!(area.right() < table.right(), "{sort:?}");
         }
         // The title is still there to click, and sorts by title.
         click_header(&mut app, Sort::Title);
