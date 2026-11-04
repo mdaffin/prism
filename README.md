@@ -107,6 +107,30 @@ sort the list. `v` chooses which columns show.
   comment or the diff to copy it. Use `--no-mouse` if you'd rather have your terminal's own
   selection.
 
+## Checks
+
+The checks column and pane show a PR as passing, pending or failing the way GitHub's own page
+does. A branch-protection check that is required but hasn't started yet counts as pending, as does
+a workflow whose newest run was cancelled before reporting anything, even if an older run passed.
+
+## Approving and merging
+
+Select PRs with `Space` (or `Ctrl-A` for every visible PR with passing checks), then press `Ctrl-G`
+(or `Enter` to review just the highlighted PR). A dialog lists the PRs and offers
+**Approve**, **Approve & merge** or **Cancel**; closed and merged PRs that were selected are left
+out.
+
+- PRs are approved several at a time. With Approve & merge, each PR is merged, one at a time, as
+  soon as it is approved, using `--merge-method`.
+- A PR you have already approved at its current head isn't approved again; it goes straight on to
+  merging.
+- A PR whose checks are still pending is set to auto-merge, so GitHub merges it once they pass. A
+  PR with no checks is merged straight away.
+- Each PR shows its own status as the batch runs, and a summary follows. `q` cancels the batch; a
+  step already under way can't be stopped, and PRs approved so far aren't merged.
+- The selection is kept afterwards.
+- `--dry-run` goes through all of this without approving or merging anything.
+
 ## Shortcuts
 
 Press `?` in the program for the full list, which also covers the keys below that are particular
