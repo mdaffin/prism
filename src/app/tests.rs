@@ -1093,9 +1093,7 @@ fn merge(app: &mut App, number: u64, result: Result<()>) {
 fn approve_and_merge_merges_approved_prs_one_at_a_time() {
     let mut app = start_approving_and_merging();
     assert_eq!(app.approvals_to_run(), [1, 2, 3, 4]);
-    // Nothing is merged until every approval has finished.
     approve(&mut app, 1, Ok(()));
-    assert_eq!(app.merge_to_run(), None);
     approve(&mut app, 2, Ok(()));
     approve(&mut app, 3, Ok(()));
     approve(&mut app, 4, Err(color_eyre::eyre::eyre!("own PR")));
@@ -1105,8 +1103,7 @@ fn approve_and_merge_merges_approved_prs_one_at_a_time() {
     let Mode::Running(batch) = &app.mode else {
         panic!("the batch stopped before merging");
     };
-    assert!(batch.is_merging());
-    assert_eq!(batch.progress(), (0, 3));
+    assert_eq!(batch.progress(), (1, 4));
     assert_eq!(app.merge_to_run(), Some((1, false)));
     assert_eq!(app.merge_to_run(), None);
     merge(&mut app, 1, Ok(()));
@@ -1132,6 +1129,32 @@ fn approve_and_merge_merges_approved_prs_one_at_a_time() {
     );
     assert_eq!(app.selected.len(), 4);
     assert_eq!(app.refreshes_to_fetch(), [1, 2, 3, 4]);
+}
+
+#[test]
+fn an_approved_pr_merges_while_others_are_still_being_approved() {
+    let mut app = start_approving_and_merging();
+    assert_eq!(app.approvals_to_run(), [1, 2, 3, 4]);
+    approve(&mut app, 2, Ok(()));
+    assert_eq!(app.merge_to_run(), Some((2, true)));
+    // Approvals carry on, but only one merge runs at a time.
+    approve(&mut app, 1, Ok(()));
+    assert_eq!(app.merge_to_run(), None);
+    merge(&mut app, 2, Ok(()));
+    assert_eq!(app.merge_to_run(), Some((1, false)));
+    merge(&mut app, 1, Ok(()));
+    assert!(matches!(app.mode, Mode::Running(_)));
+
+    // The batch ends once the last approval is in and its merge is done.
+    approve(&mut app, 3, Ok(()));
+    approve(&mut app, 4, Err(color_eyre::eyre::eyre!("own PR")));
+    assert!(matches!(app.mode, Mode::Running(_)));
+    assert_eq!(app.merge_to_run(), Some((3, false)));
+    merge(&mut app, 3, Ok(()));
+    let Mode::Results(summary) = &app.mode else {
+        panic!("the results aren't shown");
+    };
+    assert_eq!(summary.merged, Some((3, 3)));
 }
 
 #[test]

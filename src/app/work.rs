@@ -284,9 +284,9 @@ impl App {
             .collect()
     }
 
-    /// The next merge to start, and whether it should use auto-merge. Merges run one at a time,
-    /// so this returns nothing while one is working. Marks it as working, so the caller must
-    /// start it.
+    /// The next merge to start, and whether it should use auto-merge. A PR can be merged as soon
+    /// as it is approved, while others are still being approved, but merges run one at a time, so
+    /// this returns nothing while one is working. Marks it as working, so the caller must start it.
     pub fn merge_to_run(&mut self) -> Option<(u64, bool)> {
         let Mode::Running(batch) = &mut self.mode else {
             return None;

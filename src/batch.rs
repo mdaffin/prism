@@ -5,8 +5,8 @@ use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::model::{CheckState, one_line};
 
-/// Approves PRs, all at once up to a limit, then merges the approved ones one at a time if
-/// asked to.
+/// Approves PRs, several at once up to a limit, and merges each approved one, one at a time, if
+/// asked to. A PR is merged as soon as it is approved.
 pub struct Batch {
     pub items: Vec<BatchItem>,
     /// Whether approved PRs are merged afterwards.
@@ -24,6 +24,26 @@ impl BatchItem {
     /// The status of the step the PR is on, or of the approval that stopped it before merging.
     pub fn current_status(&self) -> &ItemStatus {
         self.merging.as_ref().unwrap_or(&self.approval)
+    }
+
+    /// The stage the PR is on, as shown in the progress table: waiting, approving, waiting to
+    /// merge, merging or done, or how it stopped.
+    pub fn label(&self) -> String {
+        let (step, status) = match &self.merging {
+            Some(status) => ("merge", status),
+            None => ("approve", &self.approval),
+        };
+        match status {
+            ItemStatus::Pending if step == "merge" => "· waiting to merge".to_string(),
+            ItemStatus::Pending => "· waiting".to_string(),
+            ItemStatus::Working if step == "merge" => "… merging".to_string(),
+            ItemStatus::Working => "… approving".to_string(),
+            ItemStatus::Done => "✓ done".to_string(),
+            ItemStatus::AutoMerge => "⏲ auto-merge queued".to_string(),
+            ItemStatus::Failed(error) => format!("✗ {step} failed: {error}"),
+            ItemStatus::Cancelled => "· cancelled".to_string(),
+            ItemStatus::Interrupted => "? interrupted - check GitHub".to_string(),
+        }
     }
 
     fn steps(&self) -> [Option<&ItemStatus>; 2] {
@@ -55,31 +75,13 @@ impl ItemStatus {
     pub fn is_ok(&self) -> bool {
         matches!(self, Self::Done | Self::AutoMerge)
     }
-
-    /// The status as shown in the progress table.
-    pub fn label(&self) -> String {
-        match self {
-            Self::Pending => "· pending".to_string(),
-            Self::Working => "… working".to_string(),
-            Self::Done => "✓ done".to_string(),
-            Self::AutoMerge => "⏲ auto-merge queued".to_string(),
-            Self::Failed(error) => format!("✗ failed: {error}"),
-            Self::Cancelled => "· cancelled".to_string(),
-            Self::Interrupted => "? interrupted - check GitHub".to_string(),
-        }
-    }
 }
 
 impl Batch {
-    /// Whether the batch has moved on to merging.
-    pub fn is_merging(&self) -> bool {
-        self.items.iter().any(|item| item.merging.is_some())
-    }
-
     /// Stops the steps that haven't started, and marks those running as interrupted, as they
-    /// can't be stopped. A cancelled Approve & merge doesn't merge the PRs approved so far.
+    /// can't be stopped. A cancelled Approve & merge doesn't merge the PRs approved so far, other
+    /// than one already being merged.
     pub fn cancel(&mut self) {
-        let was_merging = self.is_merging();
         for item in &mut self.items {
             for status in [Some(&mut item.approval), item.merging.as_mut()]
                 .into_iter()
@@ -91,27 +93,43 @@ impl Batch {
                     _ => {}
                 }
             }
-            if self.merge && !was_merging && item.approval.is_ok() {
-                item.merging = Some(ItemStatus::Cancelled);
-            }
         }
     }
 
-    /// How many items of the current step are finished, out of how many.
+    /// Queues the PR for merging once its approval has succeeded, if the batch merges. A PR can
+    /// be merged while others are still being approved.
+    pub fn queue_merge(&mut self, number: u64) {
+        let merge = self.merge;
+        if let Some(item) = self.items.iter_mut().find(|item| item.pr.number == number)
+            && merge
+            && item.approval.is_ok()
+        {
+            item.merging = Some(ItemStatus::Pending);
+        }
+    }
+
+    /// Whether the PR has nothing left to do: its merge is finished, or for a batch that doesn't
+    /// merge, or a PR that wasn't approved, its approval is.
+    fn is_item_finished(&self, item: &BatchItem) -> bool {
+        match &item.merging {
+            Some(status) => status.is_finished(),
+            None => item.approval.is_finished(),
+        }
+    }
+
+    /// Whether every PR has nothing left to do.
+    pub fn is_finished(&self) -> bool {
+        self.items.iter().all(|item| self.is_item_finished(item))
+    }
+
+    /// How many PRs have nothing left to do, out of how many.
     pub fn progress(&self) -> (usize, usize) {
-        let statuses: Vec<&ItemStatus> = if self.is_merging() {
-            self.items
-                .iter()
-                .filter_map(|item| item.merging.as_ref())
-                .collect()
-        } else {
-            self.items.iter().map(|item| &item.approval).collect()
-        };
-        let finished = statuses
+        let finished = self
+            .items
             .iter()
-            .filter(|status| status.is_finished())
+            .filter(|item| self.is_item_finished(item))
             .count();
-        (finished, statuses.len())
+        (finished, self.items.len())
     }
 
     /// How the batch went, once it has finished.
@@ -306,6 +324,30 @@ mod tests {
                 (3, "merge", "conflict".to_string()),
                 (4, "approve", "no".to_string())
             ]
+        );
+    }
+
+    #[test]
+    fn an_item_is_labelled_with_its_stage() {
+        let label = |approval, merging| item(1, approval, merging).label();
+        assert_eq!(label(ItemStatus::Pending, None), "· waiting");
+        assert_eq!(label(ItemStatus::Working, None), "… approving");
+        assert_eq!(
+            label(ItemStatus::Done, Some(ItemStatus::Pending)),
+            "· waiting to merge"
+        );
+        assert_eq!(
+            label(ItemStatus::Done, Some(ItemStatus::Working)),
+            "… merging"
+        );
+        assert_eq!(label(ItemStatus::Done, Some(ItemStatus::Done)), "✓ done");
+        assert_eq!(
+            label(ItemStatus::Failed("no".into()), None),
+            "✗ approve failed: no"
+        );
+        assert_eq!(
+            label(ItemStatus::Done, Some(ItemStatus::Failed("busy".into()))),
+            "✗ merge failed: busy"
         );
     }
 

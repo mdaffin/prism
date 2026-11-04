@@ -932,8 +932,8 @@ impl App {
         }
     }
 
-    /// Records an approval's result. After the last one, queues the approved PRs for merging if
-    /// asked to, or else finishes the batch.
+    /// Records an approval's result. If asked to merge, queues the PR for merging at once, without
+    /// waiting for the others to be approved. Finishes the batch when nothing is left to do.
     fn approved(&mut self, number: u64, result: Result<()>) {
         let Mode::Running(batch) = &mut self.mode else {
             return;
@@ -941,23 +941,14 @@ impl App {
         if let Some(item) = batch.items.iter_mut().find(|item| item.pr.number == number) {
             item.approval = finished_status(result, ItemStatus::Done);
         }
-        if !batch.items.iter().all(|item| item.approval.is_finished()) {
-            return;
-        }
-        if batch.merge {
-            // Only PRs whose approval succeeded are merged.
-            for item in &mut batch.items {
-                if item.approval.is_ok() {
-                    item.merging = Some(ItemStatus::Pending);
-                }
-            }
-        }
-        if !batch.is_merging() {
+        // Only PRs whose approval succeeded are merged.
+        batch.queue_merge(number);
+        if batch.is_finished() {
             self.finish_batch();
         }
     }
 
-    /// Records a merge's result, and finishes the batch after the last one.
+    /// Records a merge's result, and finishes the batch after the last step.
     fn merged(&mut self, number: u64, result: Result<()>) {
         let Mode::Running(batch) = &mut self.mode else {
             return;
@@ -970,8 +961,7 @@ impl App {
             };
             item.merging = Some(finished_status(result, ok));
         }
-        let (finished, total) = batch.progress();
-        if finished == total {
+        if batch.is_finished() {
             self.finish_batch();
         }
     }

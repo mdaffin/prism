@@ -1168,8 +1168,8 @@ fn running_popup(
 ) -> Vec<Rect> {
     let (finished, total) = batch.progress();
     let progress = format!("{spinner} {finished}/{total} done");
-    let step = if batch.is_merging() {
-        "Merging"
+    let step = if batch.merge {
+        "Approving and merging"
     } else {
         "Approving"
     };
@@ -1178,7 +1178,7 @@ fn running_popup(
     // Failures can be long, so the lines wrap.
     lines.extend(batch.items.iter().map(|item| {
         let status = item.current_status();
-        let label = Span::styled(status.label(), item_style(status));
+        let label = Span::styled(item.label(), item_style(status));
         Line::from(vec![Span::raw(format!("#{:<7}", item.pr.number)), label])
     }));
     let footer = vec![Line::default(), Line::from("q: Cancel").dim().centered()];
@@ -3250,8 +3250,8 @@ mod tests {
         // The popup draws over the table, so a status shares its line with a table row.
         let with = |text: &str| screen.iter().filter(|line| line.contains(text)).count();
         assert_eq!(with("✓ done"), 1);
-        assert_eq!(with("… working"), 3);
-        assert_eq!(with("· pending"), 2);
+        assert_eq!(with("… approving"), 3);
+        assert_eq!(with("· waiting"), 2);
         assert!(screen.iter().any(|line| line.contains("q: Cancel")));
 
         press(&mut app, "q");
