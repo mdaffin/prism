@@ -497,6 +497,72 @@ query($owner: String!, $name: String!, $number: Int!, $after: String, $withRevie
 }
 "#;
 
+/// Whether the viewer's own latest review is an approval of the PR's current head. The PR is
+/// `$number` in `$owner` and `$name`.
+pub const VIEWER_APPROVAL_QUERY: &str = r#"
+query($owner: String!, $name: String!, $number: Int!) {
+  viewer { login }
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      headRefOid
+      latestOpinionatedReviews(first: 50) {
+        nodes { state author { login } commit { oid } }
+      }
+    }
+  }
+}
+"#;
+
+#[derive(Debug, Deserialize)]
+pub struct ViewerApprovalData {
+    viewer: ViewerLogin,
+    repository: ViewerApprovalRepository,
+}
+
+#[derive(Debug, Deserialize)]
+struct ViewerLogin {
+    login: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ViewerApprovalRepository {
+    #[serde(rename = "pullRequest")]
+    pull_request: ViewerApprovalPr,
+}
+
+#[derive(Debug, Deserialize)]
+struct ViewerApprovalPr {
+    #[serde(rename = "headRefOid")]
+    head_ref_oid: String,
+    #[serde(rename = "latestOpinionatedReviews")]
+    reviews: Nodes<ViewerReview>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ViewerReview {
+    state: ReviewState,
+    author: Option<ViewerLogin>,
+    commit: Option<GqlCommitId>,
+}
+
+impl ViewerApprovalData {
+    /// Whether the viewer has approved the PR's current head, so approving again adds nothing.
+    pub fn already_approved(&self) -> bool {
+        let pr = &self.repository.pull_request;
+        pr.reviews.nodes.iter().any(|review| {
+            matches!(review.state, ReviewState::Approved)
+                && review
+                    .author
+                    .as_ref()
+                    .is_some_and(|a| a.login == self.viewer.login)
+                && review
+                    .commit
+                    .as_ref()
+                    .is_some_and(|c| c.oid == pr.head_ref_oid)
+        })
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct DetailsData {
     repository: DetailsRepository,
@@ -833,6 +899,26 @@ pub fn error_message(output: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn viewer_approval(state: &str, author: &str, oid: &str) -> bool {
+        let json = format!(
+            r#"{{"viewer": {{"login": "me"}}, "repository": {{"pullRequest": {{"headRefOid": "new",
+            "latestOpinionatedReviews": {{"nodes": [
+              {{"state": "{state}", "author": {{"login": "{author}"}}, "commit": {{"oid": "{oid}"}}}}
+            ]}}}}}}}}"#
+        );
+        serde_json::from_str::<ViewerApprovalData>(&json)
+            .unwrap()
+            .already_approved()
+    }
+
+    #[test]
+    fn only_the_viewers_approval_of_the_current_head_counts() {
+        assert!(viewer_approval("APPROVED", "me", "new"));
+        assert!(!viewer_approval("APPROVED", "someone", "new"));
+        assert!(!viewer_approval("APPROVED", "me", "old"));
+        assert!(!viewer_approval("CHANGES_REQUESTED", "me", "new"));
+    }
 
     /// A page of a search: a PR with both kinds of check and a bot author, a PR with no checks
     /// and no review decision, a PR whose author was deleted, and something that is not a PR.

@@ -257,10 +257,28 @@ impl Gh {
         Ok(())
     }
 
+    /// Approves a PR, unless the user has already approved its current head, as another approval
+    /// would only add noise. If that can't be found out, it approves.
     pub async fn approve(&self, number: u64) -> Result<()> {
+        if self.already_approved(number).await.unwrap_or(false) {
+            return Ok(());
+        }
         let number = number.to_string();
         self.run_action(&["pr", "review", &number, "--approve"])
             .await
+    }
+
+    /// Whether the user's latest review of the PR approves its current head. It only reads.
+    async fn already_approved(&self, number: u64) -> Result<bool> {
+        let variables = [
+            Variable::Typed("owner", "{owner}".to_string()),
+            Variable::Typed("name", "{repo}".to_string()),
+            Variable::Typed("number", number.to_string()),
+        ];
+        let response: graphql::Response<graphql::ViewerApprovalData> = self
+            .graphql(graphql::VIEWER_APPROVAL_QUERY, &variables)
+            .await?;
+        Ok(response.data.already_approved())
     }
 
     /// Merges a PR. With `auto`, GitHub merges it once its checks pass; otherwise it is merged
