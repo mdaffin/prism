@@ -31,6 +31,7 @@ fragment StatusFields on PullRequest {
   mergeable
   reviewDecision
   updatedAt
+  baseRefName
   commits(last: 1) {
     nodes {
       commit {
@@ -197,6 +198,7 @@ pub struct GqlStatus {
     review_decision: Option<ReviewDecision>,
     updated_at: String,
     commits: Commits,
+    base_ref_name: Option<String>,
 }
 
 /// A PR as the table lists it.
@@ -290,6 +292,59 @@ struct GqlStatusContext {
     /// A status has no start; `gh` gave its creation time as `startedAt`.
     created_at: Option<String>,
     target_url: Option<String>,
+}
+
+/// What a query for PRs gives, so that the checks the base branch requires can be added to it.
+pub trait Required {
+    /// The branch the PR merges into.
+    fn base_branch(&self) -> Option<&str>;
+    /// Adds a pending check for each of `contexts` that the PR has no check for. A required check
+    /// that hasn't started isn't in GitHub's rollup, but it blocks the merge, so it is shown as
+    /// pending, as on GitHub's page.
+    fn add_required(&mut self, contexts: &[String]);
+}
+
+impl Required for GqlStatus {
+    fn base_branch(&self) -> Option<&str> {
+        self.base_ref_name.as_deref()
+    }
+
+    fn add_required(&mut self, contexts: &[String]) {
+        let Some(node) = self.commits.nodes.first_mut() else {
+            return;
+        };
+        let rollup = node.commit.status_check_rollup.get_or_insert(Rollup {
+            contexts: Contexts { nodes: Vec::new() },
+        });
+        for context in contexts {
+            let seen = rollup.contexts.nodes.iter().any(|check| match check {
+                GqlCheck::CheckRun(run) => run.name == *context,
+                GqlCheck::StatusContext(status) => status.context == *context,
+                GqlCheck::Unknown => false,
+            });
+            if !seen {
+                rollup
+                    .contexts
+                    .nodes
+                    .push(GqlCheck::StatusContext(GqlStatusContext {
+                        context: context.clone(),
+                        state: ContextState::Expected,
+                        created_at: None,
+                        target_url: None,
+                    }));
+            }
+        }
+    }
+}
+
+impl Required for GqlPr {
+    fn base_branch(&self) -> Option<&str> {
+        self.status.base_branch()
+    }
+
+    fn add_required(&mut self, contexts: &[String]) {
+        self.status.add_required(contexts);
+    }
 }
 
 /// The name `gh` gave an account that has been deleted, and GitHub's web UI does too.
@@ -1276,5 +1331,37 @@ mod tests {
         }}}"#;
         let data: DetailsData = serde_json::from_str(json).unwrap();
         assert_eq!(data.into_page().0.approvers, Approvers::default());
+    }
+
+    #[test]
+    fn a_required_check_that_has_not_started_is_pending() {
+        let json = r#"{
+          "number": 1, "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": null,
+          "updatedAt": "2026-01-02T03:04:05Z", "baseRefName": "master",
+          "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"nodes": [
+            {"__typename": "CheckRun", "name": "build", "status": "COMPLETED",
+             "conclusion": "SUCCESS", "startedAt": null, "detailsUrl": null,
+             "checkSuite": {"workflowRun": null}}
+          ]}}}}]}
+        }"#;
+        let mut status: GqlStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(status.base_branch(), Some("master"));
+        status.add_required(&["build".to_string(), "Build (Pull Request)".to_string()]);
+        let status = PrStatus::from(status);
+        assert_eq!(status.status_check_rollup.len(), 2);
+        let checks = crate::model::classify_checks(Mergeable::Other, &status.status_check_rollup);
+        assert_eq!(checks.state, crate::model::CheckState::Pending);
+    }
+
+    #[test]
+    fn a_required_check_is_added_to_a_commit_with_no_rollup() {
+        let json = r#"{
+          "number": 1, "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": null,
+          "updatedAt": "2026-01-02T03:04:05Z", "baseRefName": "master",
+          "commits": {"nodes": [{"commit": {"statusCheckRollup": null}}]}
+        }"#;
+        let mut status: GqlStatus = serde_json::from_str(json).unwrap();
+        status.add_required(&["Build (Pull Request)".to_string()]);
+        assert_eq!(PrStatus::from(status).status_check_rollup.len(), 1);
     }
 }

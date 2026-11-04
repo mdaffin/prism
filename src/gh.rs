@@ -54,7 +54,7 @@ impl Gh {
 
     /// The PRs that `query` finds, up to one more than `limit`. It is one GraphQL search, a page
     /// of [`graphql::MAX_PAGE`] at a time for a longer list.
-    async fn search<T: DeserializeOwned>(
+    async fn search<T: DeserializeOwned + graphql::Required>(
         &self,
         query: &str,
         limit: u32,
@@ -89,12 +89,13 @@ impl Gh {
             }
         }
         prs.truncate(wanted);
+        self.add_required(&mut prs).await;
         Ok(prs)
     }
 
     /// These PRs by number, in one request. One that isn't found is left out; if GitHub says
     /// anything is wrong with the request, it all fails.
-    async fn lookup<T: DeserializeOwned>(
+    async fn lookup<T: DeserializeOwned + graphql::Required>(
         &self,
         numbers: &[u64],
         fields: graphql::Fields,
@@ -106,9 +107,51 @@ impl Gh {
         ];
         let mut response: graphql::Response<graphql::LookupData<T>> =
             self.graphql(&query, &variables).await?;
-        Ok(numbers
+        let mut found: Vec<T> = numbers
             .iter()
             .filter_map(|&number| response.data.take(number))
+            .collect();
+        self.add_required(&mut found).await;
+        Ok(found)
+    }
+
+    /// Adds the checks that each PR's base branch requires and that haven't started, which
+    /// GitHub's rollup leaves out. They come from the branch's rules, which cover rulesets as
+    /// well as branch protection. If they can't be read, say for lack of access, the PRs keep
+    /// the checks they have.
+    async fn add_required<T: graphql::Required>(&self, prs: &mut [T]) {
+        let mut branches: Vec<String> = prs
+            .iter()
+            .filter_map(|pr| pr.base_branch().map(str::to_string))
+            .collect();
+        branches.sort();
+        branches.dedup();
+        let required =
+            futures::future::join_all(branches.iter().map(|branch| self.required_checks(branch)))
+                .await;
+        for pr in prs {
+            let Some(base) = pr.base_branch() else {
+                continue;
+            };
+            let Some(index) = branches.iter().position(|branch| branch == base) else {
+                continue;
+            };
+            if let Ok(contexts) = &required[index] {
+                pr.add_required(contexts);
+            }
+        }
+    }
+
+    /// The names of the checks that a PR into `branch` must pass.
+    async fn required_checks(&self, branch: &str) -> Result<Vec<String>> {
+        let path = format!("repos/{{owner}}/{{repo}}/rules/branches/{}", encode(branch));
+        let jq = r#".[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context"#;
+        let stdout = self
+            .exec_in(&["api", &path, "--jq", jq], true, true)
+            .await?;
+        Ok(String::from_utf8_lossy(&stdout)
+            .lines()
+            .map(str::to_string)
             .collect())
     }
 
@@ -452,6 +495,20 @@ impl fmt::Display for GhError {
 }
 
 impl std::error::Error for GhError {}
+
+/// `text` as one segment of a URL path.
+fn encode(text: &str) -> String {
+    let mut out = String::new();
+    for byte in text.bytes() {
+        match byte {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
 
 pub fn check_installed() -> Result<()> {
     match std::process::Command::new("gh")
