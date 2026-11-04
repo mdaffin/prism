@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
-use ansi_to_tui::IntoText;
 use color_eyre::eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::layout::Position;
@@ -33,7 +32,7 @@ pub use resize::{Divider, MIN_WEIGHT, Sizes, StackId};
 pub use resize::{MIN_COLUMNS, MIN_ROWS};
 pub use selection::{TextRow, TextView};
 pub use work::{Details, Diff, Fetch, FetchId, RepoNames};
-use work::{forget_failed, is_current, names_loaded};
+use work::{forget_failed, forget_unlisted_loading, is_current, names_loaded};
 
 /// The most failed row refreshes, and the most failed opens, to list above the status bar.
 const MAX_LISTED_ERRORS: usize = 3;
@@ -428,8 +427,8 @@ pub enum Msg {
     /// The result of the details fetch with this id for this PR, dropped if the PR's entry has
     /// been dropped or fetched again since (see [`FetchId`]).
     DetailsLoaded(u64, FetchId, Result<PrDetails>),
-    /// Likewise for a diff.
-    DiffLoaded(u64, FetchId, Result<String>),
+    /// Likewise for a diff, which was read (see [`Diff::parse`]) before it was sent.
+    DiffLoaded(u64, FetchId, Result<Diff>),
     /// The repository's labels, branches, users or teams, from the fetch with this id, dropped if
     /// it is not the latest.
     LabelsLoaded(FetchId, Result<Vec<String>>),
@@ -846,13 +845,7 @@ impl App {
                 self.diffs.insert(number, Fetch::Failed(failure_text(&e)));
             }
             Msg::DiffLoaded(number, _, Ok(diff)) => {
-                // A tab would be drawn as a single cell. Parsing here rather than when drawing
-                // means each diff is parsed once.
-                let diff = match diff.replace('\t', "    ").into_text() {
-                    Ok(text) => Fetch::Loaded(Diff::new(text)),
-                    Err(e) => Fetch::Failed(format!("couldn't read the colours: {e}")),
-                };
-                self.diffs.insert(number, diff);
+                self.diffs.insert(number, Fetch::Loaded(diff));
             }
             Msg::PrsLoaded(id, _) if id != self.list.id => {}
             Msg::PrsLoaded(_, Err(e)) => {
@@ -889,6 +882,7 @@ impl App {
             self.scroll = Scroll::default();
         }
         self.visible = (0..rows.len()).collect();
+        let listed: HashSet<u64> = rows.iter().map(|row| row.pr.number).collect();
         self.rows = rows;
         self.list.shown_query = self.list.fetching_query.clone();
         // The filter is cleared either way.
@@ -897,15 +891,16 @@ impl App {
         if self.list.is_refresh {
             // The selection is kept by PR number, so a PR that moved is still selected.
             // One that is no longer listed is dropped.
-            let listed: HashSet<u64> = self.rows.iter().map(|row| row.pr.number).collect();
             self.selected.retain(|number| listed.contains(number));
             // The panes show current data, so nothing fetched earlier is kept.
             self.details.clear();
             self.diffs.clear();
         } else {
             self.selected.clear();
-            // A PR's details don't depend on the query, so a new search keeps them. Give
-            // failed ones another chance.
+            // A PR's details don't depend on the query, so a new search keeps them, except the
+            // fetches running for PRs it doesn't list. Give failed ones another chance.
+            forget_unlisted_loading(&mut self.details, &listed);
+            forget_unlisted_loading(&mut self.diffs, &listed);
             forget_failed(&mut self.details);
             forget_failed(&mut self.diffs);
             self.names.forget_failed();

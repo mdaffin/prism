@@ -1320,6 +1320,69 @@ fn prefetches_diffs_from_the_highlight_within_the_limit() {
 }
 
 #[test]
+fn cached_diffs_are_capped_to_those_nearest_the_highlight() {
+    use super::work::MAX_CACHED_DIFFS;
+    let count = MAX_CACHED_DIFFS as u64 * 2;
+    let mut app = app_with_rows(count);
+    // Load every diff the prefetch asks for, until it asks for no more.
+    let load_all = |app: &mut App| {
+        loop {
+            let fetches = app.diffs_to_fetch();
+            if fetches.is_empty() {
+                break;
+            }
+            for (number, _) in fetches {
+                app.diff_loaded(number, Ok(String::new()));
+            }
+        }
+    };
+    load_all(&mut app);
+    // Only the first rows, the ones nearest the highlight, were fetched.
+    assert_eq!(app.diffs.len(), MAX_CACHED_DIFFS);
+    assert!(app.diffs.contains_key(&1) && !app.diffs.contains_key(&(count)));
+
+    // Moving to the middle drops those above it, and doesn't fetch them again.
+    app.table.select(Some(MAX_CACHED_DIFFS));
+    load_all(&mut app);
+    assert_eq!(app.diffs.len(), MAX_CACHED_DIFFS);
+    assert!(
+        app.diffs.contains_key(&(MAX_CACHED_DIFFS as u64 + 1)) && app.diffs.contains_key(&count)
+    );
+    assert!(!app.diffs.contains_key(&1) && !app.diffs.contains_key(&2));
+    assert!(app.diffs_to_fetch().is_empty());
+}
+
+#[test]
+fn a_new_search_stops_waiting_for_fetches_of_pr_it_no_longer_lists() {
+    let mut app = app_with_rows(3);
+    let details = app.details_to_fetch();
+    let diffs = app.diffs_to_fetch();
+    assert_eq!(details.len(), 3);
+
+    // The new list drops #1 and #3 but keeps #2, which was still loading.
+    press(&mut app, "/");
+    key(&mut app, KeyCode::Enter);
+    let (id, _) = app.list_to_fetch().unwrap();
+    app.update(Msg::PrsLoaded(id, Ok(prs([2, 4]))));
+    assert!(!app.details.contains_key(&1) && !app.details.contains_key(&3));
+    assert!(!app.diffs.contains_key(&1) && !app.diffs.contains_key(&3));
+    assert!(matches!(app.details[&2], Fetch::Loading(_)));
+    assert!(matches!(app.diffs[&2], Fetch::Loading(_)));
+
+    // Their slots are free for the new list's PRs, and the late results are ignored.
+    assert_eq!(started(app.details_to_fetch()), [4]);
+    for &(number, id) in &details {
+        app.update(Msg::DetailsLoaded(number, id, Ok(details_with_body("old"))));
+    }
+    for &(number, id) in &diffs {
+        app.update(Msg::DiffLoaded(number, id, Diff::parse("old")));
+    }
+    assert!(!app.details.contains_key(&1) && !app.diffs.contains_key(&3));
+    assert!(loaded_body(&app, 2).is_some());
+    assert!(matches!(app.diffs[&2], Fetch::Loaded(_)));
+}
+
+#[test]
 fn diff_colours_become_styles() {
     let mut app = app_with_rows(1);
     app.diff_loaded(1, Ok("\x1b[32m+added\x1b[m\n ctx".to_string()));
@@ -1790,7 +1853,7 @@ fn a_result_from_before_ctrl_r_is_dropped() {
         app.update(Msg::DetailsLoaded(number, id, Ok(details_with_body("old"))));
     }
     for &(number, id) in &diffs {
-        app.update(Msg::DiffLoaded(number, id, Ok("old".to_string())));
+        app.update(Msg::DiffLoaded(number, id, Diff::parse("old")));
     }
     assert!(app.details.is_empty() && app.diffs.is_empty());
     // Failures from them are dropped too.
@@ -1845,7 +1908,7 @@ fn a_result_from_before_a_changed_pr_was_dropped_is_ignored() {
     assert!(matches!(app.details[&1], Fetch::Loading(_)));
     assert_eq!(loaded_body(&app, 2).as_deref(), Some("d"));
     for &(number, id) in &diffs {
-        app.update(Msg::DiffLoaded(number, id, Ok(String::new())));
+        app.update(Msg::DiffLoaded(number, id, Diff::parse("")));
     }
     assert!(!app.diffs.contains_key(&1));
     assert!(matches!(app.diffs[&2], Fetch::Loaded(_)));

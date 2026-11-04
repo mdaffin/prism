@@ -154,7 +154,15 @@ fn start_work(
     }
     for (number, id) in app.diffs_to_fetch() {
         spawn(gh, tx, async move |gh| {
-            Msg::DiffLoaded(number, id, gh.pr_diff(number).await)
+            // Reading the colours of a huge diff would stall the UI thread, so it is done on a
+            // thread of its own.
+            let diff = match gh.pr_diff(number).await {
+                Ok(raw) => tokio::task::spawn_blocking(move || app::Diff::parse(&raw))
+                    .await
+                    .unwrap_or_else(|e| Err(e.into())),
+                Err(e) => Err(e),
+            };
+            Msg::DiffLoaded(number, id, diff)
         });
     }
     let names = app.names_to_fetch();

@@ -1,8 +1,9 @@
 //! The background work the app asks for: what to fetch or run next, and what was fetched.
 //! `update` decides, and the caller in `main` starts it and sends back a `Msg`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use ansi_to_tui::IntoText;
 use ratatui::text::Text;
 
 use super::{App, Mode, Pane, RefreshId, Typing};
@@ -16,6 +17,11 @@ const MAX_DETAIL_FETCHES: usize = 4;
 
 /// The most diffs fetched at once.
 const MAX_DIFF_FETCHES: usize = 4;
+
+/// The most diffs kept. Diffs are prefetched for the rows nearest the highlight (see
+/// [`App::diffs_to_fetch`]), and the others are dropped once there are more than this, so a long
+/// list doesn't hold every diff in memory.
+pub(super) const MAX_CACHED_DIFFS: usize = 30;
 
 /// The most approvals to run at once.
 const MAX_APPROVALS: usize = 4;
@@ -56,6 +62,17 @@ pub struct Diff {
 }
 
 impl Diff {
+    /// Reads gh's coloured output. This is slow for a huge diff, so the caller runs it off the UI
+    /// thread, and the result is sent as a message.
+    pub fn parse(raw: &str) -> color_eyre::eyre::Result<Self> {
+        // A tab would be drawn as a single cell.
+        let text = raw
+            .replace('\t', "    ")
+            .into_text()
+            .map_err(|e| color_eyre::eyre::eyre!("couldn't read the colours: {e}"))?;
+        Ok(Self::new(text))
+    }
+
     pub fn new(text: Text<'static>) -> Self {
         let widest = text
             .lines
@@ -115,6 +132,16 @@ fn start_fetches<T>(
 /// was dropped, such as by a refresh, or dropped and started again, it is not.
 pub(super) fn is_current<T>(fetches: &HashMap<u64, Fetch<T>>, number: u64, id: FetchId) -> bool {
     matches!(fetches.get(&number), Some(Fetch::Loading(current)) if *current == id)
+}
+
+/// Drops the fetches still running for PRs that are not in `listed`. Nothing shows them any more,
+/// and while they stayed they took up slots that the new list's PRs need. Their results, when
+/// they arrive, no longer match an entry and are dropped (see [`is_current`]).
+pub(super) fn forget_unlisted_loading<T>(
+    fetches: &mut HashMap<u64, Fetch<T>>,
+    listed: &HashSet<u64>,
+) {
+    fetches.retain(|number, fetch| listed.contains(number) || !matches!(fetch, Fetch::Loading(_)));
 }
 
 /// Drops the failed fetches, so they are tried again.
@@ -243,6 +270,7 @@ impl App {
         self.next_fetch_id += 1;
         let id = self.next_fetch_id;
         self.diffs.insert(number, Fetch::Loading(id));
+        let result = result.and_then(|raw| Diff::parse(&raw));
         self.update(super::Msg::DiffLoaded(number, id, result));
     }
 
@@ -389,11 +417,23 @@ impl App {
     /// PRs whose diffs haven't been requested yet, as many as there are free fetch slots, with
     /// their fetch ids. Marks them as loading, so the caller must start the fetches. None while the
     /// Diff pane is hidden, as nothing shows them; they are fetched once it is shown again.
+    ///
+    /// Only the [`MAX_CACHED_DIFFS`] PRs nearest the highlight are fetched. Past that many diffs,
+    /// those outside this window are dropped (fetches still running are kept, and are dropped on
+    /// the next call after they finish), so a dropped diff isn't fetched again until the
+    /// highlight comes near it.
     pub fn diffs_to_fetch(&mut self) -> Vec<(u64, FetchId)> {
         if self.pane_hidden(Pane::Diff) {
             return Vec::new();
         }
-        let order = self.numbers_from_highlight();
+        let mut order = self.numbers_from_highlight();
+        order.truncate(MAX_CACHED_DIFFS);
+        if self.diffs.len() > MAX_CACHED_DIFFS {
+            let window: HashSet<u64> = order.iter().copied().collect();
+            self.diffs.retain(|number, fetch| {
+                window.contains(number) || matches!(fetch, Fetch::Loading(_))
+            });
+        }
         start_fetches(
             &mut self.diffs,
             &mut self.next_fetch_id,
