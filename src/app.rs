@@ -976,8 +976,8 @@ impl App {
         }
     }
 
-    /// Shows the summary, clears the selection and refreshes the batch's rows so they show
-    /// their new states.
+    /// Shows the summary and refreshes the batch's rows so they show their new states. The
+    /// selection is kept.
     fn finish_batch(&mut self) {
         let Mode::Running(batch) = &self.mode else {
             return;
@@ -989,7 +989,6 @@ impl App {
             .extend(batch.items.iter().map(|item| item.pr.number));
         self.batch_epoch += 1;
         self.mode = Mode::Results(summary);
-        self.selected.clear();
     }
 
     /// Leaves `Loading` once a list fetch finishes, without closing an open dialog.

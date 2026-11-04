@@ -948,7 +948,7 @@ fn q_cancels_the_approvals_that_have_not_started() {
     // Nothing more starts, and the batch's rows are refreshed.
     assert!(app.approvals_to_run().is_empty());
     assert_eq!(app.to_refresh, [1, 2, 3, 4, 5, 6]);
-    assert!(app.selected.is_empty());
+    assert_eq!(app.selected.len(), 6);
     // A result that arrives after the cancel changes nothing.
     approve(&mut app, 2, Ok(()));
     assert!(matches!(app.mode, Mode::Results(_)));
@@ -963,9 +963,11 @@ fn a_result_from_a_cancelled_batch_does_not_touch_the_next_one() {
     key(&mut app, KeyCode::Char('q'));
     key(&mut app, KeyCode::Enter);
 
-    // The same PR is approved again, and then the first batch's approval comes back.
-    press(&mut app, "k");
-    start_approving(&mut app, 1);
+    // The same PR is approved again, and then the first batch's approval comes back. It is
+    // still selected from the first batch.
+    ctrl_g(&mut app);
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::Running(_)));
     assert_eq!(app.approvals_to_run(), [1]);
     app.update(Msg::Approved(old, 1, Ok(())));
     let Mode::Running(batch) = &app.mode else {
@@ -1038,7 +1040,7 @@ fn the_last_approval_shows_results_and_refreshes_the_batch() {
         [(3, "approve", "no permission".to_string())]
     );
     assert_eq!(summary.merged, None);
-    assert!(app.selected.is_empty());
+    assert_eq!(app.selected.len(), 3);
     // Only the batch's rows are fetched again, not the whole search.
     assert_eq!(app.list_to_fetch(), None);
     assert_eq!(app.refreshes_to_fetch(), [1, 2, 3]);
@@ -1128,7 +1130,7 @@ fn approve_and_merge_merges_approved_prs_one_at_a_time() {
             (4, "approve", "own PR".to_string()),
         ]
     );
-    assert!(app.selected.is_empty());
+    assert_eq!(app.selected.len(), 4);
     assert_eq!(app.refreshes_to_fetch(), [1, 2, 3, 4]);
 }
 
