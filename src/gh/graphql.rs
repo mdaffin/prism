@@ -2,7 +2,7 @@
 //! answers in, and what turns that into the types the rest of the program uses. `gh pr list` did
 //! several of those conversions for us, so they are done here and tested.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::Deserialize;
 use serde::de::IgnoredAny;
@@ -35,6 +35,16 @@ fragment StatusFields on PullRequest {
   commits(last: 1) {
     nodes {
       commit {
+        # GitHub judges a workflow by its newest suite, so a suite that was cancelled before it
+        # reported anything hides the earlier runs. 15368 is the GitHub Actions app.
+        checkSuites(last: 100, filterBy: {appId: 15368}) {
+          nodes {
+            createdAt
+            conclusion
+            workflowRun { workflow { name } }
+            checkRuns(first: 1) { totalCount }
+          }
+        }
         statusCheckRollup {
           contexts(first: 100) {
             nodes {
@@ -234,6 +244,65 @@ struct CommitNode {
 struct Commit {
     /// `null` for a commit with no checks.
     status_check_rollup: Option<Rollup>,
+    #[serde(default)]
+    check_suites: Option<Suites>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Suites {
+    nodes: Vec<Suite>,
+}
+
+/// A group of check runs, one per workflow run.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Suite {
+    created_at: String,
+    /// `null` until the suite completes.
+    conclusion: Option<Conclusion>,
+    /// `null` for a suite that no workflow made.
+    workflow_run: Option<WorkflowRun>,
+    check_runs: SuiteRuns,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SuiteRuns {
+    total_count: u64,
+}
+
+/// The workflows whose newest suite has reported no checks and didn't end well, usually because
+/// it was cancelled before its jobs were created. GitHub shows the checks of such a workflow as
+/// "Expected — Waiting for status to be reported", whatever its earlier suites gave.
+fn unreported_workflows(suites: Option<Suites>) -> HashSet<String> {
+    let mut newest: HashMap<String, Suite> = HashMap::new();
+    for suite in suites.into_iter().flat_map(|suites| suites.nodes) {
+        let Some(workflow) = suite
+            .workflow_run
+            .as_ref()
+            .map(|run| run.workflow.name.clone())
+        else {
+            continue;
+        };
+        // On a tie the later suite wins: GitHub lists them oldest first.
+        if newest
+            .get(&workflow)
+            .is_none_or(|seen| suite.created_at >= seen.created_at)
+        {
+            newest.insert(workflow, suite);
+        }
+    }
+    newest
+        .into_iter()
+        .filter(|(_, suite)| {
+            suite.check_runs.total_count == 0
+                && !matches!(
+                    suite.conclusion,
+                    Some(Conclusion::Success | Conclusion::Neutral | Conclusion::Skipped)
+                )
+        })
+        .map(|(workflow, _)| workflow)
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]
@@ -387,18 +456,35 @@ impl From<GqlCheck> for Check {
 
 impl From<GqlStatus> for PrStatus {
     fn from(status: GqlStatus) -> Self {
-        let checks = status
+        let commit = status
             .commits
             .nodes
             .into_iter()
             .next()
-            .and_then(|node| node.commit.status_check_rollup)
+            .map(|node| node.commit);
+        let (rollup, suites) = match commit {
+            Some(commit) => (commit.status_check_rollup, commit.check_suites),
+            None => (None, None),
+        };
+        let unreported = unreported_workflows(suites);
+        let checks = rollup
             .map(|rollup| rollup.contexts.nodes)
             .unwrap_or_default();
         PrStatus {
             number: status.number,
             state: status.state,
-            status_check_rollup: checks.into_iter().map(Check::from).collect(),
+            status_check_rollup: checks
+                .into_iter()
+                .map(Check::from)
+                .map(|mut check| {
+                    if let Check::CheckRun(run) = &mut check
+                        && unreported.contains(&run.workflow_name)
+                    {
+                        run.status = RunStatus::Other;
+                    }
+                    check
+                })
+                .collect(),
             mergeable: status.mergeable,
             review_decision: status.review_decision.unwrap_or(ReviewDecision::Other),
             updated_at: status.updated_at,
@@ -1053,6 +1139,65 @@ mod tests {
                 && status.target_url.as_deref() == Some("https://example.test/build/9")
         ));
         assert!(matches!(checks[3], Check::Unknown));
+    }
+
+    fn suite(created_at: &str, conclusion: Option<Conclusion>, runs: u64) -> Suite {
+        Suite {
+            created_at: created_at.to_string(),
+            conclusion,
+            workflow_run: Some(WorkflowRun {
+                workflow: Workflow {
+                    name: "Flight".to_string(),
+                },
+            }),
+            check_runs: SuiteRuns { total_count: runs },
+        }
+    }
+
+    fn unreported(suites: Vec<Suite>) -> bool {
+        unreported_workflows(Some(Suites { nodes: suites })).contains("Flight")
+    }
+
+    #[test]
+    fn a_workflow_whose_newest_suite_reported_nothing_is_unreported() {
+        // As on containers #17617: a success, then a suite cancelled before it had any jobs.
+        let cancelled = Some(Conclusion::Other);
+        let success = Some(Conclusion::Success);
+        assert!(unreported(vec![
+            suite("2026-11-04T05:18:09Z", success, 1),
+            suite("2026-11-04T05:18:09Z", cancelled, 0),
+        ]));
+        // Not started at all.
+        assert!(unreported(vec![suite("2026-11-04T05:18:09Z", None, 0)]));
+        // A newer suite that did report, or an older empty one, doesn't count.
+        assert!(!unreported(vec![
+            suite("2026-11-04T05:18:08Z", cancelled, 0),
+            suite("2026-11-04T05:18:09Z", success, 1),
+        ]));
+        // Nothing to report, but nothing wrong.
+        assert!(!unreported(vec![suite("2026-11-04T05:18:09Z", success, 0)]));
+        assert!(unreported_workflows(None).is_empty());
+    }
+
+    #[test]
+    fn the_checks_of_an_unreported_workflow_are_pending() {
+        let mut value: serde_json::Value = serde_json::from_str(PAGE).unwrap();
+        let commit = &mut value["data"]["search"]["nodes"][0]["commits"]["nodes"][0]["commit"];
+        commit["checkSuites"] = serde_json::json!({"nodes": [
+            {"createdAt": "2026-01-02T03:00:00Z", "conclusion": "SUCCESS",
+             "workflowRun": {"workflow": {"name": "CI"}}, "checkRuns": {"totalCount": 1}},
+            {"createdAt": "2026-01-02T03:00:01Z", "conclusion": "CANCELLED",
+             "workflowRun": {"workflow": {"name": "CI"}}, "checkRuns": {"totalCount": 0}},
+        ]});
+        let search: Search<GqlPr> = serde_json::from_value::<Response<SearchData<GqlPr>>>(value)
+            .unwrap()
+            .data
+            .search;
+        let pr = Pr::from(search.prs().into_iter().next().unwrap());
+        assert!(matches!(
+            &pr.status_check_rollup[0],
+            Check::CheckRun(run) if run.name == "build" && run.status == RunStatus::Other
+        ));
     }
 
     #[test]
