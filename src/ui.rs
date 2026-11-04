@@ -719,161 +719,206 @@ fn pr_table(app: &mut App, frame: &mut Frame, area: Rect) {
     // One row of the table is its header.
     set_page(app, Pane::Table, table_area.height, 2);
 
-    match app.mode {
-        Mode::Loading => frame.render_widget(Line::from("Loading…"), table_area),
-        Mode::List if !app.rows.is_empty() && app.visible.is_empty() => {
-            let message = format!(
-                "No PRs match the filter `{}`. Press Esc to clear it.",
-                app.filter.value()
-            );
-            frame.render_widget(
-                Paragraph::new(message).wrap(Wrap { trim: false }),
-                table_area,
-            )
-        }
-        Mode::List if app.rows.is_empty() => {
-            let query = app.submitted_query();
-            let message = if app.errors.text().is_some() {
-                format!(
-                    "No PRs loaded for `{query}`. Press Ctrl-R to try again, or / to change the search."
-                )
-            } else {
-                format!("No PRs found for `{query}`. Press / to change the search.")
-            };
-            frame.render_widget(
-                Paragraph::new(message).wrap(Wrap { trim: false }),
-                table_area,
-            )
-        }
-        // Popups are drawn over the table.
-        Mode::List
-        | Mode::Confirm(_)
-        | Mode::ConfirmOpen(_)
-        | Mode::Help(_)
-        | Mode::Failure(_)
-        | Mode::PickColumns(_)
-        | Mode::Running(_)
-        | Mode::Results(_) => {
-            let shown = app.shown_columns();
-            // The groups of the column regex share the space the title had.
-            let mut titles = match &app.columns {
-                Some(regex) => model::column_names(regex),
-                None => vec!["Title".to_string()],
-            };
-            // The sorted column's header has an arrow: up for smallest first. A title sort goes by
-            // the title columns in order, so it is marked on the first.
-            let (sorted, descending) = app.sort();
-            let arrow = if descending { " ▼" } else { " ▲" };
-            let marked = |column: Sort, name: &str| {
-                if sorted == column {
-                    format!("{name}{arrow}")
-                } else {
-                    name.to_string()
-                }
-            };
-            titles[0] = marked(Sort::Title, &titles[0]);
-            // With more than fits, the title columns take the width of their longest cell and the
-            // table scrolls sideways; otherwise they share what is left.
-            let title_widths = title_column_widths(app, &titles);
-            let fixed = CHECKBOX_WIDTH + shown.iter().map(|&c| column_width(c)).sum::<u16>();
-            let gaps = (1 + shown.len() + titles.len() - 1) as u16;
-            let total = fixed + title_widths.iter().sum::<u16>() + gaps;
-            let scrolling = total > table_area.width;
-            // Borrowing the fields rather than calling `visible_rows` leaves `app.table` free.
-            let now = jiff::Timestamp::now();
-            let rows = app.visible.iter().map(|&i| &app.rows[i]).map(|row| {
-                let selected = app.selected.contains(&row.pr.number);
-                pr_row(row, selected, &shown, app.columns.as_ref(), now)
-            });
-            let widths = [Constraint::Length(CHECKBOX_WIDTH)]
-                .into_iter()
-                .chain(
-                    shown
-                        .iter()
-                        .map(|&column| Constraint::Length(column_width(column))),
-                )
-                .chain(title_widths.iter().map(|&width| {
-                    if scrolling {
-                        Constraint::Length(width)
-                    } else {
-                        Constraint::Fill(1)
-                    }
-                }))
-                .collect::<Vec<_>>();
-            let header = [String::new()]
-                .into_iter()
-                .chain(shown.iter().map(|&c| marked(c.sort(), c.name())))
-                .chain(titles);
-            let mut table = Table::new(rows, widths)
-                .header(Row::new(header).bold())
-                .row_highlight_style(Style::new().reversed());
-            // The rows are about to be replaced.
-            if app.list.searching {
-                table = table.dim();
-            }
-            if scrolling {
-                // Drawn at its full width, then the part in view is copied over, keeping the
-                // first columns in place.
-                let full = Rect::new(0, 0, total, table_area.height);
-                let mut buffer = Buffer::empty(full);
-                StatefulWidget::render(table, full, &mut buffer, &mut app.table);
-                let x = app.list_x.min(total - table_area.width);
-                app.list_x = x;
-                copy_scrolled(
-                    &buffer,
-                    frame.buffer_mut(),
-                    table_area,
-                    frozen_width(&shown),
-                    x,
-                );
-                pane_hscrollbar(
-                    app,
-                    frame,
-                    ScrollTarget::ListX,
-                    area,
-                    (
-                        usize::from(total),
-                        usize::from(table_area.width),
-                        usize::from(x),
-                    ),
-                );
-            } else {
-                app.list_x = 0;
-                frame.render_stateful_widget(table, table_area, &mut app.table);
-            }
-            // One row of the table is its header.
-            pane_scrollbar(
-                app,
-                frame,
-                ScrollTarget::Table,
-                area,
-                (
-                    app.visible.len(),
-                    usize::from(table_area.height.saturating_sub(1)),
-                    app.table.offset(),
-                ),
-            );
-            // The header is one row.
-            app.drawn.areas.table_rows = Rect {
-                y: table_area.y + 1,
-                height: table_area.height.saturating_sub(1),
-                ..table_area
-            };
-            app.drawn.areas.table_checkboxes = Rect {
-                width: CHECKBOX_WIDTH,
-                ..app.drawn.areas.table_rows
-            };
-            app.drawn.areas.table_offset = app.table.offset();
-            let full_width = if scrolling { total } else { table_area.width };
-            app.drawn.areas.table_header = header_hits(
-                table_area,
-                &shown,
-                full_width,
-                frozen_width(&shown),
-                app.list_x,
-            );
-        }
+    if matches!(app.mode, Mode::Loading) {
+        frame.render_widget(Line::from("Loading…"), table_area);
+    } else if let Some(message) = empty_table_message(app) {
+        let message = Paragraph::new(message).wrap(Wrap { trim: false });
+        frame.render_widget(message, table_area);
+    } else {
+        // Popups are drawn over the table, so it is drawn under them too.
+        let shown = app.shown_columns();
+        let header = header_cells(app, &shown);
+        // The title columns are the header's last cells.
+        let layout = table_layout(app, &shown, &header[1 + shown.len()..], table_area.width);
+        draw_rows(app, frame, (area, table_area), &shown, header, &layout);
+        record_table_areas(app, table_area, &shown, &layout);
     }
+}
+
+/// What the table says in place of its rows while the list has none to show, if that is the case.
+fn empty_table_message(app: &App) -> Option<String> {
+    if !matches!(app.mode, Mode::List) {
+        return None;
+    }
+    if app.rows.is_empty() {
+        let query = app.submitted_query();
+        Some(if app.errors.text().is_some() {
+            format!(
+                "No PRs loaded for `{query}`. Press Ctrl-R to try again, or / to change the search."
+            )
+        } else {
+            format!("No PRs found for `{query}`. Press / to change the search.")
+        })
+    } else if app.visible.is_empty() {
+        Some(format!(
+            "No PRs match the filter `{}`. Press Esc to clear it.",
+            app.filter.value()
+        ))
+    } else {
+        None
+    }
+}
+
+/// The table's header cells: the checkbox's (empty), the `shown` columns' and then each title
+/// column's. The sorted column's has an arrow: up for smallest first. A title sort goes by the
+/// title columns in order, so it is marked on the first.
+fn header_cells(app: &App, shown: &[Column]) -> Vec<String> {
+    let (sorted, descending) = app.sort();
+    let arrow = if descending { " ▼" } else { " ▲" };
+    let marked = |column: Sort, name: &str| {
+        if sorted == column {
+            format!("{name}{arrow}")
+        } else {
+            name.to_string()
+        }
+    };
+    // The groups of the column regex share the space the title had.
+    let mut titles = match &app.columns {
+        Some(regex) => model::column_names(regex),
+        None => vec!["Title".to_string()],
+    };
+    titles[0] = marked(Sort::Title, &titles[0]);
+    [String::new()]
+        .into_iter()
+        .chain(shown.iter().map(|&c| marked(c.sort(), c.name())))
+        .chain(titles)
+        .collect()
+}
+
+/// The widths of the table's columns, and whether they are more than the pane has room for.
+struct TableLayout {
+    widths: Vec<Constraint>,
+    /// The width the table takes up when drawn in full.
+    total: u16,
+    /// Whether `total` is more than the pane's width, so the table scrolls sideways.
+    scrolling: bool,
+}
+
+/// The widths of the checkbox, the `shown` columns and the `titles`, in a pane `available`
+/// columns wide. With more than fits, the title columns take the width of their longest cell and
+/// the table scrolls sideways; otherwise they share what is left.
+fn table_layout(app: &App, shown: &[Column], titles: &[String], available: u16) -> TableLayout {
+    let title_widths = title_column_widths(app, titles);
+    let fixed = CHECKBOX_WIDTH + shown.iter().map(|&c| column_width(c)).sum::<u16>();
+    let gaps = (1 + shown.len() + titles.len() - 1) as u16;
+    let total = fixed + title_widths.iter().sum::<u16>() + gaps;
+    let scrolling = total > available;
+    let widths = [Constraint::Length(CHECKBOX_WIDTH)]
+        .into_iter()
+        .chain(
+            shown
+                .iter()
+                .map(|&column| Constraint::Length(column_width(column))),
+        )
+        .chain(title_widths.iter().map(|&width| {
+            if scrolling {
+                Constraint::Length(width)
+            } else {
+                Constraint::Fill(1)
+            }
+        }))
+        .collect();
+    TableLayout {
+        widths,
+        total,
+        scrolling,
+    }
+}
+
+/// Draws the header and the visible rows in `table_area`, which is inside `area`'s border, scrolled
+/// sideways when the table is wider, and the scrollbars along the border.
+fn draw_rows(
+    app: &mut App,
+    frame: &mut Frame,
+    (area, table_area): (Rect, Rect),
+    shown: &[Column],
+    header: Vec<String>,
+    layout: &TableLayout,
+) {
+    // Borrowing the fields rather than calling `visible_rows` leaves `app.table` free.
+    let now = jiff::Timestamp::now();
+    let rows = app.visible.iter().map(|&i| &app.rows[i]).map(|row| {
+        let selected = app.selected.contains(&row.pr.number);
+        pr_row(row, selected, shown, app.columns.as_ref(), now)
+    });
+    let mut table = Table::new(rows, layout.widths.clone())
+        .header(Row::new(header).bold())
+        .row_highlight_style(Style::new().reversed());
+    // The rows are about to be replaced.
+    if app.list.searching {
+        table = table.dim();
+    }
+    if layout.scrolling {
+        let total = layout.total;
+        // Drawn at its full width, then the part in view is copied over, keeping the first
+        // columns in place.
+        let full = Rect::new(0, 0, total, table_area.height);
+        let mut buffer = Buffer::empty(full);
+        StatefulWidget::render(table, full, &mut buffer, &mut app.table);
+        let x = app.list_x.min(total - table_area.width);
+        app.list_x = x;
+        copy_scrolled(
+            &buffer,
+            frame.buffer_mut(),
+            table_area,
+            frozen_width(shown),
+            x,
+        );
+        pane_hscrollbar(
+            app,
+            frame,
+            ScrollTarget::ListX,
+            area,
+            (
+                usize::from(total),
+                usize::from(table_area.width),
+                usize::from(x),
+            ),
+        );
+    } else {
+        app.list_x = 0;
+        frame.render_stateful_widget(table, table_area, &mut app.table);
+    }
+    // One row of the table is its header.
+    pane_scrollbar(
+        app,
+        frame,
+        ScrollTarget::Table,
+        area,
+        (
+            app.visible.len(),
+            usize::from(table_area.height.saturating_sub(1)),
+            app.table.offset(),
+        ),
+    );
+}
+
+/// Records where the table drew its rows, checkboxes and headers, for the mouse. Call it after
+/// `draw_rows`, which settles how far the table is scrolled.
+fn record_table_areas(app: &mut App, table_area: Rect, shown: &[Column], layout: &TableLayout) {
+    // The header is one row.
+    app.drawn.areas.table_rows = Rect {
+        y: table_area.y + 1,
+        height: table_area.height.saturating_sub(1),
+        ..table_area
+    };
+    app.drawn.areas.table_checkboxes = Rect {
+        width: CHECKBOX_WIDTH,
+        ..app.drawn.areas.table_rows
+    };
+    app.drawn.areas.table_offset = app.table.offset();
+    let full_width = if layout.scrolling {
+        layout.total
+    } else {
+        table_area.width
+    };
+    app.drawn.areas.table_header = header_hits(
+        table_area,
+        shown,
+        full_width,
+        frozen_width(shown),
+        app.list_x,
+    );
 }
 
 /// Where each sortable column's header is on screen, for a click: each of the `shown` columns, and
