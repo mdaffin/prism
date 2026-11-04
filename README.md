@@ -27,7 +27,7 @@ prism --repo OWNER/NAME --author app/renovate
 | `--no-mouse` | Don't capture the mouse, so your terminal's own text selection works. |
 | `--dry-run` | Walk through the flow without approving or merging anything. |
 
-`prism --help` lists the same options.
+`prism --help` lists the same options, and `--version` prints the version.
 
 ## Config file
 
@@ -99,13 +99,15 @@ every time. Press `c` in the program to edit it while running.
 
 The list of PRs sits beside panes for the highlighted PR's checks, comments (with reviews and
 review threads), description, approvers and diff. Click a column header, or press `s` / `S`, to
-sort the list. `v` chooses which columns show.
+sort the list: by checks (the default), number, title, review, author or when it was updated. `v`
+chooses which columns show, including Updated, which says how long ago each PR changed. `e` opens
+the whole message of a fetch that failed, as the panes show only its first line.
 
 - `1`-`5` hide or show a pane and `0` shows them all; the others take the room.
 - `+` `-` `>` `<` resize the focused pane, as does dragging the borders with the mouse; `=` resets.
 - The mouse clicks, scrolls and drags the scrollbars. Drag across text in the description, a
-  comment or the diff to copy it. Use `--no-mouse` if you'd rather have your terminal's own
-  selection.
+  comment or the diff to copy it. Shift-drag (Option-drag in iTerm2) uses your terminal's own
+  selection instead, and `--no-mouse` turns the capture off altogether.
 
 ## Checks
 
@@ -133,37 +135,65 @@ out.
 
 ## Shortcuts
 
-Press `?` in the program for the full list, which also covers the keys below that are particular
-to one pane.
+Press `?` in the program for the same list. Enter, `o` and `y` act on the highlighted item of the
+focused pane; the Ctrl-keys work from any pane and act on the selected PRs.
 
-| Key | Action |
-|---|---|
-| `/` | Edit the GitHub search query. Enter searches, Esc cancels. |
-| `f` | Filter the list as you type. Enter keeps the filter, Esc clears it. |
-| `s` / `S` | Sort by the next column / reverse the sort. |
-| `c` | Edit the columns regex. |
-| `v` | Choose which columns to show. |
-| `1`-`5`, `0` | Hide or show a pane, or show them all. |
-| `+` `-` `>` `<` `=` | Resize the focused pane, or reset the sizes. |
-| `e` | Show the whole message of a failed fetch. |
-| `Tab` / `Shift-Tab` | Move focus between the panes. |
-| `Up` `Down` / `j` `k` | Move the highlight, or scroll the pane. |
-| `PgUp` `PgDn` | Scroll the pane a page, or move the list's highlight a page. |
-| `Home` `End` | Jump to the first or last item, or the top or bottom of a pane. |
-| `Left` `Right` / `h` `l` | Scroll the tables in a description or comment sideways. |
-| `Space` | Toggle selection of the highlighted PR. |
-| `Ctrl-A` | Select every visible PR with passing checks. |
-| `Enter` | Act on the highlighted item: review the PR in the table, expand or collapse a comment, open a check. Nothing in the description and diff. |
-| `o` | Open the highlighted item: the PR in the table, a check or a comment on GitHub. Nothing in the description and diff. |
-| `y` | Copy the URL of the highlighted item (the PR's in the table) to the clipboard. Works over SSH if the terminal supports OSC 52; in tmux, turn on `set-clipboard`. |
-| `Ctrl-G` | Review the selected PRs, from any pane. `Ctrl-Enter` does the same in terminals with the kitty keyboard protocol. |
-| `Ctrl-O` | Open the selected PRs in the browser, from any pane. Asks first for more than five. |
-| `Ctrl-R` | Run the query again, keeping the selection. |
-| `p` | Pause or resume the timed refresh. It also pauses while the terminal is out of focus, if the terminal reports that, and catches up when focus returns. |
-| `Esc` | Clear selected text, then the filter, then the selection. |
-| `q` | Quit, close a dialog, or cancel a running batch. |
-| `Ctrl-C` | Quit from anywhere. |
-| `?` | Show every key. |
+<!-- keys:start -->
+| Key | Where | Action |
+|---|---|---|
+| `?` | Everywhere | Show every key |
+| `/` | Everywhere | Edit the GitHub search query |
+| `f` | Everywhere | Filter the list as you type |
+| `s` | Everywhere | Sort the list by the next column (checks, number, title, review, author, then when it was updated); the header shows which, and ▲ or ▼ which way |
+| `S` | Everywhere | Reverse the sort |
+| `c` | Everywhere | Edit the regex whose named groups become the table's columns |
+| `v` | Everywhere | Choose which columns the table shows (Space hides or shows one, for the session) |
+| `e` | Everywhere | Show the whole message of a failed fetch, which the panes cut to its first line |
+| `1-5` | Everywhere | Hide or show the checks, comments, description, approvers or diff pane, for the session; the others take its room and Tab skips it |
+| `0` | Everywhere | Show every pane |
+| `+ / -` | Everywhere | Make the focused pane taller or shorter (or drag the border between two panes with the mouse) |
+| `> / <` | Everywhere | Make the focused pane wider or narrower |
+| `=` | Everywhere | Put every pane back to its usual size |
+| `Tab / Shift-Tab` | Everywhere | Move focus between the panes |
+| `Up/Down, j/k` | Everywhere | Move the highlight, or scroll the pane |
+| `PgUp/PgDn` | Everywhere | Scroll the pane a page, or move the table's highlight a page; the comments' highlight stays |
+| `Home/End` | Everywhere | Jump to the first or last item, or the top or bottom of a pane |
+| `Space` | Everywhere | Toggle selection (not in the comments) |
+| `Ctrl-O` | Everywhere | Open the selected PRs in the browser, asking first for more than five |
+| `Ctrl-G` | Everywhere | Review the selected PRs |
+| `Ctrl-Enter` | Everywhere | Like Ctrl-G, in a terminal with the kitty keyboard protocol (kitty, WezTerm, Ghostty, iTerm2); elsewhere it is Enter |
+| `Ctrl-A` | Everywhere | Select every visible PR with passing checks |
+| `Ctrl-R` | Everywhere | Run the query again, keeping the selection |
+| `p` | Everywhere | Pause or resume the timed refresh, which also pauses while the terminal is out of focus |
+| `Esc` | Everywhere | Clear selected text, then the filter, then the selection of PRs |
+| `Mouse drag` | Everywhere | Select text in the description, an open comment or the diff and copy it when the button is released, or with y; Shift-drag (Option-drag in iTerm2) uses the terminal's own selection instead |
+| `q` | Everywhere | Quit, close the current dialog, or cancel a running batch |
+| `Ctrl-C` | Everywhere | Quit from anywhere |
+| `Search box: Tab, Down` | Everywhere | Choose the next suggestion, the first to begin with; Enter takes the chosen one |
+| `Search box: Shift-Tab, Up` | Everywhere | Choose the previous suggestion; without a list, Up goes through the queries searched before |
+| `Enter` | Pull requests | Review the highlighted PR |
+| `o` | Pull requests | Open the highlighted PR in the browser |
+| `y` | Pull requests | Copy the highlighted PR's URL |
+| `Left/Right, h/l` | Pull requests | Scroll the list sideways, keeping the number in view (also Shift-wheel) |
+| `Enter, o` | Checks | Open the highlighted check's page |
+| `y` | Checks | Copy the highlighted check's URL |
+| `Left/Right, h/l` | Checks | Scroll the check names sideways (also Shift-wheel) |
+| `Up/Down, j/k` | Comments | Go comment by comment, scrolling a line at a time until the next one is on screen |
+| `Enter, Space` | Comments | Expand or collapse the highlighted comment |
+| `o` | Comments | Open the highlighted comment, or its PR if it has no page |
+| `y` | Comments | Copy the highlighted comment's URL, or its PR's if it has no page |
+| `Left/Right, h/l` | Comments | Scroll the open comments' tables sideways (also Shift-wheel) |
+| `Left/Right, h/l` | Description | Scroll the description's tables sideways (also Shift-wheel) |
+| `Left/Right, h/l` | Diff | Scroll the diff sideways (also Shift-wheel) |
+<!-- keys:end -->
+
+`y` copies with an OSC 52 escape sequence, so it works over SSH if the terminal supports that; in
+tmux, turn on `set-clipboard`. `Ctrl-Enter` needs a terminal with the kitty keyboard protocol;
+elsewhere use `Ctrl-G`. The timed refresh pauses while the terminal is out of focus, if the
+terminal reports that, and catches up when focus returns.
+
+The table above is generated from the program's key list. After changing it, run
+`UPDATE_README=1 cargo test` to rewrite it.
 
 ## Developing
 

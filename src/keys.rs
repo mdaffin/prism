@@ -131,7 +131,11 @@ pub const KEYS: &[KeyHelp] = &[
         None,
     ),
     key("Space", "Toggle selection (not in the comments)", None),
-    key("Ctrl-O", "Open the selected PRs in the browser", None),
+    key(
+        "Ctrl-O",
+        "Open the selected PRs in the browser, asking first for more than five",
+        None,
+    ),
     key("Ctrl-G", "Review the selected PRs", None),
     key(
         "Ctrl-Enter",
@@ -266,6 +270,27 @@ pub fn group(pane: Option<Pane>) -> impl Iterator<Item = &'static KeyHelp> {
     KEYS.iter().filter(move |help| help.pane == pane)
 }
 
+/// What the README's key table sits between, so a test can find it.
+#[cfg(test)]
+const README_KEYS: (&str, &str) = ("<!-- keys:start -->\n", "<!-- keys:end -->");
+
+/// The README's table of every key, from [`KEYS`] in the order of the `?` popup.
+#[cfg(test)]
+fn readme_table() -> String {
+    let cell = |text: &str| text.replace('|', "\\|");
+    let mut table = String::from("| Key | Where | Action |\n|---|---|---|\n");
+    for (pane, title) in GROUPS {
+        for help in group(pane) {
+            table.push_str(&format!(
+                "| `{}` | {title} | {} |\n",
+                cell(help.keys),
+                cell(help.action)
+            ));
+        }
+    }
+    table
+}
+
 /// A hint of the status bar, such as `Enter: Review`.
 pub struct Hint {
     pub text: String,
@@ -316,6 +341,32 @@ mod tests {
         // These panes have no keys of their own on the bar.
         for pane in [Pane::Description, Pane::Diff] {
             assert_eq!(bar(pane), tail);
+        }
+    }
+
+    /// The README's key table is `readme_table()`. Run the tests with `UPDATE_README=1` to
+    /// rewrite it after changing `KEYS`.
+    #[test]
+    fn the_readme_lists_every_key() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/README.md");
+        let readme = std::fs::read_to_string(path).unwrap();
+        let (start, end) = README_KEYS;
+        let from = readme.find(start).expect("README has no keys:start marker") + start.len();
+        let to = from
+            + readme[from..]
+                .find(end)
+                .expect("README has no keys:end marker");
+        let expected = readme_table();
+        if readme[from..to] != expected {
+            if std::env::var_os("UPDATE_README").is_some() {
+                let updated = format!("{}{expected}{}", &readme[..from], &readme[to..]);
+                std::fs::write(path, updated).unwrap();
+            } else {
+                panic!(
+                    "the README's key table is out of date; run the tests with UPDATE_README=1 \
+                     to rewrite it"
+                );
+            }
         }
     }
 
