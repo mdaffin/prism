@@ -832,6 +832,7 @@ pub struct Author {
     pub login: String,
 }
 
+#[cfg_attr(test, derive(PartialEq))]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "__typename")]
 pub enum Check {
@@ -843,6 +844,7 @@ pub enum Check {
     Unknown,
 }
 
+#[cfg_attr(test, derive(PartialEq))]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckRun {
@@ -855,6 +857,7 @@ pub struct CheckRun {
     pub details_url: Option<String>,
 }
 
+#[cfg_attr(test, derive(PartialEq))]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusContext {

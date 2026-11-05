@@ -1092,6 +1092,14 @@ mod tests {
         page().prs().into_iter().map(Pr::from).collect()
     }
 
+    /// The PR of this number in `PAGE`.
+    fn pr(number: u64) -> Pr {
+        prs()
+            .into_iter()
+            .find(|pr| pr.number == number)
+            .unwrap_or_else(|| panic!("PAGE has no PR {number}"))
+    }
+
     #[test]
     fn a_page_gives_its_cursor_and_leaves_out_what_is_not_a_pr() {
         let search = page();
@@ -1107,16 +1115,14 @@ mod tests {
 
     #[test]
     fn a_bot_login_has_the_app_prefix_and_a_deleted_account_is_ghost() {
-        let prs = prs();
-        assert_eq!(prs[0].author.login, "app/renovate");
-        assert_eq!(prs[1].author.login, "alice");
-        assert_eq!(prs[2].author.login, "ghost");
+        assert_eq!(pr(12).author.login, "app/renovate");
+        assert_eq!(pr(13).author.login, "alice");
+        assert_eq!(pr(14).author.login, "ghost");
     }
 
     #[test]
     fn checks_get_the_workflow_name_and_the_status_start_that_gh_gave() {
-        let prs = prs();
-        let checks = &prs[0].status_check_rollup;
+        let checks = pr(12).status_check_rollup;
         assert_eq!(checks.len(), 4);
         assert!(matches!(
             &checks[0],
@@ -1181,40 +1187,39 @@ mod tests {
 
     #[test]
     fn the_checks_of_an_unreported_workflow_are_pending() {
-        let mut value: serde_json::Value = serde_json::from_str(PAGE).unwrap();
-        let commit = &mut value["data"]["search"]["nodes"][0]["commits"]["nodes"][0]["commit"];
-        commit["checkSuites"] = serde_json::json!({"nodes": [
-            {"createdAt": "2026-01-02T03:00:00Z", "conclusion": "SUCCESS",
-             "workflowRun": {"workflow": {"name": "CI"}}, "checkRuns": {"totalCount": 1}},
-            {"createdAt": "2026-01-02T03:00:01Z", "conclusion": "CANCELLED",
-             "workflowRun": {"workflow": {"name": "CI"}}, "checkRuns": {"totalCount": 0}},
-        ]});
-        let search: Search<GqlPr> = serde_json::from_value::<Response<SearchData<GqlPr>>>(value)
-            .unwrap()
-            .data
-            .search;
-        let pr = Pr::from(search.prs().into_iter().next().unwrap());
+        let json = status_json(
+            r#"{"contexts": {"nodes": [
+              {"__typename": "CheckRun", "name": "build", "status": "COMPLETED",
+               "conclusion": "SUCCESS", "startedAt": null, "detailsUrl": null,
+               "checkSuite": {"workflowRun": {"workflow": {"name": "CI"}}}}
+            ]}}"#,
+            r#"{"nodes": [
+              {"createdAt": "2026-01-02T03:00:00Z", "conclusion": "SUCCESS",
+               "workflowRun": {"workflow": {"name": "CI"}}, "checkRuns": {"totalCount": 1}},
+              {"createdAt": "2026-01-02T03:00:01Z", "conclusion": "CANCELLED",
+               "workflowRun": {"workflow": {"name": "CI"}}, "checkRuns": {"totalCount": 0}}
+            ]}"#,
+        );
+        let status = PrStatus::from(serde_json::from_str::<GqlStatus>(&json).unwrap());
         assert!(matches!(
-            &pr.status_check_rollup[0],
-            Check::CheckRun(run) if run.name == "build" && run.status == RunStatus::Other
+            &status.status_check_rollup[..],
+            [Check::CheckRun(run)] if run.name == "build" && run.status == RunStatus::Other
         ));
     }
 
     #[test]
     fn no_checks_or_no_commit_means_an_empty_rollup() {
-        let prs = prs();
-        assert!(prs[1].status_check_rollup.is_empty());
-        assert!(prs[2].status_check_rollup.is_empty());
+        assert!(pr(13).status_check_rollup.is_empty());
+        assert!(pr(14).status_check_rollup.is_empty());
     }
 
     #[test]
     fn a_missing_review_decision_is_what_an_empty_string_was() {
-        let prs = prs();
-        assert_eq!(prs[0].review_decision, ReviewDecision::Other);
-        assert_eq!(prs[1].review_decision, ReviewDecision::Other);
-        assert_eq!(prs[2].review_decision, ReviewDecision::Approved);
-        assert_eq!(prs[2].mergeable, Mergeable::Conflicting);
-        assert_eq!(prs[1].state, PrState::Merged);
+        assert_eq!(pr(12).review_decision, ReviewDecision::Other);
+        assert_eq!(pr(13).review_decision, ReviewDecision::Other);
+        assert_eq!(pr(14).review_decision, ReviewDecision::Approved);
+        assert_eq!(pr(14).mergeable, Mergeable::Conflicting);
+        assert_eq!(pr(13).state, PrState::Merged);
     }
 
     #[test]
@@ -1263,12 +1268,12 @@ mod tests {
             .into_iter()
             .map(PrStatus::from)
             .collect();
-        let listed = prs();
-        for (status, pr) in status.iter().zip(&listed) {
-            assert_eq!(status.number, pr.number);
+        for status in &status {
             assert_eq!(
-                format!("{:?}", status.status_check_rollup),
-                format!("{:?}", pr.status_check_rollup)
+                status.status_check_rollup,
+                pr(status.number).status_check_rollup,
+                "PR {}",
+                status.number
             );
         }
     }
@@ -1400,13 +1405,20 @@ mod tests {
       ]}
     }}}"#;
 
+    /// The comment of `details` with this text, a review or a thread among them.
+    fn comment_with<'a>(details: &'a PrDetails, body: &str) -> &'a Comment {
+        details
+            .comments
+            .iter()
+            .find(|c| c.body.as_deref() == Some(body))
+            .unwrap_or_else(|| panic!("no comment says {body:?}"))
+    }
+
     #[test]
     fn reviews_and_threads_join_the_comments_in_the_order_they_were_written() {
         let data: DetailsData = serde_json::from_str(REVIEWED).unwrap();
         let (mut details, _) = data.into_page();
         sort_comments(&mut details.comments);
-        // Left out: a review with no text, whatever its state, and one not yet submitted; and a
-        // thread with no comments.
         let summary: Vec<(&str, &str)> = details
             .comments
             .iter()
@@ -1424,14 +1436,27 @@ mod tests {
     }
 
     #[test]
+    fn a_review_with_no_text_one_not_yet_submitted_and_an_empty_thread_are_left_out() {
+        let data: DetailsData = serde_json::from_str(REVIEWED).unwrap();
+        let (details, _) = data.into_page();
+        // Four of the eight things written: the comment, the review with text and the two threads that have comments.
+        assert_eq!(details.comments.len(), 4);
+        for body in ["", "  \n", "draft"] {
+            assert!(
+                details
+                    .comments
+                    .iter()
+                    .all(|c| c.body.as_deref() != Some(body)),
+                "{body:?} is listed"
+            );
+        }
+    }
+
+    #[test]
     fn a_thread_is_its_first_comment_with_the_rest_as_replies() {
         let data: DetailsData = serde_json::from_str(REVIEWED).unwrap();
         let (details, _) = data.into_page();
-        let thread = details
-            .comments
-            .iter()
-            .find(|c| c.body.as_deref() == Some("why?"))
-            .unwrap();
+        let thread = comment_with(&details, "why?");
         assert_eq!(thread.author.as_ref().unwrap().login, "app/reviewer");
         assert_eq!(thread.url.as_deref(), Some("https://t/1"));
         assert_eq!(thread.replies.len(), 1);
@@ -1447,11 +1472,7 @@ mod tests {
     fn an_outdated_thread_keeps_the_line_it_was_on() {
         let data: DetailsData = serde_json::from_str(REVIEWED).unwrap();
         let (details, _) = data.into_page();
-        let thread = details
-            .comments
-            .iter()
-            .find(|c| c.body.as_deref() == Some("old"))
-            .unwrap();
+        let thread = comment_with(&details, "old");
         assert_eq!(thread.tags(), ["src/b.rs:7", "outdated"].map(String::from));
     }
 
@@ -1459,11 +1480,7 @@ mod tests {
     fn a_review_is_headed_by_how_it_ended() {
         let data: DetailsData = serde_json::from_str(REVIEWED).unwrap();
         let (details, _) = data.into_page();
-        let review = details
-            .comments
-            .iter()
-            .find(|c| c.body.as_deref() == Some("Looks good"))
-            .unwrap();
+        let review = comment_with(&details, "Looks good");
         assert_eq!(review.tags(), ["approved".to_string()]);
         assert_eq!(review.url.as_deref(), Some("https://r/1"));
     }
@@ -1562,14 +1579,15 @@ mod tests {
         assert_eq!(data.into_page().0.approvers, Approvers::default());
     }
 
-    /// The status of PR 1 on `master`, whose latest commit has this `statusCheckRollup` (JSON, or
-    /// `null` for a commit with none).
-    fn status_json(rollup: &str) -> String {
+    /// The status of PR 1 on `master`, whose latest commit has this `statusCheckRollup` and these
+    /// `checkSuites` (JSON, or `null` for none).
+    fn status_json(rollup: &str, suites: &str) -> String {
         format!(
             r#"{{
               "number": 1, "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": null,
               "updatedAt": "2026-01-02T03:04:05Z", "baseRefName": "master",
-              "commits": {{"nodes": [{{"commit": {{"statusCheckRollup": {rollup}}}}}]}}
+              "commits": {{"nodes": [{{"commit": {{"statusCheckRollup": {rollup},
+                                              "checkSuites": {suites}}}}}]}}
             }}"#
         )
     }
@@ -1582,6 +1600,7 @@ mod tests {
                "conclusion": "SUCCESS", "startedAt": null, "detailsUrl": null,
                "checkSuite": {"workflowRun": null}}
             ]}}"#,
+            "null",
         );
         let mut status: GqlStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(status.base_branch(), Some("master"));
@@ -1594,7 +1613,7 @@ mod tests {
 
     #[test]
     fn a_required_check_is_added_to_a_commit_with_no_rollup() {
-        let mut status: GqlStatus = serde_json::from_str(&status_json("null")).unwrap();
+        let mut status: GqlStatus = serde_json::from_str(&status_json("null", "null")).unwrap();
         status.add_required(&["Build (Pull Request)".to_string()]);
         assert_eq!(PrStatus::from(status).status_check_rollup.len(), 1);
     }
