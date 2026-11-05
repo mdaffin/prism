@@ -2,8 +2,6 @@
 
 use std::sync::LazyLock;
 
-use nucleo_matcher::pattern::{Atom, AtomKind, CaseMatching, Normalization};
-use nucleo_matcher::{Config, Matcher, Utf32Str};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use regex::Regex;
@@ -12,88 +10,16 @@ use unicode_width::UnicodeWidthChar;
 use crate::gh::Comment;
 
 mod checks;
+mod columns;
+mod filter;
 mod text;
 mod time;
 
 pub use checks::{CheckState, Checks, classify_checks, review_label};
+pub use columns::{Column, Sort, column_cells, column_names, parse_column_regex};
+pub use filter::Filter;
 pub use text::{clean_body, first_line, one_line, regex_error_line};
 pub use time::{ago, short_age};
-
-/// A column of the table that can be hidden: every one but the checkbox and the title columns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Column {
-    Number,
-    Checks,
-    Review,
-    Author,
-    Updated,
-}
-
-impl Column {
-    /// Every column, in the order the table shows them.
-    pub const ALL: [Column; 5] = [
-        Self::Number,
-        Self::Checks,
-        Self::Review,
-        Self::Author,
-        Self::Updated,
-    ];
-
-    /// The header, and the name in the columns popup.
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Number => "#",
-            Self::Checks => "Checks",
-            Self::Review => "Review",
-            Self::Author => "Author",
-            Self::Updated => "Updated",
-        }
-    }
-
-    /// What clicking the header sorts by.
-    pub fn sort(self) -> Sort {
-        match self {
-            Self::Number => Sort::Number,
-            Self::Checks => Sort::Checks,
-            Self::Review => Sort::Review,
-            Self::Author => Sort::Author,
-            Self::Updated => Sort::Updated,
-        }
-    }
-}
-
-/// How the list is ordered. Whatever the sort, closed and merged PRs come last, as they can't be
-/// acted on, and PRs that tie stay in the order GitHub listed them.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Sort {
-    /// Passing first, then pending or without checks, then failing or in conflict.
-    #[default]
-    Checks,
-    /// Lowest number, the oldest PR, first.
-    Number,
-    /// A to Z, ignoring case.
-    Title,
-    /// Those still needing a review, then those with changes requested, then approved ones.
-    Review,
-    /// A to Z by login, ignoring case.
-    Author,
-    /// The longest since anything happened to it first.
-    Updated,
-}
-
-impl Sort {
-    /// The next sort in the cycle, which comes back to the first.
-    pub fn next(self) -> Self {
-        match self {
-            Self::Checks => Self::Number,
-            Self::Number => Self::Title,
-            Self::Title => Self::Review,
-            Self::Review => Self::Author,
-            Self::Author => Self::Updated,
-            Self::Updated => Self::Checks,
-        }
-    }
-}
 
 /// A body rendered as markdown, and where the links in it are.
 #[derive(Debug, Clone, Default)]
@@ -519,106 +445,9 @@ pub fn skip_columns(text: &str, x: usize) -> String {
         .collect()
 }
 
-/// Names the title columns can't use, as other parts of a PR already have them.
-const RESERVED_COLUMNS: [&str; 13] = [
-    "number", "title", "branch", "url", "changes", "body", "comments", "diff", "state", "checks",
-    "runs", "review", "updated",
-];
-
-/// Compiles the column regex and checks its named groups can be columns.
-pub fn parse_column_regex(pattern: &str) -> Result<Regex, String> {
-    let regex = Regex::new(pattern).map_err(|error| error.to_string())?;
-    let names = column_names(&regex);
-    if names.is_empty() {
-        return Err("the column regex needs at least one named group, e.g. '(?<package>\\S+) to (?<version>\\S+)'".to_string());
-    }
-    let clashes: Vec<&str> = names
-        .iter()
-        .map(String::as_str)
-        .filter(|name| RESERVED_COLUMNS.contains(name))
-        .collect();
-    if !clashes.is_empty() {
-        return Err(format!(
-            "the column regex's group names clash with built-in columns: {}",
-            clashes.join(", ")
-        ));
-    }
-    Ok(regex)
-}
-
-/// The names of the regex's groups, in order. They are the table's column headers.
-pub fn column_names(regex: &Regex) -> Vec<String> {
-    regex
-        .capture_names()
-        .flatten()
-        .map(str::to_string)
-        .collect()
-}
-
-/// What each named group matched in `title`, or empty text when the title doesn't match.
-pub fn column_cells(regex: &Regex, title: &str) -> Vec<String> {
-    let captures = regex.captures(title);
-    column_names(regex)
-        .iter()
-        .map(|name| {
-            captures
-                .as_ref()
-                .and_then(|captures| captures.name(name))
-                .map_or("", |found| found.as_str())
-                .to_string()
-        })
-        .collect()
-}
-
-/// The local filter, matching like fzf: the characters of a term in order but not necessarily
-/// together, with smart case (lowercase matches any case, an upper-case letter matches exactly).
-/// Terms are separated by spaces and must all match, each against any column.
-pub struct Filter {
-    atoms: Vec<Atom>,
-    matcher: Matcher,
-    buffer: Vec<char>,
-}
-
-impl Filter {
-    pub fn new(text: &str) -> Self {
-        let atoms = text
-            .split_whitespace()
-            .map(|term| {
-                Atom::new(
-                    term,
-                    CaseMatching::Smart,
-                    Normalization::Smart,
-                    AtomKind::Fuzzy,
-                    false,
-                )
-            })
-            .collect();
-        Self {
-            atoms,
-            matcher: Matcher::new(Config::DEFAULT),
-            buffer: Vec::new(),
-        }
-    }
-
-    /// Whether a row with these columns passes. An empty filter passes every row.
-    pub fn matches(&mut self, columns: &[String]) -> bool {
-        self.atoms.iter().all(|atom| {
-            columns.iter().any(|column| {
-                let haystack = Utf32Str::new(column, &mut self.buffer);
-                atom.score(haystack, &mut self.matcher).is_some()
-            })
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn passes(filter: &str, columns: &[&str]) -> bool {
-        let columns: Vec<String> = columns.iter().map(|c| c.to_string()).collect();
-        Filter::new(filter).matches(&columns)
-    }
 
     #[test]
     fn skipping_columns_drops_the_start_of_a_line() {
@@ -627,44 +456,6 @@ mod tests {
         assert_eq!(skip_columns("CI / build", 99), "");
         // A wide character is two columns.
         assert_eq!(skip_columns("日本語", 2), "本語");
-    }
-
-    #[test]
-    fn a_filter_matches_characters_in_order_but_spread_out() {
-        assert!(passes("rnv", &["app/renovate"]));
-        assert!(!passes("vnr", &["app/renovate"]));
-    }
-
-    #[test]
-    fn a_filter_with_no_match_passes_nothing() {
-        assert!(!passes("xyz", &["#1", "app/renovate", "Bump alpha"]));
-    }
-
-    #[test]
-    fn lowercase_matches_any_case_and_upper_case_matches_exactly() {
-        assert!(passes("bump", &["Bump alpha"]));
-        assert!(passes("Bump", &["Bump alpha"]));
-        assert!(!passes("BUMP", &["Bump alpha"]));
-        assert!(!passes("Bump", &["bump alpha"]));
-    }
-
-    #[test]
-    fn every_term_must_match_some_column() {
-        let columns = ["#123", "app/renovate", "Bump alpha"];
-        assert!(passes("deps 123", &["#123", "deps"]));
-        assert!(passes("renovate alpha", &columns));
-        assert!(!passes("renovate beta", &columns));
-    }
-
-    #[test]
-    fn an_empty_filter_passes_every_row() {
-        assert!(passes("", &["#1"]));
-        assert!(passes("   ", &[]));
-    }
-
-    #[test]
-    fn a_term_does_not_match_across_columns() {
-        assert!(!passes("1ren", &["#1", "app/renovate"]));
     }
 
     /// The text of `line` that a link covers.
@@ -879,39 +670,5 @@ mod tests {
                 .any(|l| l.contains("badge") && !l.contains("example.com")),
             "{plain:?}"
         );
-    }
-
-    const BUMP: &str = r"Bump (?<container>.+?)(?: from \S+)? to (?<version>\S+)$";
-
-    #[test]
-    fn the_columns_are_the_named_groups_in_order() {
-        let regex = parse_column_regex(BUMP).unwrap();
-        assert_eq!(column_names(&regex), ["container", "version"]);
-        assert_eq!(
-            column_cells(&regex, "Bump example-lib from 1.0.0 to 1.2.0"),
-            ["example-lib", "1.2.0"]
-        );
-        assert_eq!(
-            column_cells(&regex, "Bump example-lib to 1.2.0"),
-            ["example-lib", "1.2.0"]
-        );
-        // A title that doesn't match, or a group that doesn't take part, gives an empty cell.
-        assert_eq!(column_cells(&regex, "Fix a bug"), ["", ""]);
-        let optional = parse_column_regex(r"(?<a>x)(?<b>y)?").unwrap();
-        assert_eq!(column_cells(&optional, "x"), ["x", ""]);
-    }
-
-    #[test]
-    fn a_bad_column_regex_is_rejected() {
-        assert!(parse_column_regex("(unclosed").is_err());
-        let error = parse_column_regex(r"(\S+) to (\S+)").unwrap_err();
-        assert!(error.contains("at least one named group"));
-        let error = parse_column_regex(r"(?<title>\S+) to (?<version>\S+)").unwrap_err();
-        assert_eq!(
-            error,
-            "the column regex's group names clash with built-in columns: title"
-        );
-        let error = parse_column_regex(r"(?<checks>\S+) (?<review>\S+)").unwrap_err();
-        assert!(error.ends_with("checks, review"));
     }
 }
