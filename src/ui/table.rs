@@ -1609,7 +1609,9 @@ mod tests {
         draw(&mut app, 200, 40);
         press(&mut app, "/");
         press(&mut app, " label:deps");
-        click_table_row(&mut app, 0, 0);
+        // A click in the Comments pane, away from the table and the search box.
+        let comments = app.drawn.areas.comments;
+        press_at(&mut app, Position::new(comments.x + 2, comments.y + 1));
         ctrl(&mut app, 'r');
         let (_, query) = app.list_to_fetch().unwrap();
         assert_eq!(query, "is:pr");
