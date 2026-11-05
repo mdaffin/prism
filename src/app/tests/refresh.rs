@@ -79,7 +79,7 @@ fn a_failed_search_keeps_the_old_results() {
     let mut app = app_with_rows(3);
     press(&mut app, " ");
     press(&mut app, "/");
-    app.update(Msg::Key(KeyEvent::from(KeyCode::Enter)));
+    key(&mut app, KeyCode::Enter);
     let (id, _) = app.list_to_fetch().unwrap();
     app.update(Msg::PrsLoaded(
         id,
@@ -172,7 +172,7 @@ fn ctrl_r_still_runs_the_query_while_paused() {
     let mut app = app_with_rows(2);
     app.update(Msg::FocusLost);
     press(&mut app, "p");
-    ctrl_r(&mut app);
+    ctrl(&mut app, 'r');
     assert!(app.list_to_fetch().is_some());
 }
 
@@ -278,7 +278,7 @@ fn results_for_an_older_list_are_dropped() {
     let mut app = app_with_rows(2);
     let fetch = start_status_refresh(&mut app).unwrap();
     // Ctrl-R replaces the list while the refresh runs.
-    ctrl_r(&mut app);
+    ctrl(&mut app, 'r');
     let (id, _) = app.list_to_fetch().unwrap();
     app.update(Msg::PrsLoaded(id, Ok(prs(1..=2))));
     let update = update(vec![status(1, "MERGED", true, "APPROVED", UNCHANGED)]);

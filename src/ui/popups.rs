@@ -493,7 +493,7 @@ mod tests {
         let mut app = app_with((1..=6).map(|n| pr(n, "Bump alpha", "OPEN", "")).collect());
         press(&mut app, " j j j j j ");
         ctrl_g(&mut app);
-        app.update(Msg::Key(KeyCode::Enter.into()));
+        key(&mut app, KeyCode::Enter);
         // Four approvals run at once; two wait.
         assert_eq!(app.approvals_to_run().len(), 4);
         let epoch = app.batch_epoch();
@@ -547,10 +547,10 @@ mod tests {
         draw(&mut app, 200, 40);
         let diff = Position::new(app.drawn.areas.diff.x + 2, app.drawn.areas.diff.y + 1);
         press(&mut app, "?");
-        click(&mut app, diff);
+        press_at(&mut app, diff);
         assert!(app.focus == Pane::Table);
         // Not even a box's area is live behind a dialog.
-        click(&mut app, Position::new(2, 2));
+        press_at(&mut app, Position::new(2, 2));
         assert!(app.typing == Typing::Nothing);
     }
 
@@ -562,7 +562,7 @@ mod tests {
 
     fn click_button(app: &mut App, index: usize) {
         let position = button(app, index);
-        click(app, position);
+        press_at(app, position);
     }
 
     /// An app with the confirm dialog open for two PRs, drawn.
@@ -584,10 +584,7 @@ mod tests {
         for _ in 0..6 {
             press(&mut app, " j");
         }
-        app.update(Msg::Key(crossterm::event::KeyEvent::new(
-            KeyCode::Char('o'),
-            crossterm::event::KeyModifiers::CONTROL,
-        )));
+        ctrl(&mut app, 'o');
         assert!(matches!(app.mode, Mode::ConfirmOpen(_)));
         draw(&mut app, 200, 40);
         app
@@ -669,7 +666,7 @@ mod tests {
         let first = app.drawn.buttons[0];
         // The row above the buttons is inside the dialog; (0, 0) is outside it, on the title.
         for position in [Position::new(first.x, first.y - 1), Position::new(0, 0)] {
-            click(&mut app, position);
+            press_at(&mut app, position);
             let Mode::Confirm(confirm) = &app.mode else {
                 panic!("the dialog closed");
             };
@@ -677,11 +674,11 @@ mod tests {
         }
         // Between two buttons.
         let gap = app.drawn.buttons[0].right();
-        click(&mut app, Position::new(gap, first.y));
+        press_at(&mut app, Position::new(gap, first.y));
         assert!(matches!(app.mode, Mode::Confirm(_)));
         // Nor does a click behind it reach the panes.
         let diff = Position::new(app.drawn.areas.diff.x + 2, app.drawn.areas.diff.y + 1);
-        click(&mut app, diff);
+        press_at(&mut app, diff);
         assert!(app.focus == Pane::Table);
     }
 
@@ -700,7 +697,7 @@ mod tests {
         draw(&mut app, 200, 40);
         assert!(app.drawn.buttons.is_empty());
         for position in [Position::new(80, 20), Position::new(0, 0)] {
-            click(&mut app, position);
+            press_at(&mut app, position);
             assert!(matches!(app.mode, Mode::Running(_)));
         }
     }

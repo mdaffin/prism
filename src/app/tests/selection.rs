@@ -1,12 +1,5 @@
 use super::*;
 
-fn ctrl_a(app: &mut App) {
-    app.update(Msg::Key(KeyEvent::new(
-        KeyCode::Char('a'),
-        KeyModifiers::CONTROL,
-    )));
-}
-
 #[test]
 fn ctrl_a_selects_open_prs_with_passing_checks_only() {
     let mut closed = pr_with_checks(4, "passing");
@@ -19,7 +12,7 @@ fn ctrl_a_selects_open_prs_with_passing_checks_only() {
         pr_with_checks(5, "passing"),
     ];
     let mut app = app_with(prs);
-    ctrl_a(&mut app);
+    ctrl(&mut app, 'a');
     assert_eq!(app.selected, HashSet::from([1, 5]));
     // Nothing starts: it only selects.
     assert!(matches!(app.mode, Mode::List));
@@ -40,15 +33,8 @@ fn ctrl_a_adds_to_the_selection_and_only_from_visible_rows() {
     press(&mut app, "jj ");
     press(&mut app, "fkeep");
     key(&mut app, KeyCode::Enter);
-    ctrl_a(&mut app);
+    ctrl(&mut app, 'a');
     assert_eq!(app.selected, HashSet::from([1, 3]));
-}
-
-fn ctrl_o(app: &mut App) {
-    app.update(Msg::Key(KeyEvent::new(
-        KeyCode::Char('o'),
-        KeyModifiers::CONTROL,
-    )));
 }
 
 const PANES: [Pane; 5] = [
@@ -65,7 +51,7 @@ fn ctrl_o_and_ctrl_g_do_nothing_when_none_are_selected() {
         let mut app = app_with_rows(3);
         app.focus = pane;
         press(&mut app, "j");
-        ctrl_o(&mut app);
+        ctrl(&mut app, 'o');
         ctrl_g(&mut app);
         assert!(app.opens_to_run().is_empty(), "{pane:?}");
         assert!(matches!(app.mode, Mode::List), "{pane:?}");
@@ -78,7 +64,7 @@ fn ctrl_o_opens_the_selection_from_every_pane() {
         let mut app = app_with_rows(3);
         press(&mut app, " jj ");
         app.focus = pane;
-        ctrl_o(&mut app);
+        ctrl(&mut app, 'o');
         assert_eq!(app.opens_to_run(), [1, 3], "{pane:?}");
     }
 }
@@ -106,9 +92,9 @@ fn ctrl_a_and_ctrl_r_work_from_every_pane() {
             pr_with_checks(2, "pending"),
         ]);
         app.focus = pane;
-        ctrl_a(&mut app);
+        ctrl(&mut app, 'a');
         assert_eq!(app.selected, HashSet::from([1]), "{pane:?}");
-        ctrl_r(&mut app);
+        ctrl(&mut app, 'r');
         assert!(app.list_to_fetch().is_some(), "{pane:?}");
     }
 }
@@ -118,7 +104,7 @@ fn ctrl_o_opens_the_selected_prs_in_table_order() {
     let mut app = app_with_rows(4);
     // Selected out of order: 1, then 3, then 2.
     press(&mut app, " jj k ");
-    ctrl_o(&mut app);
+    ctrl(&mut app, 'o');
     assert_eq!(app.opens_to_run(), [1, 2, 3]);
 }
 
@@ -128,7 +114,7 @@ fn ctrl_o_asks_before_opening_more_than_five() {
     for _ in 0..6 {
         press(&mut app, " j");
     }
-    ctrl_o(&mut app);
+    ctrl(&mut app, 'o');
     assert!(app.opens_to_run().is_empty());
     assert!(matches!(app.mode, Mode::ConfirmOpen(_)));
     // Cancel leaves everything alone.
@@ -137,7 +123,7 @@ fn ctrl_o_asks_before_opening_more_than_five() {
     assert!(matches!(app.mode, Mode::List));
     assert!(app.opens_to_run().is_empty());
 
-    ctrl_o(&mut app);
+    ctrl(&mut app, 'o');
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::List));
     assert_eq!(app.opens_to_run(), [1, 2, 3, 4, 5, 6]);
@@ -149,7 +135,7 @@ fn five_selected_prs_open_without_asking() {
     for _ in 0..5 {
         press(&mut app, " j");
     }
-    ctrl_o(&mut app);
+    ctrl(&mut app, 'o');
     assert!(matches!(app.mode, Mode::List));
     assert_eq!(app.opens_to_run().len(), 5);
 }
@@ -178,7 +164,7 @@ fn space_toggles_the_highlighted_pr_until_new_results() {
 
     // Not cleared until the new results arrive.
     press(&mut app, "/");
-    app.update(Msg::Key(KeyEvent::from(KeyCode::Enter)));
+    key(&mut app, KeyCode::Enter);
     let (id, _) = app.list_to_fetch().unwrap();
     assert_eq!(app.selected.len(), 2);
     app.update(Msg::PrsLoaded(id, Ok(prs([1, 2, 3]))));

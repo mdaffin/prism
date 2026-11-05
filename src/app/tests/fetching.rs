@@ -179,7 +179,7 @@ fn the_note_follows_the_latest_list_and_survives_a_failed_search() {
 #[test]
 fn ctrl_r_fetches_the_submitted_query() {
     let mut app = app_with_rows(3);
-    ctrl_r(&mut app);
+    ctrl(&mut app, 'r');
     let (_, query) = app.list_to_fetch().unwrap();
     assert_eq!(query, "is:pr");
 }
@@ -187,20 +187,20 @@ fn ctrl_r_fetches_the_submitted_query() {
 #[test]
 fn ctrl_r_is_ignored_while_a_search_runs_and_under_dialogs() {
     let mut app = app_with_rows(3);
-    ctrl_r(&mut app);
+    ctrl(&mut app, 'r');
     assert!(app.list_to_fetch().is_some());
     // The fetch is running.
-    ctrl_r(&mut app);
+    ctrl(&mut app, 'r');
     assert_eq!(app.list_to_fetch(), None);
 
     let mut app = app_with_rows(3);
     press(&mut app, "?");
-    ctrl_r(&mut app);
+    ctrl(&mut app, 'r');
     assert_eq!(app.list_to_fetch(), None);
     key(&mut app, KeyCode::Esc);
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::Confirm(_)));
-    ctrl_r(&mut app);
+    ctrl(&mut app, 'r');
     assert_eq!(app.list_to_fetch(), None);
 }
 
@@ -209,7 +209,7 @@ fn ctrl_r_keeps_the_selection_by_number_when_rows_move() {
     let mut app = app_with_rows(3);
     press(&mut app, " jj ");
     assert_eq!(app.selected, HashSet::from([1, 3]));
-    ctrl_r(&mut app);
+    ctrl(&mut app, 'r');
     let (id, _) = app.list_to_fetch().unwrap();
     // 3 moves to the top, 1 is gone and 4 is new.
     app.update(Msg::PrsLoaded(id, Ok(prs([3, 2, 4]))));
@@ -234,7 +234,7 @@ fn ctrl_r_keeps_the_highlight_on_the_same_pr_and_clears_the_filter() {
     let mut app = app_with_titles();
     press(&mut app, "jfbeta");
     key(&mut app, KeyCode::Enter);
-    ctrl_r(&mut app);
+    ctrl(&mut app, 'r');
     let (id, _) = app.list_to_fetch().unwrap();
     app.update(Msg::PrsLoaded(
         id,
@@ -245,7 +245,7 @@ fn ctrl_r_keeps_the_highlight_on_the_same_pr_and_clears_the_filter() {
     assert_eq!(app.highlighted().unwrap().pr.number, 2);
 
     // If it is gone, the first row is highlighted.
-    ctrl_r(&mut app);
+    ctrl(&mut app, 'r');
     let (id, _) = app.list_to_fetch().unwrap();
     app.update(Msg::PrsLoaded(id, Ok(vec![titled(8, "x"), titled(9, "y")])));
     assert_eq!(app.highlighted().unwrap().pr.number, 8);
@@ -264,7 +264,7 @@ fn ctrl_r_drops_cached_details_and_diffs_but_a_new_search_keeps_them() {
     app.update(Msg::PrsLoaded(id, Ok(prs(1..=2))));
     assert_eq!((app.details.len(), app.diffs.len()), (2, 2));
 
-    ctrl_r(&mut app);
+    ctrl(&mut app, 'r');
     let (id, _) = app.list_to_fetch().unwrap();
     app.update(Msg::PrsLoaded(id, Ok(prs(1..=2))));
     assert_eq!((app.details.len(), app.diffs.len()), (0, 0));
@@ -298,7 +298,7 @@ fn a_result_from_before_ctrl_r_is_dropped() {
     let diffs = app.diffs_to_fetch();
     assert_eq!(started(details.clone()), [1, 2]);
 
-    ctrl_r(&mut app);
+    ctrl(&mut app, 'r');
     let (id, _) = app.list_to_fetch().unwrap();
     app.update(Msg::PrsLoaded(id, Ok(prs(1..=2))));
     assert!(app.details.is_empty() && app.diffs.is_empty());
@@ -326,7 +326,7 @@ fn a_result_from_before_ctrl_r_does_not_replace_the_new_fetch() {
     let mut app = app_with_rows(1);
     let before = app.details_to_fetch()[0].1;
 
-    ctrl_r(&mut app);
+    ctrl(&mut app, 'r');
     let (id, _) = app.list_to_fetch().unwrap();
     app.update(Msg::PrsLoaded(id, Ok(prs(1..=1))));
     let after = app.details_to_fetch()[0].1;
@@ -373,7 +373,7 @@ fn a_result_from_before_a_changed_pr_was_dropped_is_ignored() {
 fn a_failed_ctrl_r_keeps_the_list_and_the_selection() {
     let mut app = app_with_rows(3);
     press(&mut app, " ");
-    ctrl_r(&mut app);
+    ctrl(&mut app, 'r');
     let (id, _) = app.list_to_fetch().unwrap();
     app.update(Msg::PrsLoaded(id, Err(color_eyre::eyre::eyre!("boom"))));
     assert_eq!(numbers(&app), [1, 2, 3]);

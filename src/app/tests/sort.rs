@@ -78,7 +78,7 @@ fn a_reversed_sort_keeps_ties_in_the_order_listed_and_applies_to_the_next_list()
     assert_eq!(app.sort(), (Sort::Review, true));
     // Approved first, and each group in the order GitHub listed it.
     assert_eq!(numbers(&app), [4, 3, 5, 2, 1, 6]);
-    ctrl_r(&mut app);
+    ctrl(&mut app, 'r');
     let (id, _) = app.list_to_fetch().unwrap();
     app.update(Msg::PrsLoaded(
         id,
@@ -266,7 +266,7 @@ fn the_sort_stays_for_a_refresh_and_a_new_search_and_the_highlight_stays_on_its_
     press(&mut app, "j");
     assert_eq!(app.highlighted().unwrap().pr.number, 2);
 
-    ctrl_r(&mut app);
+    ctrl(&mut app, 'r');
     let (id, _) = app.list_to_fetch().unwrap();
     // The same PRs again, in GitHub's order.
     app.update(Msg::PrsLoaded(

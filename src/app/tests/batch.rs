@@ -333,7 +333,6 @@ fn approve_and_merge_with_no_approvals_skips_merging() {
 #[test]
 fn ctrl_enter_reviews_the_selection_like_ctrl_g() {
     let open = |app: &mut App| matches!(app.mode, Mode::Confirm(_));
-    let ctrl_enter = Msg::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
     let mut with_g = app_with(vec![pr_with(
         1,
         "Bump",
@@ -354,7 +353,7 @@ fn ctrl_enter_reviews_the_selection_like_ctrl_g() {
         press(app, " ");
     }
     ctrl_g(&mut with_g);
-    with_enter.update(ctrl_enter);
+    ctrl_enter(&mut with_enter);
     assert!(open(&mut with_g) && open(&mut with_enter));
     let numbers = |app: &App| match &app.mode {
         Mode::Confirm(confirm) => confirm.prs.iter().map(|pr| pr.number).collect::<Vec<_>>(),
@@ -370,6 +369,6 @@ fn ctrl_enter_reviews_the_selection_like_ctrl_g() {
         "MERGEABLE",
         serde_json::json!([]),
     )]);
-    plain.update(Msg::Key(KeyCode::Enter.into()));
+    key(&mut plain, KeyCode::Enter);
     assert!(matches!(plain.mode, Mode::Confirm(_)));
 }

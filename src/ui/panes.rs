@@ -955,7 +955,7 @@ mod tests {
             let area = app.drawn.areas.comments;
             Position::new(area.x + 3, area.y + 1)
         };
-        click(&mut app, header);
+        press_at(&mut app, header);
         draw(&mut app, 200, 40);
         let view = app.drawn.comment_text.clone();
         assert!(view.rows[0].header && view.rows.len() > 1);
@@ -988,7 +988,7 @@ mod tests {
         key(&mut app, KeyCode::Up);
         // Back on the first, the selection is what it was, until a press elsewhere clears it.
         assert!(app.selection().is_some());
-        click(&mut app, Position::new(0, 0));
+        press_at(&mut app, Position::new(0, 0));
         assert!(app.selection().is_none());
     }
 
@@ -1415,20 +1415,20 @@ mod tests {
         let header = |row: u16| Position::new(comments.x + 2, comments.y + 1 + row);
 
         // All collapsed: the headers are on consecutive rows.
-        click(&mut app, header(1));
+        press_at(&mut app, header(1));
         assert_eq!(app.scroll.comment, 1);
         assert!(app.scroll.comments_open.contains(&1));
         assert!(app.focus == Pane::Comments);
         draw(&mut app, 200, 40);
         // The body is under the header now, and a click on it does nothing more.
-        click(&mut app, header(2));
+        press_at(&mut app, header(2));
         assert_eq!(app.scroll.comment, 1);
         assert!(app.scroll.comments_open.contains(&1));
         // The border and the space below the last comment do nothing either.
-        click(&mut app, Position::new(comments.x + 2, comments.y));
+        press_at(&mut app, Position::new(comments.x + 2, comments.y));
         assert!(app.scroll.comments_open.contains(&1));
         // A second click collapses it.
-        click(&mut app, header(1));
+        press_at(&mut app, header(1));
         assert!(app.scroll.comments_open.is_empty());
     }
 
@@ -1436,7 +1436,7 @@ mod tests {
     fn a_click_on_a_header_in_a_scrolled_pane_finds_the_right_comment() {
         let mut app = app_with_long_panes();
         let comments = app.drawn.areas.comments;
-        click(&mut app, Position::new(comments.x + 2, comments.y + 1));
+        press_at(&mut app, Position::new(comments.x + 2, comments.y + 1));
         assert!(app.scroll.comments_open.contains(&0));
         draw(&mut app, 200, 40);
         // Scroll to the end, where the pane's scroll has been clamped, so the second comment's
@@ -1446,7 +1446,7 @@ mod tests {
         draw(&mut app, 200, 40);
         let row = u16::try_from(second).unwrap() - app.scroll.comments;
         assert!(row > 0);
-        click(
+        press_at(
             &mut app,
             Position::new(comments.x + 2, comments.y + 1 + row),
         );
@@ -1459,15 +1459,15 @@ mod tests {
         let mut app = app_with_long_panes();
         let checks = app.drawn.areas.checks;
         // The first row under the header, then after scrolling the same row is a later check.
-        click(&mut app, Position::new(checks.x + 2, checks.y + 3));
+        press_at(&mut app, Position::new(checks.x + 2, checks.y + 3));
         assert_eq!(app.scroll.check, 1);
         app.scroll.checks = 5;
         draw(&mut app, 200, 40);
-        click(&mut app, Position::new(checks.x + 2, checks.y + 2));
+        press_at(&mut app, Position::new(checks.x + 2, checks.y + 2));
         assert_eq!(app.scroll.check, 5);
         // The border and the header highlight nothing.
-        click(&mut app, Position::new(checks.x + 2, checks.y));
-        click(&mut app, Position::new(checks.x + 2, checks.y + 1));
+        press_at(&mut app, Position::new(checks.x + 2, checks.y));
+        press_at(&mut app, Position::new(checks.x + 2, checks.y + 1));
         assert_eq!(app.scroll.check, 5);
         assert!(app.focus == Pane::Checks);
     }
@@ -1692,7 +1692,7 @@ mod tests {
     fn click_text(app: &mut App, width: u16, text: &str) -> Vec<String> {
         let buffer = draw(app, width, 40);
         let position = find(&buffer, text).unwrap_or_else(|| panic!("{text} is not drawn"));
-        click(app, position);
+        press_at(app, position);
         app.pages_to_run()
     }
 
@@ -1756,7 +1756,7 @@ mod tests {
             if text.trim().is_empty() {
                 continue;
             }
-            click(
+            press_at(
                 &mut app,
                 Position::new(description.x + 2, description.y + row),
             );
@@ -1798,7 +1798,7 @@ mod tests {
         let buffer = draw(&mut app, 200, 40);
         assert!(find(&buffer, "this").is_none());
         let header = find(&buffer, "@someone").unwrap();
-        click(&mut app, header);
+        press_at(&mut app, header);
         assert!(app.scroll.comments_open.contains(&0));
         assert!(app.pages_to_run().is_empty());
     }
@@ -1832,7 +1832,7 @@ mod tests {
         let buffer = draw(&mut app, 200, 40);
         let description = app.drawn.areas.description;
         assert!(find(&buffer, "Loading").is_some());
-        click(
+        press_at(
             &mut app,
             Position::new(description.x + 2, description.y + 1),
         );

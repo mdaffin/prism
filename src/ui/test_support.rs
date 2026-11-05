@@ -4,7 +4,7 @@ use super::*;
 pub(super) use crate::app::Msg;
 pub(super) use crate::app::{MIN_COLUMNS, MIN_ROWS};
 pub(super) use crate::gh::Pr;
-pub(super) use crate::testing::{app_with, ctrl_g, pr_with, press};
+pub(super) use crate::testing::{app_with, ctrl, ctrl_g, key, pr_with, press};
 pub(super) use crossterm::event::KeyCode;
 pub(super) use ratatui::Terminal;
 pub(super) use ratatui::backend::TestBackend;
@@ -88,28 +88,42 @@ pub(super) fn by(login: &str, number: u64, title: &str) -> Pr {
     pr
 }
 
-pub(super) fn click(app: &mut App, position: Position) {
-    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-    app.update(Msg::Mouse(MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
+pub(super) fn wheel(app: &mut App, position: Position, down: bool) {
+    use crossterm::event::MouseEventKind;
+    let kind = if down {
+        MouseEventKind::ScrollDown
+    } else {
+        MouseEventKind::ScrollUp
+    };
+    mouse(app, kind, position);
+}
+
+/// A scroll event of `kind` with `modifiers` held, at `position`.
+pub(super) fn scroll_at(
+    app: &mut App,
+    kind: crossterm::event::MouseEventKind,
+    modifiers: crossterm::event::KeyModifiers,
+    position: Position,
+) {
+    app.update(Msg::Mouse(crossterm::event::MouseEvent {
+        kind,
         column: position.x,
         row: position.y,
-        modifiers: KeyModifiers::NONE,
+        modifiers,
     }));
 }
 
-pub(super) fn wheel(app: &mut App, position: Position, down: bool) {
-    use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
-    app.update(Msg::Mouse(MouseEvent {
-        kind: if down {
-            MouseEventKind::ScrollDown
-        } else {
-            MouseEventKind::ScrollUp
-        },
-        column: position.x,
-        row: position.y,
-        modifiers: KeyModifiers::NONE,
-    }));
+/// Clicks the row at `index` of the rows drawn (so `0` is the first one on screen), `dx` columns
+/// in from the left edge of the table.
+pub(super) fn click_table_row(app: &mut App, index: u16, dx: u16) {
+    let rows = app.drawn.areas.table_rows;
+    press_at(app, Position::new(rows.x + dx, rows.y + index));
+}
+
+/// Clicks the checkbox of the row at `index` of the rows drawn.
+pub(super) fn click_checkbox(app: &mut App, index: u16) {
+    let boxes = app.drawn.areas.table_checkboxes;
+    press_at(app, Position::new(boxes.x + 1, boxes.y + index));
 }
 
 /// An app whose highlighted PR has enough checks, comments, description and diff to scroll.
@@ -198,10 +212,6 @@ pub(super) fn focus(app: &mut App, pane: Pane) {
 pub(super) fn app_with_a_long_title() -> App {
     let title = format!("{}END", "long ".repeat(40));
     app_with(vec![by("alice", 1, &title), by("bob", 2, "Short")])
-}
-
-pub(super) fn key(app: &mut App, code: KeyCode) {
-    app.update(Msg::Key(code.into()));
 }
 
 pub(super) fn status_bar(app: &mut App, width: u16) -> String {

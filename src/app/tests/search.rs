@@ -51,7 +51,7 @@ fn search_box_takes_every_key_while_editing() {
 fn esc_restores_the_submitted_query() {
     let mut app = app_with_rows(3);
     press(&mut app, "/ x");
-    app.update(Msg::Key(KeyEvent::from(KeyCode::Esc)));
+    key(&mut app, KeyCode::Esc);
     assert!(app.typing != Typing::Search);
     assert_eq!(app.query.value(), "is:pr");
     assert_eq!(app.list_to_fetch(), None);
@@ -81,7 +81,7 @@ fn enter_fetches_the_new_query_and_resets_the_highlight() {
     let mut app = app_with_rows(3);
     app.table.select(Some(2));
     press(&mut app, "/ is:closed");
-    app.update(Msg::Key(KeyEvent::from(KeyCode::Enter)));
+    key(&mut app, KeyCode::Enter);
     assert!(app.typing != Typing::Search);
     let (id, query) = app.list_to_fetch().unwrap();
     assert_eq!(query, "is:pr is:closed");
@@ -97,10 +97,10 @@ fn enter_fetches_the_new_query_and_resets_the_highlight() {
 fn results_from_an_older_fetch_are_dropped() {
     let mut app = app_with_rows(3);
     press(&mut app, "/");
-    app.update(Msg::Key(KeyEvent::from(KeyCode::Enter)));
+    key(&mut app, KeyCode::Enter);
     let (old, _) = app.list_to_fetch().unwrap();
     press(&mut app, "/");
-    app.update(Msg::Key(KeyEvent::from(KeyCode::Enter)));
+    key(&mut app, KeyCode::Enter);
     let (new, _) = app.list_to_fetch().unwrap();
 
     app.update(Msg::PrsLoaded(new, Ok(prs([5]))));
@@ -383,13 +383,13 @@ fn all_three_boxes_take_the_word_editing_keys() {
     app.query = Input::new("is:pr label:deps".to_string());
     app.update(alt(KeyCode::Backspace));
     assert_eq!(app.query.value(), "is:pr ");
-    app.update(Msg::Key(KeyCode::Esc.into()));
+    key(&mut app, KeyCode::Esc);
     // The filter box: Alt-B then Alt-D deletes the word the cursor moved to.
     press(&mut app, "fone two");
     app.update(alt(KeyCode::Char('b')));
     app.update(alt(KeyCode::Char('d')));
     assert_eq!(app.filter.value(), "one ");
-    app.update(Msg::Key(KeyCode::Esc.into()));
+    key(&mut app, KeyCode::Esc);
     // The columns box.
     press(&mut app, "c");
     app.columns_input = Input::new("(?<a>x) beta".to_string());

@@ -144,7 +144,7 @@ mod tests {
                 bar.matches("o: Open").count(),
                 expected.matches("o: Open").count()
             );
-            app.update(Msg::Key(KeyCode::Tab.into()));
+            key(&mut app, KeyCode::Tab);
         }
     }
 
@@ -168,7 +168,7 @@ mod tests {
 
     fn tab(app: &mut App, times: usize) {
         for _ in 0..times {
-            app.update(Msg::Key(KeyCode::Tab.into()));
+            key(app, KeyCode::Tab);
         }
     }
 

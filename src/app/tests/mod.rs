@@ -1,7 +1,7 @@
 use super::work::StatusFetch;
 use super::*;
 use crate::gh::{PrStatus, ReviewDecision};
-use crate::testing::{app_with, ctrl_g, pr_with, press};
+use crate::testing::{app_with, ctrl, ctrl_enter, ctrl_g, key, pr_with, press};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 fn pr(number: u64, state: &str) -> Pr {
@@ -26,17 +26,6 @@ fn started(fetches: Vec<(u64, FetchId)>) -> Vec<u64> {
 
 fn numbers(app: &App) -> Vec<u64> {
     app.rows.iter().map(|row| row.pr.number).collect()
-}
-
-pub(super) fn key(app: &mut App, code: KeyCode) {
-    app.update(Msg::Key(KeyEvent::from(code)));
-}
-
-pub(super) fn ctrl_r(app: &mut App) {
-    app.update(Msg::Key(KeyEvent::new(
-        KeyCode::Char('r'),
-        KeyModifiers::CONTROL,
-    )));
 }
 
 /// Presses Tab until `pane` has focus.

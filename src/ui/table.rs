@@ -574,7 +574,7 @@ mod tests {
 
     fn click_header(app: &mut App, sort: Sort) {
         let at = header_cell(app, sort);
-        click(app, at);
+        press_at(app, at);
     }
 
     #[test]
@@ -682,7 +682,7 @@ mod tests {
         draw(&mut app, 200, 30);
         let table = app.drawn.areas.table;
         // The checkbox is the first column inside the border.
-        click(&mut app, Position::new(table.x + 1, table.y + 1));
+        press_at(&mut app, Position::new(table.x + 1, table.y + 1));
         assert_eq!(app.sort(), (Sort::Checks, false));
         for expected in [
             (Sort::Author, false),
@@ -926,7 +926,7 @@ mod tests {
         draw(&mut app, 200, 30);
         let cell = header_cell(&app, Sort::Number);
         press(&mut app, "?");
-        click(&mut app, cell);
+        press_at(&mut app, cell);
         assert_eq!(app.sort(), (Sort::Checks, false));
     }
 
@@ -1233,12 +1233,12 @@ mod tests {
         press(&mut app, "(?<a>x)");
         draw(&mut app, 200, 40);
         let area = app.drawn.areas.columns;
-        click(&mut app, Position::new(area.x + 1 + 2, area.y + 1));
+        press_at(&mut app, Position::new(area.x + 1 + 2, area.y + 1));
         assert!(app.typing == Typing::Columns);
         assert_eq!(app.columns_input.cursor(), 2);
 
         // A click on the table leaves the box; the regex was never applied.
-        click(&mut app, Position::new(2, area.y + 6));
+        press_at(&mut app, Position::new(2, area.y + 6));
         assert!(app.typing == Typing::Nothing);
         assert!(app.columns.is_none());
     }
@@ -1259,7 +1259,7 @@ mod tests {
 
         // "Bump" is in the titles but not in any column.
         for _ in 0..3 {
-            app.update(Msg::Key(KeyCode::Backspace.into()));
+            key(&mut app, KeyCode::Backspace);
         }
         press(&mut app, "Bump");
         let screen = lines(&draw(&mut app, 200, 30));
@@ -1281,10 +1281,9 @@ mod tests {
         let mut app = app_with(prs);
         // Only the 20 even PRs are shown; the table is too short to show them all.
         press(&mut app, "feven");
-        app.update(Msg::Key(KeyCode::Enter.into()));
+        key(&mut app, KeyCode::Enter);
         draw(&mut app, 200, 40);
-        let rows = app.drawn.areas.table_rows;
-        click(&mut app, Position::new(rows.x + 5, rows.y + 2));
+        click_table_row(&mut app, 2, 5);
         assert_eq!(app.table.selected(), Some(2));
         assert_eq!(app.highlighted().unwrap().pr.number, 6);
 
@@ -1295,8 +1294,7 @@ mod tests {
         draw(&mut app, 200, 40);
         let offset = app.drawn.areas.table_offset;
         assert!(offset > 0);
-        let rows = app.drawn.areas.table_rows;
-        click(&mut app, Position::new(rows.x + 5, rows.y));
+        click_table_row(&mut app, 0, 5);
         assert_eq!(app.table.selected(), Some(offset));
         assert_eq!(
             app.highlighted().unwrap().pr.number,
@@ -1311,9 +1309,8 @@ mod tests {
             pr(2, "Bump beta", "OPEN", ""),
         ]);
         draw(&mut app, 200, 30);
-        let rows = app.drawn.areas.table_rows;
         // The checkbox of the second row, while the first is highlighted.
-        click(&mut app, Position::new(rows.x + 1, rows.y + 1));
+        click_checkbox(&mut app, 1);
         assert_eq!(app.selected, HashSet::from([2]));
         assert_eq!(app.table.selected(), Some(1));
         let buffer = draw(&mut app, 200, 30);
@@ -1322,17 +1319,17 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("[x]") && l.contains("#2"))
         );
-        click(&mut app, Position::new(rows.x + 1, rows.y + 1));
+        click_checkbox(&mut app, 1);
         assert!(app.selected.is_empty());
 
         // Just beside the checkbox is the row itself: it highlights and selects nothing.
-        click(&mut app, Position::new(rows.x + 3, rows.y));
+        click_table_row(&mut app, 0, 3);
         assert!(app.selected.is_empty());
         assert_eq!(app.table.selected(), Some(0));
 
         // Space acts on the same selection, and a checkbox click adds to it.
         press(&mut app, " ");
-        click(&mut app, Position::new(rows.x + 1, rows.y + 1));
+        click_checkbox(&mut app, 1);
         assert_eq!(app.selected, HashSet::from([1, 2]));
     }
 
@@ -1344,10 +1341,10 @@ mod tests {
         ]);
         draw(&mut app, 200, 30);
         let rows = app.drawn.areas.table_rows;
-        click(&mut app, Position::new(rows.x + 5, rows.y + 1));
+        click_table_row(&mut app, 1, 5);
         assert_eq!(app.table.selected(), Some(1));
-        click(&mut app, Position::new(rows.x + 5, rows.y - 1));
-        click(&mut app, Position::new(rows.x + 5, rows.y + 5));
+        press_at(&mut app, Position::new(rows.x + 5, rows.y - 1));
+        press_at(&mut app, Position::new(rows.x + 5, rows.y + 5));
         assert_eq!(app.table.selected(), Some(1));
     }
 
@@ -1501,12 +1498,12 @@ mod tests {
     /// Clicks `column` characters into the text of the search box, as last drawn.
     fn click_search(app: &mut App, column: u16) {
         let area = app.drawn.areas.search;
-        click(app, Position::new(area.x + 1 + column, area.y + 1));
+        press_at(app, Position::new(area.x + 1 + column, area.y + 1));
     }
 
     fn click_filter(app: &mut App, column: u16) {
         let area = app.drawn.areas.filter;
-        click(app, Position::new(area.x + 1 + column, area.y + 1));
+        press_at(app, Position::new(area.x + 1 + column, area.y + 1));
     }
 
     #[test]
@@ -1526,7 +1523,7 @@ mod tests {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         draw(&mut app, 200, 40);
         assert_eq!(app.drawn.areas.filter, Rect::default());
-        click(&mut app, Position::new(2, 4));
+        press_at(&mut app, Position::new(2, 4));
         assert!(app.typing != Typing::Filter);
 
         press(&mut app, "fbump");
@@ -1570,8 +1567,7 @@ mod tests {
         draw(&mut app, 200, 40);
         press(&mut app, "/");
         press(&mut app, " label:deps");
-        let rows = app.drawn.areas.table_rows;
-        click(&mut app, Position::new(rows.x + 20, rows.y + 1));
+        click_table_row(&mut app, 1, 20);
 
         assert!(app.typing == Typing::Nothing);
         assert_eq!(app.query.value(), "is:pr label:deps");
@@ -1599,7 +1595,7 @@ mod tests {
         press(&mut app, "fbump");
         draw(&mut app, 200, 40);
         let diff = Position::new(app.drawn.areas.diff.x + 2, app.drawn.areas.diff.y + 1);
-        click(&mut app, diff);
+        press_at(&mut app, diff);
 
         assert!(app.typing == Typing::Nothing);
         assert!(app.focus == Pane::Diff);
@@ -1613,11 +1609,8 @@ mod tests {
         draw(&mut app, 200, 40);
         press(&mut app, "/");
         press(&mut app, " label:deps");
-        click(&mut app, Position::new(2, 38));
-        app.update(Msg::Key(crossterm::event::KeyEvent::new(
-            KeyCode::Char('r'),
-            crossterm::event::KeyModifiers::CONTROL,
-        )));
+        click_table_row(&mut app, 0, 0);
+        ctrl(&mut app, 'r');
         let (_, query) = app.list_to_fetch().unwrap();
         assert_eq!(query, "is:pr");
     }

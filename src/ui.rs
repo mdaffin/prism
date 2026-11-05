@@ -588,16 +588,16 @@ mod tests {
         ];
         for (pane, area) in panes {
             // The border counts as part of the pane, so click on it and inside it.
-            click(&mut app, Position::new(area.x, area.y));
+            press_at(&mut app, Position::new(area.x, area.y));
             assert!(app.focus == pane);
             app.focus = Pane::Table;
-            click(&mut app, Position::new(area.x + 2, area.y + 1));
+            press_at(&mut app, Position::new(area.x + 2, area.y + 1));
             assert!(app.focus == pane);
             app.focus = Pane::Table;
         }
         // The search box and the title are in no pane.
         app.focus = Pane::Diff;
-        click(&mut app, Position::new(0, 0));
+        press_at(&mut app, Position::new(0, 0));
         assert!(app.focus == Pane::Diff);
     }
 
@@ -709,7 +709,7 @@ mod tests {
         draw(&mut app, 200, 40);
         let checks = app.drawn.areas.checks;
         assert!(checks.is_empty());
-        click(&mut app, Position::new(checks.x, checks.y));
+        press_at(&mut app, Position::new(checks.x, checks.y));
         assert!(app.focus == Pane::Comments);
         press(&mut app, "0");
         key(&mut app, KeyCode::Tab);
@@ -1073,7 +1073,6 @@ mod tests {
 
     #[test]
     fn a_drag_does_nothing() {
-        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         let mut app = app_with(vec![
             pr(1, "Bump alpha", "OPEN", ""),
             pr(2, "Bump beta", "OPEN", ""),
@@ -1081,14 +1080,7 @@ mod tests {
         draw(&mut app, 200, 40);
         let rows = app.drawn.areas.table_rows;
         let diff = app.drawn.areas.diff;
-        let drag = |app: &mut App, x: u16, y: u16| {
-            app.update(Msg::Mouse(MouseEvent {
-                kind: MouseEventKind::Drag(MouseButton::Left),
-                column: x,
-                row: y,
-                modifiers: KeyModifiers::NONE,
-            }));
-        };
+        let drag = |app: &mut App, x: u16, y: u16| drag_to(app, Position::new(x, y));
         // Over a row's checkbox, a pane, a box, and then in a box being edited and a dialog.
         drag(&mut app, rows.x + 1, rows.y + 1);
         drag(&mut app, diff.x + 2, diff.y + 1);
@@ -1212,26 +1204,21 @@ mod tests {
                 Pane::Diff => app.drawn.areas.diff,
             };
             assert!(area.width > 2 && area.height > 2, "{pane:?}");
-            click(&mut app, Position::new(area.x + 1, area.y + 1));
+            press_at(&mut app, Position::new(area.x + 1, area.y + 1));
             assert!(app.focus == pane, "{pane:?}");
         }
     }
 
     #[test]
     fn the_wheel_scrolls_the_list_and_the_diff_sideways() {
-        use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+        use crossterm::event::{KeyModifiers, MouseEventKind};
         let mut app = app_with_a_long_title();
         app.diff_loaded(1, Ok(format!("+{}END", "x".repeat(300))));
         draw(&mut app, 100, 40);
         let table = app.drawn.areas.table;
         let diff = app.drawn.areas.diff;
         let scroll = |app: &mut App, kind, modifiers, area: Rect| {
-            app.update(Msg::Mouse(MouseEvent {
-                kind,
-                column: area.x + 2,
-                row: area.y + 2,
-                modifiers,
-            }));
+            scroll_at(app, kind, modifiers, Position::new(area.x + 2, area.y + 2));
         };
         scroll(
             &mut app,

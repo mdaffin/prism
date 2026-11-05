@@ -44,10 +44,28 @@ pub fn press(app: &mut App, keys: &str) {
     }
 }
 
-/// Presses Ctrl-G, which reviews the selected PRs.
-pub fn ctrl_g(app: &mut App) {
+/// Presses `code`.
+pub fn key(app: &mut App, code: KeyCode) {
+    app.update(Msg::Key(code.into()));
+}
+
+/// Presses Ctrl and the character `c`.
+pub fn ctrl(app: &mut App, c: char) {
     app.update(Msg::Key(KeyEvent::new(
-        KeyCode::Char('g'),
+        KeyCode::Char(c),
         KeyModifiers::CONTROL,
     )));
+}
+
+/// Presses Ctrl-Enter, which reviews the selected PRs like Ctrl-G.
+pub fn ctrl_enter(app: &mut App) {
+    app.update(Msg::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::CONTROL,
+    )));
+}
+
+/// Presses Ctrl-G, which reviews the selected PRs.
+pub fn ctrl_g(app: &mut App) {
+    ctrl(app, 'g');
 }
