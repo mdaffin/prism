@@ -150,20 +150,16 @@ mod tests {
 
     /// A PR whose failing check has a page and whose passing one has none.
     fn app_with_check_pages() -> App {
-        app_with(vec![pr_with(
-            1,
-            "Bump alpha",
-            "OPEN",
-            "",
-            "MERGEABLE",
-            serde_json::json!([
-                {"__typename": "CheckRun", "name": "b", "workflowName": "CI",
-                 "status": "COMPLETED", "conclusion": "FAILURE",
-                 "detailsUrl": "https://example.test/job"},
-                {"__typename": "CheckRun", "name": "c", "workflowName": "CI",
-                 "status": "COMPLETED", "conclusion": "SUCCESS"},
-            ]),
-        )])
+        let checks = serde_json::json!([
+            {"__typename": "CheckRun", "name": "b", "workflowName": "CI",
+             "status": "COMPLETED", "conclusion": "FAILURE",
+             "detailsUrl": "https://example.test/job"},
+            {"__typename": "CheckRun", "name": "c", "workflowName": "CI",
+             "status": "COMPLETED", "conclusion": "SUCCESS"},
+        ]);
+        app_with(vec![
+            PrBuilder::new(1).title("Bump alpha").checks(checks).build(),
+        ])
     }
 
     fn tab(app: &mut App, times: usize) {
@@ -236,17 +232,13 @@ mod tests {
     #[test]
     fn the_status_bar_cuts_a_long_url_then_drops_hints_but_keeps_o() {
         let long = "https://github.com/example/prism/actions/runs/123456789/job/987654321";
-        let mut app = app_with(vec![pr_with(
-            1,
-            "Bump alpha",
-            "OPEN",
-            "",
-            "MERGEABLE",
-            serde_json::json!([
-                {"__typename": "CheckRun", "name": "b", "workflowName": "CI",
-                 "status": "COMPLETED", "conclusion": "FAILURE", "detailsUrl": long},
-            ]),
-        )]);
+        let checks = serde_json::json!([
+            {"__typename": "CheckRun", "name": "b", "workflowName": "CI",
+             "status": "COMPLETED", "conclusion": "FAILURE", "detailsUrl": long},
+        ]);
+        let mut app = app_with(vec![
+            PrBuilder::new(1).title("Bump alpha").checks(checks).build(),
+        ]);
         tab(&mut app, 1);
         // Wide enough for all of it.
         assert!(status_bar(&mut app, 200).contains(long));

@@ -6,27 +6,86 @@ use serde_json::{Value, json};
 use crate::app::{App, Msg};
 use crate::gh::Pr;
 
-/// A PR as gh lists it. `rollup` is its `statusCheckRollup`.
-pub fn pr_with(
+/// Builds a `Pr` as gh lists it. `PrBuilder::new(number)` is an open, mergeable PR titled "t" by
+/// alice, with no review and no checks, updated on 2026-01-01: set only what a test cares about.
+pub struct PrBuilder {
     number: u64,
-    title: &str,
-    state: &str,
-    review: &str,
-    mergeable: &str,
+    title: String,
+    state: String,
+    review: String,
+    mergeable: String,
     rollup: Value,
-) -> Pr {
-    serde_json::from_value(json!({
-        "number": number,
-        "title": title,
-        "state": state,
-        "statusCheckRollup": rollup,
-        "mergeable": mergeable,
-        "reviewDecision": review,
-        "url": format!("https://example.test/pull/{number}"),
-        "author": {"login": "alice"},
-        "updatedAt": "2026-01-01T00:00:00Z",
-    }))
-    .unwrap()
+    author: String,
+    updated_at: String,
+}
+
+impl PrBuilder {
+    pub fn new(number: u64) -> Self {
+        PrBuilder {
+            number,
+            title: "t".to_string(),
+            state: "OPEN".to_string(),
+            review: String::new(),
+            mergeable: "MERGEABLE".to_string(),
+            rollup: json!([]),
+            author: "alice".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    pub fn title(mut self, title: &str) -> Self {
+        self.title = title.to_string();
+        self
+    }
+
+    /// `"OPEN"`, `"CLOSED"` or `"MERGED"`.
+    pub fn state(mut self, state: &str) -> Self {
+        self.state = state.to_string();
+        self
+    }
+
+    /// The `reviewDecision`: `""`, `"APPROVED"` or `"CHANGES_REQUESTED"`.
+    pub fn review(mut self, review: &str) -> Self {
+        self.review = review.to_string();
+        self
+    }
+
+    /// `"MERGEABLE"` or `"CONFLICTING"`.
+    pub fn mergeable(mut self, mergeable: &str) -> Self {
+        self.mergeable = mergeable.to_string();
+        self
+    }
+
+    /// The `statusCheckRollup`: a JSON array of check runs and status contexts.
+    pub fn checks(mut self, rollup: Value) -> Self {
+        self.rollup = rollup;
+        self
+    }
+
+    pub fn author(mut self, login: &str) -> Self {
+        self.author = login.to_string();
+        self
+    }
+
+    pub fn updated_at(mut self, updated_at: &str) -> Self {
+        self.updated_at = updated_at.to_string();
+        self
+    }
+
+    pub fn build(self) -> Pr {
+        serde_json::from_value(json!({
+            "number": self.number,
+            "title": self.title,
+            "state": self.state,
+            "statusCheckRollup": self.rollup,
+            "mergeable": self.mergeable,
+            "reviewDecision": self.review,
+            "url": format!("https://example.test/pull/{}", self.number),
+            "author": {"login": self.author},
+            "updatedAt": self.updated_at,
+        }))
+        .unwrap()
+    }
 }
 
 /// An app that has loaded these PRs, in the order given before the table sorts them.
@@ -68,4 +127,17 @@ pub fn ctrl_enter(app: &mut App) {
 /// Presses Ctrl-G, which reviews the selected PRs.
 pub fn ctrl_g(app: &mut App) {
     ctrl(app, 'g');
+}
+
+/// A completed, successful check run, as `statusCheckRollup` lists it.
+pub fn passing_run() -> Value {
+    json!({
+        "__typename": "CheckRun", "name": "build", "workflowName": "CI",
+        "status": "COMPLETED", "conclusion": "SUCCESS", "startedAt": null,
+    })
+}
+
+/// A commit status from "ci" in `state`: `"SUCCESS"`, `"PENDING"` or `"FAILURE"`.
+pub fn status_context(state: &str) -> Value {
+    json!({"__typename": "StatusContext", "context": "ci", "state": state})
 }

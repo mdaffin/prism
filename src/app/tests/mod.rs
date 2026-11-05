@@ -1,11 +1,13 @@
 use super::work::StatusFetch;
 use super::*;
 use crate::gh::{PrStatus, ReviewDecision};
-use crate::testing::{app_with, ctrl, ctrl_enter, ctrl_g, key, pr_with, press};
+use crate::testing::{
+    PrBuilder, app_with, ctrl, ctrl_enter, ctrl_g, key, passing_run, press, status_context,
+};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 fn pr(number: u64, state: &str) -> Pr {
-    pr_with(number, "t", state, "", "MERGEABLE", serde_json::json!([]))
+    PrBuilder::new(number).state(state).build()
 }
 
 fn prs(numbers: impl IntoIterator<Item = u64>) -> Vec<Pr> {
@@ -42,22 +44,15 @@ pub(super) fn focus(app: &mut App, pane: Pane) {
 /// An open PR whose checks are passing, pending or absent.
 pub(super) fn pr_with_checks(number: u64, checks: &str) -> Pr {
     let rollup = match checks {
-        "passing" => serde_json::json!([{
-            "__typename": "CheckRun", "name": "build", "workflowName": "CI",
-            "status": "COMPLETED", "conclusion": "SUCCESS", "startedAt": null,
-        }]),
-        "pending" => serde_json::json!([{
-            "__typename": "StatusContext", "context": "ci", "state": "PENDING",
-        }]),
+        "passing" => serde_json::json!([passing_run()]),
+        "pending" => serde_json::json!([status_context("PENDING")]),
         _ => serde_json::json!([]),
     };
-    pr_with(number, "t", "OPEN", "", "MERGEABLE", rollup)
+    PrBuilder::new(number).checks(rollup).build()
 }
 
 pub(super) fn titled(number: u64, title: &str) -> Pr {
-    let mut pr = pr(number, "OPEN");
-    pr.title = title.to_string();
-    pr
+    PrBuilder::new(number).title(title).build()
 }
 
 /// Three open PRs titled "Bump alpha", "Bump beta" and "Update gamma".
@@ -87,10 +82,7 @@ pub(super) fn status(
     updated: &str,
 ) -> PrStatus {
     let rollup = if passing {
-        serde_json::json!([{
-            "__typename": "CheckRun", "name": "build", "workflowName": "CI",
-            "status": "COMPLETED", "conclusion": "SUCCESS", "startedAt": null,
-        }])
+        serde_json::json!([passing_run()])
     } else {
         serde_json::json!([])
     };

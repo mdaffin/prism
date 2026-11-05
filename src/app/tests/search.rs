@@ -370,14 +370,7 @@ fn enter_takes_the_chosen_suggestion_and_does_not_search() {
 #[test]
 fn all_three_boxes_take_the_word_editing_keys() {
     let alt = |code| Msg::Key(KeyEvent::new(code, KeyModifiers::ALT));
-    let mut app = app_with(vec![pr_with(
-        1,
-        "Bump alpha",
-        "OPEN",
-        "",
-        "MERGEABLE",
-        serde_json::json!([]),
-    )]);
+    let mut app = app_with(vec![PrBuilder::new(1).title("Bump alpha").build()]);
     // The search box: Alt-Backspace deletes the last word.
     press(&mut app, "/");
     app.query = Input::new("is:pr label:deps".to_string());

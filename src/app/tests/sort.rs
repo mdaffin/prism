@@ -4,13 +4,14 @@ use super::*;
 fn sortable(number: u64, title: &str, review: &str, check: &str, updated: &str) -> Pr {
     let rollup = match check {
         "" => serde_json::json!([]),
-        state => serde_json::json!([
-            {"__typename": "StatusContext", "context": "ci", "state": state}
-        ]),
+        state => serde_json::json!([status_context(state)]),
     };
-    let mut pr = pr_with(number, title, "OPEN", review, "MERGEABLE", rollup);
-    pr.updated_at = format!("2026-01-0{updated}T00:00:00Z");
-    pr
+    PrBuilder::new(number)
+        .title(title)
+        .review(review)
+        .checks(rollup)
+        .updated_at(&format!("2026-01-0{updated}T00:00:00Z"))
+        .build()
 }
 
 /// Five open PRs and a merged one, listed in the order 4, 2, 5, 1, 3, 6 and different in every
@@ -94,9 +95,9 @@ fn a_reversed_sort_keeps_ties_in_the_order_listed_and_applies_to_the_next_list()
 #[test]
 fn a_title_sort_goes_by_the_title_columns_and_follows_a_change_of_regex() {
     let mut app = app_with(vec![
-        titled_for_sort(1, "Bump zeta to 1.0"),
-        titled_for_sort(2, "Bump alpha to 3.0"),
-        titled_for_sort(3, "Bump alpha to 2.0"),
+        titled_with_a_passing_check(1, "Bump zeta to 1.0"),
+        titled_with_a_passing_check(2, "Bump alpha to 3.0"),
+        titled_with_a_passing_check(3, "Bump alpha to 2.0"),
     ]);
     press(&mut app, "ss");
     assert_eq!(app.sort(), (Sort::Title, false));
@@ -114,9 +115,10 @@ fn a_title_sort_goes_by_the_title_columns_and_follows_a_change_of_regex() {
 
 /// A PR by this author, with nothing else to tell it from the rest.
 fn by_author(number: u64, login: &str) -> Pr {
-    let mut pr = titled_for_sort(number, "t");
-    pr.author.login = login.to_string();
-    pr
+    PrBuilder::new(number)
+        .checks(serde_json::json!([status_context("SUCCESS")]))
+        .author(login)
+        .build()
 }
 
 #[test]
@@ -176,15 +178,12 @@ fn a_sort_by_author_is_named_in_the_title_when_the_search_makes_its_column_go() 
     assert_eq!(app.title(), "PRs · sorted by author ▲");
 }
 
-fn titled_for_sort(number: u64, title: &str) -> Pr {
-    pr_with(
-        number,
-        title,
-        "OPEN",
-        "",
-        "MERGEABLE",
-        serde_json::json!([{"__typename": "StatusContext", "context": "ci", "state": "SUCCESS"}]),
-    )
+/// `titled`, with a passing check.
+fn titled_with_a_passing_check(number: u64, title: &str) -> Pr {
+    PrBuilder::new(number)
+        .title(title)
+        .checks(serde_json::json!([status_context("SUCCESS")]))
+        .build()
 }
 
 #[test]

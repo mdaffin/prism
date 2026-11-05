@@ -333,22 +333,8 @@ fn approve_and_merge_with_no_approvals_skips_merging() {
 #[test]
 fn ctrl_enter_reviews_the_selection_like_ctrl_g() {
     let open = |app: &mut App| matches!(app.mode, Mode::Confirm(_));
-    let mut with_g = app_with(vec![pr_with(
-        1,
-        "Bump",
-        "OPEN",
-        "",
-        "MERGEABLE",
-        serde_json::json!([]),
-    )]);
-    let mut with_enter = app_with(vec![pr_with(
-        1,
-        "Bump",
-        "OPEN",
-        "",
-        "MERGEABLE",
-        serde_json::json!([]),
-    )]);
+    let mut with_g = app_with(vec![PrBuilder::new(1).title("Bump").build()]);
+    let mut with_enter = app_with(vec![PrBuilder::new(1).title("Bump").build()]);
     for app in [&mut with_g, &mut with_enter] {
         press(app, " ");
     }
@@ -361,14 +347,7 @@ fn ctrl_enter_reviews_the_selection_like_ctrl_g() {
     };
     assert_eq!(numbers(&with_g), numbers(&with_enter));
     // A plain Enter still reviews only the highlighted PR through its own path, and is not this.
-    let mut plain = app_with(vec![pr_with(
-        1,
-        "Bump",
-        "OPEN",
-        "",
-        "MERGEABLE",
-        serde_json::json!([]),
-    )]);
+    let mut plain = app_with(vec![PrBuilder::new(1).title("Bump").build()]);
     key(&mut plain, KeyCode::Enter);
     assert!(matches!(plain.mode, Mode::Confirm(_)));
 }

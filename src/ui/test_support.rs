@@ -4,21 +4,18 @@ use super::*;
 pub(super) use crate::app::Msg;
 pub(super) use crate::app::{MIN_COLUMNS, MIN_ROWS};
 pub(super) use crate::gh::Pr;
-pub(super) use crate::testing::{app_with, ctrl, ctrl_g, key, pr_with, press};
+pub(super) use crate::testing::{PrBuilder, app_with, ctrl, ctrl_g, key, press};
 pub(super) use crossterm::event::KeyCode;
 pub(super) use ratatui::Terminal;
 pub(super) use ratatui::backend::TestBackend;
 pub(super) use ratatui::style::Color;
 
 pub(super) fn pr(number: u64, title: &str, state: &str, review: &str) -> Pr {
-    pr_with(
-        number,
-        title,
-        state,
-        review,
-        "MERGEABLE",
-        serde_json::json!([]),
-    )
+    PrBuilder::new(number)
+        .title(title)
+        .state(state)
+        .review(review)
+        .build()
 }
 
 /// Draws the app on a screen of this size, as the real terminal would show it.
@@ -59,14 +56,11 @@ pub(super) fn run(name: &str, status: &str, conclusion: &str) -> serde_json::Val
 }
 
 pub(super) fn pr_checked(number: u64, mergeable: &str, checks: Vec<serde_json::Value>) -> Pr {
-    pr_with(
-        number,
-        &format!("PR {number}"),
-        "OPEN",
-        "",
-        mergeable,
-        checks.into(),
-    )
+    PrBuilder::new(number)
+        .title(&format!("PR {number}"))
+        .mergeable(mergeable)
+        .checks(checks.into())
+        .build()
 }
 
 /// Five open PRs, one in each state. The table puts them in this order: passing first, then
@@ -83,9 +77,7 @@ pub(super) fn one_of_each() -> App {
 
 /// A PR by `login`, and an app that has loaded these PRs for `query`.
 pub(super) fn by(login: &str, number: u64, title: &str) -> Pr {
-    let mut pr = pr(number, title, "OPEN", "");
-    pr.author.login = login.to_string();
-    pr
+    PrBuilder::new(number).title(title).author(login).build()
 }
 
 pub(super) fn wheel(app: &mut App, position: Position, down: bool) {
