@@ -159,8 +159,15 @@ mod tests {
         let s = settings(
             &[],
             config(
-                "author = \"a\"\nsearch = \"label:x\"\nlimit = 5\nmerge_method = \"merge\"\n\
-                 mouse = false\nhistory_limit = 9\ncolumn_regex = \"(?<p>x)\"",
+                r#"
+                author = "a"
+                search = "label:x"
+                limit = 5
+                merge_method = "merge"
+                mouse = false
+                history_limit = 9
+                column_regex = "(?<p>x)"
+                "#,
             ),
         )
         .unwrap();
@@ -191,8 +198,14 @@ mod tests {
                 "(?<q>y)",
             ],
             config(
-                "author = \"a\"\nsearch = \"label:x\"\nlimit = 5\nmerge_method = \"merge\"\n\
-                 history_limit = 9\ncolumn_regex = \"(?<p>x)\"",
+                r#"
+                author = "a"
+                search = "label:x"
+                limit = 5
+                merge_method = "merge"
+                history_limit = 9
+                column_regex = "(?<p>x)"
+                "#,
             ),
         )
         .unwrap();
@@ -217,9 +230,9 @@ mod tests {
     fn a_config_value_a_flag_would_refuse_is_refused() {
         let error = settings(&[], config("limit = 0")).unwrap_err();
         assert!(error.contains("limit"), "{error}");
-        let error = settings(&[], config("column_regex = \"(\"")).unwrap_err();
+        let error = settings(&[], config(r#"column_regex = "(""#)).unwrap_err();
         assert!(error.contains("column_regex"), "{error}");
-        let error = settings(&[], config("column_regex = \"no groups\"")).unwrap_err();
+        let error = settings(&[], config(r#"column_regex = "no groups""#)).unwrap_err();
         assert!(error.contains("column_regex"), "{error}");
     }
 
@@ -227,7 +240,7 @@ mod tests {
     fn a_flag_covers_a_bad_config_regex() {
         let s = settings(
             &["--column-regex", "(?<q>y)"],
-            config("column_regex = \"(\""),
+            config(r#"column_regex = "(""#),
         )
         .unwrap();
         assert!(s.column_regex.is_some());

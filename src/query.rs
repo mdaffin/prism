@@ -393,17 +393,21 @@ mod tests {
         names.iter().map(|n| n.to_string()).collect()
     }
 
+    /// The query without its `|`, and the cursor, which is where the `|` was (counted in chars).
+    fn split_cursor(query: &str) -> (String, usize) {
+        let cursor = query.chars().position(|c| c == '|').unwrap();
+        (query.replace('|', ""), cursor)
+    }
+
     /// The suggestions for the query up to a `|`, which is the cursor, with the text after it.
     fn suggest(query: &str, have: &Candidates) -> Option<Vec<String>> {
-        let cursor = query.chars().position(|c| c == '|').unwrap();
-        let query = query.replace('|', "");
+        let (query, cursor) = split_cursor(query);
         complete(&query, cursor, have).map(|c| c.suggestions)
     }
 
     /// The query after accepting the first suggestion, with a `|` where the cursor is.
     fn accept(query: &str, have: &Candidates) -> String {
-        let cursor = query.chars().position(|c| c == '|').unwrap();
-        let query = query.replace('|', "");
+        let (query, cursor) = split_cursor(query);
         let (accepted, cursor) = complete(&query, cursor, have).unwrap().accept(&query, 0);
         let mut chars: Vec<char> = accepted.chars().collect();
         chars.insert(cursor, '|');
@@ -463,7 +467,8 @@ mod tests {
             ["feature/x", "main", "renovate/y"]
         );
         assert_eq!(suggest("head:ren|", &have), Some(strings(&["renovate/y"])));
-        // One that only contains the word comes after those that start with it.
+        // A name that only contains the word still matches: no one starts with `r`, but
+        // `app/renovate` has it after the `/`.
         assert_eq!(
             suggest("author:r|", &have),
             Some(strings(&["app/renovate"]))
@@ -546,8 +551,8 @@ mod tests {
     #[test]
     fn names_are_wanted_only_in_the_value_of_the_qualifiers_that_use_them() {
         let source = |query: &str| {
-            let cursor = query.chars().position(|c| c == '|').unwrap();
-            source_at(&query.replace('|', ""), cursor)
+            let (query, cursor) = split_cursor(query);
+            source_at(&query, cursor)
         };
         assert_eq!(source("base:|"), Some(Source::Branches));
         assert_eq!(source("is:pr -head:ma|"), Some(Source::Branches));
