@@ -703,10 +703,17 @@ mod tests {
         assert!(app.drawn.buttons.is_empty());
     }
 
-    #[test]
-    fn the_help_popup_scrolls_on_a_short_screen_with_its_button_pinned() {
+    /// An app with the help popup open and drawn on a screen too short for all of it.
+    fn short_help() -> App {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "?");
+        draw(&mut app, 200, 14);
+        app
+    }
+
+    #[test]
+    fn a_short_screen_cuts_the_help_popup_and_draws_a_scrollbar_with_the_button_pinned() {
+        let mut app = short_help();
         let screen = lines(&draw(&mut app, 200, 14)).join("\n");
         // Too short for every key: the start is there, the end is not, and the bar says so.
         assert!(screen.contains("Everywhere"), "{screen}");
@@ -725,8 +732,11 @@ mod tests {
                 .count()
         };
         assert!(bar(&mut app) > 0, "no scrollbar");
+    }
 
-        // End shows the last key, and the button is still there.
+    #[test]
+    fn end_shows_the_last_help_key_and_the_button_is_still_there() {
+        let mut app = short_help();
         key(&mut app, KeyCode::End);
         let screen = lines(&draw(&mut app, 200, 14)).join("\n");
         assert!(
@@ -735,9 +745,22 @@ mod tests {
         );
         assert!(!screen.contains("Everywhere"), "{screen}");
         assert!(screen.contains("OK"), "{screen}");
-        // Further down does nothing, and Home, PgDn and PgUp, Up and Down and the wheel move it.
+    }
+
+    #[test]
+    fn down_at_the_end_of_the_help_popup_does_nothing_further() {
+        let mut app = short_help();
+        key(&mut app, KeyCode::End);
+        draw(&mut app, 200, 14);
         key(&mut app, KeyCode::Down);
         assert!(matches!(app.mode, Mode::Help(at) if at == app.drawn.popup.offset));
+    }
+
+    #[test]
+    fn home_page_down_up_and_page_up_move_the_help_popup() {
+        let mut app = short_help();
+        key(&mut app, KeyCode::End);
+        draw(&mut app, 200, 14);
         key(&mut app, KeyCode::Home);
         draw(&mut app, 200, 14);
         assert_eq!(app.drawn.popup.offset, 0);
@@ -751,13 +774,22 @@ mod tests {
         key(&mut app, KeyCode::PageUp);
         draw(&mut app, 200, 14);
         assert_eq!(app.drawn.popup.offset, 0);
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_help_popup_three_lines_a_step() {
+        let mut app = short_help();
         wheel(&mut app, Position::new(100, 5), true);
         draw(&mut app, 200, 14);
         assert_eq!(app.drawn.popup.offset, 3);
         wheel(&mut app, Position::new(100, 5), false);
         draw(&mut app, 200, 14);
         assert_eq!(app.drawn.popup.offset, 0);
-        // The popup still closes.
+    }
+
+    #[test]
+    fn the_help_popup_still_closes_on_a_short_screen() {
+        let mut app = short_help();
         key(&mut app, KeyCode::Esc);
         assert_list_mode(&app);
     }

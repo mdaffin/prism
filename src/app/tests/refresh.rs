@@ -163,25 +163,37 @@ fn ctrl_r_still_runs_the_query_while_paused() {
 }
 
 #[test]
-fn a_timed_refresh_waits_for_a_search_a_batch_and_row_refreshes() {
+fn a_timed_refresh_waits_for_a_search() {
     let mut app = app_with_rows(2);
     press(&mut app, "/");
     key(&mut app, KeyCode::Enter);
     app.list_to_fetch().unwrap();
     assert!(app.list.searching);
     assert!(start_status_refresh(&mut app).is_none());
+}
 
+#[test]
+fn a_timed_refresh_waits_for_a_batch() {
     let mut app = app_with_rows(2);
     start_approving(&mut app, 1);
     assert!(start_status_refresh(&mut app).is_none());
+}
 
+#[test]
+fn a_timed_refresh_waits_for_row_refreshes() {
     let mut app = app_with_rows(2);
     app.to_refresh.push(1);
     assert!(start_status_refresh(&mut app).is_none());
+}
 
-    // Nothing to refresh before a list loads, or when no PR is open.
+#[test]
+fn a_timed_refresh_has_nothing_to_refresh_before_a_list_loads() {
     let mut app = App::new(String::new(), "is:pr".to_string(), false);
     assert!(start_status_refresh(&mut app).is_none());
+}
+
+#[test]
+fn a_timed_refresh_has_nothing_to_refresh_when_no_pr_is_open() {
     let mut app = app_with(vec![pr(1, "MERGED")]);
     assert!(start_status_refresh(&mut app).is_none());
     assert!(start_status_refresh(&mut app).is_none());

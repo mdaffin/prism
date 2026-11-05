@@ -1,28 +1,51 @@
 use super::*;
 
 #[test]
-fn tab_cycles_focus_and_arrows_act_on_the_focused_pane() {
+fn tab_cycles_focus_through_the_panes_and_back_tab_goes_the_other_way() {
+    let mut app = app_with_rows(3);
+    assert_eq!(app.focus, Pane::Table);
+    for pane in [
+        Pane::Checks,
+        Pane::Comments,
+        Pane::Description,
+        Pane::Approvers,
+        Pane::Diff,
+        Pane::Table,
+    ] {
+        key(&mut app, KeyCode::Tab);
+        assert_eq!(app.focus, pane);
+    }
+    key(&mut app, KeyCode::BackTab);
+    assert_eq!(app.focus, Pane::Diff);
+}
+
+#[test]
+fn the_arrows_in_the_table_move_the_highlight_and_a_page_stops_at_the_last_row() {
     let mut app = app_with_rows(3);
     app.drawn.page = 5;
-    assert_eq!(app.focus, Pane::Table);
-
-    // The table moves its highlight; a page is clamped to the last row.
     key(&mut app, KeyCode::Down);
     assert_eq!(app.table.selected(), Some(1));
     key(&mut app, KeyCode::PageDown);
     assert_eq!(app.table.selected(), Some(2));
+}
 
-    key(&mut app, KeyCode::Tab);
-    assert_eq!(app.focus, Pane::Checks);
+#[test]
+fn the_arrows_in_the_checks_move_the_highlighted_check_and_a_page_scrolls() {
+    let mut app = app_with_rows(3);
+    app.drawn.page = 5;
+    focus(&mut app, Pane::Checks);
     with_check_rows(&mut app, 4, 0, 2);
     press(&mut app, "jjj");
     assert_eq!((app.scroll.check, app.scroll.checks), (3, 2));
     key(&mut app, KeyCode::PageUp);
     assert_eq!((app.scroll.check, app.scroll.checks), (3, 0));
+}
 
-    // In the comments pane the arrows go comment by comment, and a page scrolls.
-    key(&mut app, KeyCode::Tab);
-    assert_eq!(app.focus, Pane::Comments);
+#[test]
+fn the_arrows_in_the_comments_go_comment_by_comment_and_a_page_scrolls() {
+    let mut app = app_with_rows(3);
+    app.drawn.page = 5;
+    focus(&mut app, Pane::Comments);
     with_comment_rows(&mut app, &[1, 1, 1]);
     press(&mut app, "jj");
     assert_eq!(app.scroll.comment, 2);
@@ -33,24 +56,30 @@ fn tab_cycles_focus_and_arrows_act_on_the_focused_pane() {
     assert_eq!(app.scroll.comments, 0);
     press(&mut app, "k");
     assert_eq!((app.scroll.comment, app.scroll.comments), (1, 0));
+}
 
-    key(&mut app, KeyCode::Tab);
-    assert_eq!(app.focus, Pane::Description);
+#[test]
+fn the_arrows_in_the_description_scroll_it_and_move_nothing_else() {
+    let mut app = app_with_rows(3);
+    app.drawn.page = 5;
+    focus(&mut app, Pane::Description);
     press(&mut app, "jj");
     key(&mut app, KeyCode::PageDown);
     assert_eq!(app.scroll.description, 7);
     key(&mut app, KeyCode::PageUp);
     key(&mut app, KeyCode::Up);
     assert_eq!(app.scroll.description, 1);
-    // The highlight stayed where it was, and the other panes didn't scroll.
-    assert_eq!(app.table.selected(), Some(2));
+    // The highlight stayed where it was, and the other panes did not scroll.
+    assert_eq!(app.table.selected(), Some(0));
     assert_eq!((app.scroll.checks, app.scroll.diff), (0, 0));
     key(&mut app, KeyCode::PageUp);
     assert_eq!(app.scroll.description, 0);
+}
 
-    // The approvers, above the diff, scroll a line at a time.
-    key(&mut app, KeyCode::Tab);
-    assert_eq!(app.focus, Pane::Approvers);
+#[test]
+fn the_arrows_in_the_approvers_scroll_a_line_at_a_time() {
+    let mut app = app_with_rows(3);
+    focus(&mut app, Pane::Approvers);
     press(&mut app, "jj");
     assert_eq!(app.scroll.approvers, 2);
     key(&mut app, KeyCode::Up);
@@ -59,17 +88,15 @@ fn tab_cycles_focus_and_arrows_act_on_the_focused_pane() {
     assert_eq!(app.scroll.approvers, 0);
     // Left and right have nothing to scroll there.
     press(&mut app, "l");
+}
 
-    key(&mut app, KeyCode::Tab);
-    assert_eq!(app.focus, Pane::Diff);
+#[test]
+fn the_arrows_in_the_diff_scroll_it() {
+    let mut app = app_with_rows(3);
+    focus(&mut app, Pane::Diff);
     press(&mut app, "k");
     key(&mut app, KeyCode::Down);
     assert_eq!(app.scroll.diff, 1);
-
-    key(&mut app, KeyCode::Tab);
-    assert_eq!(app.focus, Pane::Table);
-    key(&mut app, KeyCode::BackTab);
-    assert_eq!(app.focus, Pane::Diff);
 }
 
 #[test]
@@ -132,31 +159,46 @@ fn the_wheel_steps_through_the_comments_like_down_and_up() {
 }
 
 #[test]
-fn home_and_end_jump_to_the_first_and_last_item_or_the_ends_of_a_pane() {
+fn home_and_end_in_the_table_jump_to_the_first_and_last_row() {
     let mut app = app_with_rows(3);
     key(&mut app, KeyCode::End);
     assert_eq!(app.table.selected(), Some(2));
     key(&mut app, KeyCode::Home);
     assert_eq!(app.table.selected(), Some(0));
+}
 
-    // In the comments the highlight goes to the first or last comment, with the view.
+#[test]
+fn home_and_end_in_the_comments_jump_to_the_first_and_last_comment_with_the_view() {
+    let mut app = app_with_rows(3);
     with_comment_rows(&mut app, &[1, 10, 1]);
     focus(&mut app, Pane::Comments);
     key(&mut app, KeyCode::End);
     assert_eq!((app.scroll.comment, app.scroll.comments), (2, 11));
     key(&mut app, KeyCode::Home);
     assert_eq!((app.scroll.comment, app.scroll.comments), (0, 0));
+}
 
-    // Elsewhere the scroll goes to the top, and to the bottom once the view clamps it.
+#[test]
+fn home_and_end_in_the_description_scroll_to_the_top_and_to_the_bottom_once_the_view_clamps_it() {
+    let mut app = app_with_rows(3);
     focus(&mut app, Pane::Description);
     key(&mut app, KeyCode::End);
     assert_eq!(app.scroll.description, u16::MAX);
     key(&mut app, KeyCode::Home);
     assert_eq!(app.scroll.description, 0);
+}
+
+#[test]
+fn end_in_the_diff_scrolls_to_the_bottom_once_the_view_clamps_it() {
+    let mut app = app_with_rows(3);
     focus(&mut app, Pane::Diff);
     key(&mut app, KeyCode::End);
     assert_eq!(app.scroll.diff, u16::MAX);
-    // In the checks too, and the view follows the highlight.
+}
+
+#[test]
+fn home_and_end_in_the_checks_jump_to_the_first_and_last_check_and_the_view_follows() {
+    let mut app = app_with_rows(3);
     with_check_rows(&mut app, 5, 0, 3);
     focus(&mut app, Pane::Checks);
     key(&mut app, KeyCode::End);

@@ -30,18 +30,20 @@ fn closed_and_merged_prs_sort_after_open_ones() {
 }
 
 #[test]
-fn closed_and_merged_prs_are_left_out() {
+fn closed_and_merged_prs_are_left_out_of_a_review_and_listed() {
     let prs = vec![pr(1, "OPEN"), pr(2, "CLOSED"), pr(3, "MERGED")];
     let mut app = app_with(prs);
     press(&mut app, " j j ");
     ctrl_g(&mut app);
     assert_eq!(confirm_numbers(&app), [1]);
     assert_eq!(confirm(&app).left_out, [2, 3]);
+}
 
-    // With only closed PRs there is nothing to choose but Cancel.
-    key(&mut app, KeyCode::Esc);
-    press(&mut app, "k");
-    app.selected.clear();
+#[test]
+fn with_only_a_closed_pr_to_review_there_is_nothing_to_choose_but_cancel() {
+    let prs = vec![pr(1, "OPEN"), pr(2, "CLOSED"), pr(3, "MERGED")];
+    let mut app = app_with(prs);
+    press(&mut app, "j");
     key(&mut app, KeyCode::Enter);
     assert!(confirm(&app).prs.is_empty());
     assert_eq!(confirm(&app).choices(), [Choice::Cancel]);
