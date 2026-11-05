@@ -852,33 +852,57 @@ mod tests {
         .into()
     }
 
+    /// An app whose details (or, with `diff`, whose diff) failed to load with `long_failure`, drawn
+    /// on a 120 by 20 screen.
+    fn app_with_a_long_failure(diff: bool) -> App {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        if diff {
+            app.diff_loaded(1, Err(long_failure()));
+            app.focus = Pane::Diff;
+        } else {
+            app.details_loaded(1, Err(long_failure()));
+        }
+        draw(&mut app, 120, 20);
+        app
+    }
+
     #[test]
-    fn e_opens_the_whole_failure_which_scrolls_and_wraps_and_closes() {
-        for focus_diff in [false, true] {
-            let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-            if focus_diff {
-                app.diff_loaded(1, Err(long_failure()));
-                app.focus = Pane::Diff;
-            } else {
-                app.details_loaded(1, Err(long_failure()));
-            }
-            draw(&mut app, 120, 20);
+    fn e_opens_the_whole_failure_wrapped_to_the_popup() {
+        for diff in [false, true] {
+            let mut app = app_with_a_long_failure(diff);
             press(&mut app, "e");
-            assert!(matches!(app.mode, Mode::Failure(_)), "{focus_diff}");
+            assert!(matches!(app.mode, Mode::Failure(_)), "diff: {diff}");
             let screen = lines(&draw(&mut app, 120, 20)).join("\n");
             assert!(screen.contains("failed to load"), "{screen}");
             assert!(screen.contains("first line."), "{screen}");
-            // The long line is wrapped to the popup rather than cut off, so its end is in view
-            // somewhere, and the end of the message needs scrolling to.
+            // The long line is wrapped to the popup rather than cut off, so the message is taller
+            // than the popup and the end of it needs scrolling to.
             assert!(!screen.contains("the very last line"), "{screen}");
             assert!(app.drawn.popup.content > app.drawn.popup.viewport);
             assert!(screen.contains("OK"), "{screen}");
+        }
+    }
+
+    #[test]
+    fn end_scrolls_the_failure_to_its_last_line_with_the_button_still_there() {
+        for diff in [false, true] {
+            let mut app = app_with_a_long_failure(diff);
+            press(&mut app, "e");
+            // The popup learns its size when drawn, and End scrolls by it.
+            draw(&mut app, 120, 20);
             key(&mut app, KeyCode::End);
             let screen = lines(&draw(&mut app, 120, 20)).join("\n");
             assert!(screen.contains("the very last line"), "{screen}");
             assert!(!screen.contains("first line."), "{screen}");
             assert!(screen.contains("OK"), "{screen}");
-            // It closes with e or Esc.
+        }
+    }
+
+    #[test]
+    fn e_and_esc_each_close_the_failure() {
+        for diff in [false, true] {
+            let mut app = app_with_a_long_failure(diff);
+            press(&mut app, "e");
             press(&mut app, "e");
             assert_list_mode(&app);
             press(&mut app, "e");
@@ -886,7 +910,6 @@ mod tests {
             assert_list_mode(&app);
         }
     }
-
     #[test]
     fn e_with_nothing_failed_says_so_and_opens_nothing() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);

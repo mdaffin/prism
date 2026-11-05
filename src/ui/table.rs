@@ -510,52 +510,83 @@ mod tests {
     use super::*;
     use crate::ui::test_support::*;
 
-    #[test]
-    fn the_sorted_columns_header_has_an_arrow_for_the_direction_and_s_changes_the_rows_drawn() {
-        let mut app = app_with(vec![
+    /// Two open PRs whose checks are the same, so only their numbers tell them apart.
+    fn app_with_two_to_sort() -> App {
+        app_with(vec![
             pr(9, "Bump zulu", "OPEN", ""),
             pr(3, "Bump alpha", "OPEN", ""),
-        ]);
-        // The header row of the table: the one with the `#` column.
-        let header = |app: &mut App| {
-            let screen = lines(&draw(app, 200, 30));
-            table_header_line(app, &screen)
-        };
-        let row = |screen: &[String], number: &str| {
+        ])
+    }
+
+    /// The header row of the table, as drawn.
+    fn header_of(app: &mut App) -> String {
+        let screen = lines(&draw(app, 200, 30));
+        table_header_line(app, &screen)
+    }
+
+    /// Which of the numbers `#9` and `#3` comes first on screen, as the order of their row lines.
+    fn order_of_rows(app: &mut App) -> (usize, usize) {
+        let screen = lines(&draw(app, 200, 30));
+        let row = |number: &str| {
             screen
                 .iter()
                 .position(|line| line.contains(number) && line.contains("[ ]"))
                 .unwrap()
         };
-        // Sorted by checks to begin with, smallest first.
-        let top = header(&mut app);
+        (row("#9"), row("#3"))
+    }
+
+    #[test]
+    fn the_table_starts_sorted_by_checks_smallest_first_in_githubs_order() {
+        let mut app = app_with_two_to_sort();
+        let top = header_of(&mut app);
         assert!(top.contains("Checks ▲"), "{top}");
         assert!(!top.contains("Review ▲") && !top.contains('▼'), "{top}");
         // The same checks, so GitHub's order: 9, then 3.
-        let screen = lines(&draw(&mut app, 200, 30));
-        assert!(row(&screen, "#9") < row(&screen, "#3"));
+        let (nine, three) = order_of_rows(&mut app);
+        assert!(nine < three);
+    }
 
+    #[test]
+    fn s_sorts_by_the_next_column_and_changes_the_rows_drawn() {
+        let mut app = app_with_two_to_sort();
         press(&mut app, "s");
-        let top = header(&mut app);
+        let top = header_of(&mut app);
         assert!(top.contains("# ▲") && !top.contains("Checks ▲"), "{top}");
-        let screen = lines(&draw(&mut app, 200, 30));
-        assert!(row(&screen, "#3") < row(&screen, "#9"));
+        let (nine, three) = order_of_rows(&mut app);
+        assert!(three < nine);
+    }
 
-        press(&mut app, "S");
-        let top = header(&mut app);
+    #[test]
+    fn capital_s_reverses_the_direction_and_the_rows() {
+        let mut app = app_with_two_to_sort();
+        press(&mut app, "sS");
+        let top = header_of(&mut app);
         assert!(top.contains("# ▼"), "{top}");
-        let screen = lines(&draw(&mut app, 200, 30));
-        assert!(row(&screen, "#9") < row(&screen, "#3"));
+        let (nine, three) = order_of_rows(&mut app);
+        assert!(nine < three);
+    }
 
-        press(&mut app, "s");
-        assert!(header(&mut app).contains("Title ▲"));
-        press(&mut app, "s");
-        assert!(header(&mut app).contains("Review ▲"));
-        press(&mut app, "s");
-        assert!(header(&mut app).contains("Author ▲"));
-        // The update time has a column to mark now.
-        press(&mut app, "s");
-        assert!(header(&mut app).contains("Updated ▲"));
+    #[test]
+    fn each_press_of_s_marks_the_next_column() {
+        // Presses of `s` from the start, and the header that gets the arrow.
+        for (presses, marked) in [
+            (2, "Title ▲"),
+            (3, "Review ▲"),
+            (4, "Author ▲"),
+            (5, "Updated ▲"),
+        ] {
+            let mut app = app_with_two_to_sort();
+            press(&mut app, &"s".repeat(presses));
+            let top = header_of(&mut app);
+            assert!(top.contains(marked), "{presses} presses: {top}");
+        }
+    }
+
+    #[test]
+    fn sorting_by_the_update_time_leaves_no_sorted_by_note_in_the_title() {
+        let mut app = app_with_two_to_sort();
+        press(&mut app, "sssss");
         let screen = lines(&draw(&mut app, 200, 30));
         assert!(!screen[0].contains("sorted by"), "{}", screen[0]);
     }

@@ -69,6 +69,18 @@ fn type_columns(app: &mut App, regex: &str) {
     press(app, regex);
 }
 
+const CONTAINER_VERSION: &str = r"Bump (?<container>.+?) to (?<version>\S+)$";
+
+#[test]
+fn c_opens_the_columns_box() {
+    let mut app = app_with(vec![pr(1, "Bump alpha to 1.2", "OPEN", "")]);
+    press(&mut app, "c");
+    assert!(app.typing == Typing::Columns);
+    let screen = lines(&draw(&mut app, 200, 30));
+    assert!(shows(&screen, "Columns"));
+    assert!(app.drawn.areas.columns != Rect::default());
+}
+
 #[test]
 fn a_valid_regex_in_the_columns_box_changes_the_headers_on_enter() {
     let mut app = app_with(vec![pr(1, "Bump alpha to 1.2", "OPEN", "")]);
@@ -76,12 +88,7 @@ fn a_valid_regex_in_the_columns_box_changes_the_headers_on_enter() {
     assert!(shows(&screen, "Title"));
 
     press(&mut app, "c");
-    assert!(app.typing == Typing::Columns);
-    let screen = lines(&draw(&mut app, 200, 30));
-    assert!(shows(&screen, "Columns"));
-    assert!(app.drawn.areas.columns != Rect::default());
-
-    press(&mut app, r"Bump (?<container>.+?) to (?<version>\S+)$");
+    press(&mut app, CONTAINER_VERSION);
     key(&mut app, KeyCode::Enter);
     assert!(app.typing == Typing::Nothing);
     let screen = lines(&draw(&mut app, 200, 30));
@@ -90,13 +97,21 @@ fn a_valid_regex_in_the_columns_box_changes_the_headers_on_enter() {
     assert!(!header.contains("Title"));
     // The box is gone, and has no area to catch a click.
     assert_eq!(app.drawn.areas.columns, Rect::default());
+}
 
-    // Opening it again starts from the regex in use, and an empty one goes back to the title.
+#[test]
+fn reopening_the_columns_box_starts_from_the_regex_in_use() {
+    let mut app = app_with(vec![pr(1, "Bump alpha to 1.2", "OPEN", "")]);
+    app.columns = Some(model::parse_column_regex(CONTAINER_VERSION).unwrap());
     press(&mut app, "c");
-    assert_eq!(
-        app.columns_input.value(),
-        r"Bump (?<container>.+?) to (?<version>\S+)$"
-    );
+    assert_eq!(app.columns_input.value(), CONTAINER_VERSION);
+}
+
+#[test]
+fn an_empty_regex_in_the_columns_box_goes_back_to_the_title() {
+    let mut app = app_with(vec![pr(1, "Bump alpha to 1.2", "OPEN", "")]);
+    app.columns = Some(model::parse_column_regex(CONTAINER_VERSION).unwrap());
+    press(&mut app, "c");
     type_columns(&mut app, "");
     key(&mut app, KeyCode::Enter);
     assert!(app.columns.is_none());

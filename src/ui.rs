@@ -616,56 +616,101 @@ mod tests {
         vec![a.checks, a.comments, a.description, a.approvers, a.diff]
     }
 
+    /// The widths of the screens to try, one with each layout.
+    const BOTH_LAYOUTS: [u16; 2] = [200, 100];
+
+    fn area_of(r: &Rect) -> u32 {
+        u32::from(r.width) * u32::from(r.height)
+    }
+
+    /// The area the panes and the list fill together.
+    fn shown_total(app: &App) -> u32 {
+        hideable_areas(app).iter().map(area_of).sum::<u32>() + area_of(&app.drawn.areas.table)
+    }
+
+    /// An app drawn at `width` by 40 with every pane shown.
+    fn app_with_every_pane(width: u16) -> App {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        draw(&mut app, width, 40);
+        app
+    }
+
     #[test]
-    fn each_pane_can_be_hidden_in_both_layouts_and_the_others_take_its_room() {
-        let area_of = |r: &Rect| u32::from(r.width) * u32::from(r.height);
-        for width in [200u16, 100] {
-            let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-            draw(&mut app, width, 40);
+    fn every_pane_is_shown_to_begin_with_in_both_layouts() {
+        for width in BOTH_LAYOUTS {
+            let app = app_with_every_pane(width);
             let all = hideable_areas(&app);
             assert!(all.iter().all(|r| !r.is_empty()), "{width}: {all:?}");
-            let shown_total = |app: &App| -> u32 {
-                hideable_areas(app).iter().map(area_of).sum::<u32>()
-                    + area_of(&app.drawn.areas.table)
-            };
-            let before = shown_total(&app);
+        }
+    }
+
+    #[test]
+    fn hiding_a_pane_empties_that_pane_and_no_other() {
+        for width in BOTH_LAYOUTS {
             for (i, pane) in Pane::HIDEABLE.into_iter().enumerate() {
+                let mut app = app_with_every_pane(width);
                 press(&mut app, &(i + 1).to_string());
                 draw(&mut app, width, 40);
-                let areas = hideable_areas(&app);
-                assert!(
-                    areas[i].is_empty(),
-                    "{width}: {pane:?} still has {:?}",
-                    areas[i]
-                );
-                for (j, other) in areas.iter().enumerate() {
-                    assert!(
-                        j == i || !other.is_empty(),
-                        "{width}: hiding {pane:?} hid {j}"
+                for (j, area) in hideable_areas(&app).iter().enumerate() {
+                    assert_eq!(
+                        area.is_empty(),
+                        j == i,
+                        "{width}: hiding {pane:?}: pane {j} is {area:?}"
                     );
                 }
-                // The room it had went to the others, so the panes still fill about as much.
+            }
+        }
+    }
+
+    #[test]
+    fn the_room_a_hidden_pane_had_goes_to_the_others() {
+        for width in BOTH_LAYOUTS {
+            for (i, pane) in Pane::HIDEABLE.into_iter().enumerate() {
+                let mut app = app_with_every_pane(width);
+                let before = shown_total(&app);
+                let had = area_of(&hideable_areas(&app)[i]);
+                press(&mut app, &(i + 1).to_string());
+                draw(&mut app, width, 40);
+                // The panes still fill about as much of the screen, give or take its borders.
                 let kept = shown_total(&app);
-                assert!(
-                    kept + area_of(&all[i]) / 2 > before,
-                    "{width}: {pane:?} {kept} {before}"
-                );
-                // None overlap.
-                let mut drawn = areas.clone();
+                assert!(kept + had / 2 > before, "{width}: {pane:?} {kept} {before}");
+            }
+        }
+    }
+
+    #[test]
+    fn panes_never_overlap_when_one_is_hidden() {
+        for width in BOTH_LAYOUTS {
+            for (i, pane) in Pane::HIDEABLE.into_iter().enumerate() {
+                let mut app = app_with_every_pane(width);
+                press(&mut app, &(i + 1).to_string());
+                draw(&mut app, width, 40);
+                let mut drawn = hideable_areas(&app);
                 drawn.push(app.drawn.areas.table);
                 for (a, ra) in drawn.iter().enumerate() {
                     for rb in &drawn[a + 1..] {
-                        assert!(ra.intersection(*rb).is_empty(), "{width}: {ra:?} {rb:?}");
+                        assert!(
+                            ra.intersection(*rb).is_empty(),
+                            "{width}: hiding {pane:?}: {ra:?} {rb:?}"
+                        );
                     }
                 }
-                // Shown again, it is back.
+            }
+        }
+    }
+
+    #[test]
+    fn a_hidden_pane_is_back_when_shown_again() {
+        for width in BOTH_LAYOUTS {
+            for (i, pane) in Pane::HIDEABLE.into_iter().enumerate() {
+                let mut app = app_with_every_pane(width);
+                press(&mut app, &(i + 1).to_string());
                 press(&mut app, &(i + 1).to_string());
                 draw(&mut app, width, 40);
                 assert!(!hideable_areas(&app)[i].is_empty(), "{width}: {pane:?}");
             }
         }
     }
-
     #[test]
     fn hiding_every_pane_leaves_the_list_across_the_whole_screen_and_0_brings_them_back() {
         for width in [200u16, 100] {
@@ -951,31 +996,51 @@ mod tests {
     }
 
     #[test]
-    fn dragging_a_vertical_thumb_scrolls_in_proportion_even_off_the_bar() {
+    fn dragging_a_vertical_thumb_to_the_bottom_scrolls_to_the_end_even_off_the_bar() {
         let mut app = app_with_long_panes();
         let hit = bar(&app, ScrollTarget::Diff);
         // Take hold of the thumb at the top of the track, and pull it to the very bottom with the
         // pointer far to the left, off the bar.
         press_at(&mut app, Position::new(hit.track.x, hit.track.y));
-        let off_bar = Position::new(2, hit.track.bottom() + 5);
-        drag_to(&mut app, off_bar);
+        drag_to(&mut app, Position::new(2, hit.track.bottom() + 5));
         draw_wide(&mut app);
         let end = bar(&app, ScrollTarget::Diff);
         assert_eq!(end.offset, end.content - end.viewport, "to the end");
-        // Back to the middle of the track: about the middle of the content.
-        let middle = Position::new(2, hit.track.y + hit.track.height / 2);
-        drag_to(&mut app, middle);
+    }
+
+    #[test]
+    fn dragging_a_vertical_thumb_back_to_the_middle_scrolls_to_about_the_middle() {
+        let mut app = app_with_long_panes();
+        let hit = bar(&app, ScrollTarget::Diff);
+        press_at(&mut app, Position::new(hit.track.x, hit.track.y));
+        drag_to(&mut app, Position::new(2, hit.track.bottom() + 5));
+        draw_wide(&mut app);
+        let end = bar(&app, ScrollTarget::Diff);
+        drag_to(
+            &mut app,
+            Position::new(2, hit.track.y + hit.track.height / 2),
+        );
         draw_wide(&mut app);
         let mid = bar(&app, ScrollTarget::Diff).offset;
         let max = end.content - end.viewport;
         assert!(mid > max / 4 && mid < max * 3 / 4, "{mid} of {max}");
-        // Once released, a drag does nothing.
+    }
+
+    #[test]
+    fn once_released_a_drag_does_nothing() {
+        let mut app = app_with_long_panes();
+        let hit = bar(&app, ScrollTarget::Diff);
+        let middle = Position::new(2, hit.track.y + hit.track.height / 2);
+        press_at(&mut app, Position::new(hit.track.x, hit.track.y));
+        drag_to(&mut app, middle);
+        draw_wide(&mut app);
+        let mid = bar(&app, ScrollTarget::Diff).offset;
+        assert!(mid > 0, "the drag scrolled");
         release_at(&mut app, middle);
         drag_to(&mut app, Position::new(2, hit.track.y));
         draw_wide(&mut app);
         assert_eq!(bar(&app, ScrollTarget::Diff).offset, mid);
     }
-
     #[test]
     fn dragging_the_lists_thumb_scrolls_the_list_and_keeps_the_highlight_on_screen() {
         let prs: Vec<Pr> = (1..=60).map(|n| by("alice", n, "Bump alpha")).collect();
@@ -1010,14 +1075,23 @@ mod tests {
         let end = bar(&app, ScrollTarget::ListX);
         assert_eq!(end.offset, end.content - end.viewport);
         assert_eq!(usize::from(app.list_x), end.offset);
+    }
+
+    #[test]
+    fn a_click_on_the_horizontal_track_left_of_the_thumb_pages_back() {
+        let mut app = app_with_a_long_title();
+        draw_narrow(&mut app);
+        let hit = bar(&app, ScrollTarget::ListX);
+        press_at(&mut app, Position::new(hit.track.x, hit.track.y));
+        drag_to(&mut app, Position::new(hit.track.right() + 3, hit.track.y));
         release_at(&mut app, Position::new(0, 0));
-        // A click on the track left of the thumb pages back.
+        draw_narrow(&mut app);
+        let end = bar(&app, ScrollTarget::ListX);
         press_at(&mut app, Position::new(hit.track.x, hit.track.y));
         release_at(&mut app, Position::new(hit.track.x, hit.track.y));
         draw_narrow(&mut app);
         assert!(bar(&app, ScrollTarget::ListX).offset < end.offset);
     }
-
     #[test]
     fn a_bar_that_is_not_drawn_has_nothing_to_click() {
         let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
