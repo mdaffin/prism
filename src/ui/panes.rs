@@ -796,7 +796,7 @@ mod tests {
     fn the_pull_request_box_shows_the_title_and_a_summary() {
         let mut app = app_with(vec![pr(7, "Bump example-lib", "OPEN", "APPROVED")]);
         let screen = lines(&draw(&mut app, 200, 30));
-        assert!(screen.iter().any(|line| line.contains("Pull request")));
+        assert!(shows(&screen, "Pull request"));
         // Until the details load, only what the list knows is shown.
         let summary = screen
             .iter()
@@ -870,22 +870,14 @@ mod tests {
         drag_to(&mut app, text_cell(&view, last, end_column));
         release_at(&mut app, text_cell(&view, last, end_column));
         assert_eq!(app.copy_to_run().as_deref(), Some(body.as_str()));
-        assert!(status_bar(&mut app, 160).contains("Copied"));
+        assert!(status_bar(&mut app, 160, 30).contains("Copied"));
         // The cells under the drag are drawn reversed, the others are not.
         let buffer = draw(&mut app, 200, 40);
         let first = text_cell(&view, 0, 0);
-        assert!(
-            buffer[first]
-                .modifier
-                .contains(ratatui::style::Modifier::REVERSED)
-        );
+        assert!(reversed(&buffer, first));
         // The border is never in it.
         let border = Position::new(view.inner.x - 1, view.inner.y);
-        assert!(
-            !buffer[border]
-                .modifier
-                .contains(ratatui::style::Modifier::REVERSED)
-        );
+        assert!(!reversed(&buffer, border));
     }
 
     #[test]
@@ -1112,17 +1104,17 @@ mod tests {
         let details = pr_details(&body, serde_json::json!([]));
         app.details_loaded(1, Ok(details));
         let screen = lines(&draw(&mut app, 200, 40));
-        assert!(screen.iter().any(|line| line.contains("scroll tables")));
-        assert!(!screen.iter().any(|line| line.contains("END")));
+        assert!(shows(&screen, "scroll tables"));
+        assert!(!shows(&screen, "END"));
 
         app.focus = Pane::Description;
         for _ in 0..20 {
             press(&mut app, "l");
         }
         let screen = lines(&draw(&mut app, 200, 40));
-        assert!(screen.iter().any(|line| line.contains("END")));
+        assert!(shows(&screen, "END"));
         // The prose stays where it was, and the scroll stops at the table's end.
-        assert!(screen.iter().any(|line| line.contains("Some prose")));
+        assert!(shows(&screen, "Some prose"));
         let at_end = app.scroll.description_x;
         press(&mut app, "l");
         draw(&mut app, 200, 40);
@@ -1223,7 +1215,7 @@ mod tests {
         app.details_loaded(1, Ok(details));
         let buffer = draw(&mut app, 200, 60);
         let screen = lines(&buffer);
-        let has = |text: &str| screen.iter().any(|line| line.contains(text));
+        let has = |text: &str| shows(&screen, text);
         assert!(has("Approvers"));
         assert!(has("✗ @carol · changes requested"));
         assert!(has("✓ @alice · approved · for org/owners"));
@@ -1255,21 +1247,13 @@ mod tests {
     fn the_approvers_pane_says_when_there_is_nothing_and_while_it_loads() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         let screen = lines(&draw(&mut app, 200, 40));
-        assert!(screen.iter().any(|line| line.contains("Loading…")));
+        assert!(shows(&screen, "Loading…"));
         app.details_loaded(1, Ok(details_with_approvers(serde_json::json!({}))));
         let screen = lines(&draw(&mut app, 200, 40));
-        assert!(
-            screen
-                .iter()
-                .any(|line| line.contains("No reviews or review requests."))
-        );
+        assert!(shows(&screen, "No reviews or review requests."));
         app.details_loaded(1, Err(color_eyre::eyre::eyre!("boom")));
         let screen = lines(&draw(&mut app, 200, 40));
-        assert!(
-            screen
-                .iter()
-                .any(|line| line.contains("Failed to load details: boom"))
-        );
+        assert!(shows(&screen, "Failed to load details: boom"));
     }
 
     #[test]
@@ -1287,8 +1271,8 @@ mod tests {
         focus(&mut app, Pane::Approvers);
         key(&mut app, KeyCode::End);
         let screen = lines(&draw(&mut app, 200, 40));
-        assert!(screen.iter().any(|line| line.contains("@user29 ")));
-        assert!(!screen.iter().any(|line| line.contains("@user0 ")));
+        assert!(shows(&screen, "@user29 "));
+        assert!(!shows(&screen, "@user0 "));
     }
 
     #[test]
@@ -1314,7 +1298,7 @@ mod tests {
         app.details_loaded(1, Ok(details));
         app.focus = Pane::Comments;
         let screen = lines(&draw(&mut app, 200, 40));
-        let has = |text: &str| screen.iter().any(|line| line.contains(text));
+        let has = |text: &str| shows(&screen, text);
         assert!(has("▶ @alice · "));
         assert!(!has("@alice · approved"));
         assert!(has("▶ @bob · approved · "));
@@ -1325,7 +1309,7 @@ mod tests {
         // Opening the thread shows the first comment, then each reply under who wrote it.
         press(&mut app, "jj ");
         let screen = lines(&draw(&mut app, 200, 40));
-        let has = |text: &str| screen.iter().any(|line| line.contains(text));
+        let has = |text: &str| shows(&screen, text);
         assert!(has("Why this?"));
         assert!(has("@dave · 2026-01-02 05:30"));
         assert!(has("Because."));
@@ -1345,25 +1329,25 @@ mod tests {
         app.focus = Pane::Comments;
         // Collapsed, there are only the headers.
         let screen = lines(&draw(&mut app, 200, 40));
-        assert!(screen.iter().any(|line| line.contains("▶ @someone")));
-        assert!(!screen.iter().any(|line| line.contains("Some bold prose")));
+        assert!(shows(&screen, "▶ @someone"));
+        assert!(!shows(&screen, "Some bold prose"));
 
         press(&mut app, "j ");
         let screen = lines(&draw(&mut app, 200, 40));
-        assert!(screen.iter().any(|line| line.contains("▼ @someone")));
-        assert!(screen.iter().any(|line| line.contains("Some bold prose")));
-        assert!(!screen.iter().any(|line| line.contains("END")));
+        assert!(shows(&screen, "▼ @someone"));
+        assert!(shows(&screen, "Some bold prose"));
+        assert!(!shows(&screen, "END"));
 
         for _ in 0..20 {
             press(&mut app, "l");
         }
         let screen = lines(&draw(&mut app, 200, 40));
-        assert!(screen.iter().any(|line| line.contains("END")));
+        assert!(shows(&screen, "END"));
 
         // Collapsing hides it again.
         press(&mut app, " ");
         let screen = lines(&draw(&mut app, 200, 40));
-        assert!(!screen.iter().any(|line| line.contains("Some bold prose")));
+        assert!(!shows(&screen, "Some bold prose"));
     }
 
     #[test]
@@ -1468,14 +1452,9 @@ mod tests {
     #[test]
     fn the_scrollbar_thumb_moves_to_the_bottom_with_the_scroll() {
         let mut app = app_with_long_panes();
-        let thumb_rows = |buffer: &Buffer, area: Rect| -> Vec<u16> {
-            (area.y + 1..area.bottom() - 1)
-                .filter(|&y| buffer[(area.right() - 1, y)].symbol() == "█")
-                .collect()
-        };
         let buffer = draw(&mut app, 200, 40);
         let diff = app.drawn.areas.diff;
-        let at_top = thumb_rows(&buffer, diff);
+        let at_top = thumb(&buffer, diff, Axis::Vertical);
         assert_eq!(at_top.first(), Some(&(diff.y + 1)));
         assert!(at_top.last() < Some(&(diff.bottom() - 2)));
 
@@ -1484,7 +1463,7 @@ mod tests {
         }
         key(&mut app, KeyCode::End);
         let buffer = draw(&mut app, 200, 40);
-        let at_bottom = thumb_rows(&buffer, diff);
+        let at_bottom = thumb(&buffer, diff, Axis::Vertical);
         assert_eq!(at_bottom.last(), Some(&(diff.bottom() - 2)));
         assert!(at_bottom.first() > Some(&(diff.y + 1)));
     }
@@ -1540,16 +1519,8 @@ mod tests {
         assert!(!row.contains("CI/"), "{row}");
     }
 
-    /// The columns of the thumb of the scrollbar on `area`'s bottom border. Its track is the
-    /// border itself, so a pane has a scrollbar when it has a thumb.
-    fn horizontal_thumb(buffer: &Buffer, area: Rect) -> Vec<u16> {
-        (area.x + 1..area.right() - 1)
-            .filter(|&x| buffer[(x, area.bottom() - 1)].symbol() == HORIZONTAL_THUMB)
-            .collect()
-    }
-
     fn has_horizontal_scrollbar(buffer: &Buffer, area: Rect) -> bool {
-        !horizontal_thumb(buffer, area).is_empty()
+        !thumb(buffer, area, Axis::Horizontal).is_empty()
     }
 
     #[test]
@@ -1606,7 +1577,7 @@ mod tests {
         app.diff_loaded(1, Ok(format!("+{}", "x".repeat(300))));
         let buffer = draw(&mut app, 100, 40);
         let diff = app.drawn.areas.diff;
-        let at_start = horizontal_thumb(&buffer, diff);
+        let at_start = thumb(&buffer, diff, Axis::Horizontal);
         assert_eq!(at_start.first(), Some(&(diff.x + 1)));
         assert!(at_start.last() < Some(&(diff.right() - 2)));
 
@@ -1615,7 +1586,7 @@ mod tests {
             key(&mut app, KeyCode::Right);
         }
         let buffer = draw(&mut app, 100, 40);
-        let at_end = horizontal_thumb(&buffer, diff);
+        let at_end = thumb(&buffer, diff, Axis::Horizontal);
         assert_eq!(at_end.last(), Some(&(diff.right() - 2)));
         assert!(at_end.first() > Some(&(diff.x + 1)));
     }

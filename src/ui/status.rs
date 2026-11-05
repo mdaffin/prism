@@ -172,10 +172,10 @@ mod tests {
     fn the_status_bar_shows_the_highlighted_checks_url_and_says_when_it_has_none() {
         let mut app = app_with_check_pages();
         // The table has no page to show.
-        assert!(!status_bar(&mut app, 160).contains("https://"));
+        assert!(!status_bar(&mut app, 160, 30).contains("https://"));
 
         tab(&mut app, 1);
-        let bar = status_bar(&mut app, 160);
+        let bar = status_bar(&mut app, 160, 30);
         assert!(
             bar.contains("Enter, o: Open | y: Copy | ?: Help | /: Search | q: Quit | https://example.test/job"),
             "{bar}"
@@ -183,7 +183,7 @@ mod tests {
 
         // The passing check has no page, so there is no `o` hint either.
         press(&mut app, "j");
-        let bar = status_bar(&mut app, 160);
+        let bar = status_bar(&mut app, 160, 30);
         assert!(bar.ends_with("q: Quit | No page"), "{bar}");
         assert!(
             !bar.contains("o: Open") && !bar.contains("y: Copy"),
@@ -204,7 +204,7 @@ mod tests {
         );
         app.details_loaded(1, Ok(details));
         tab(&mut app, 2);
-        let bar = status_bar(&mut app, 160);
+        let bar = status_bar(&mut app, 160, 30);
         assert!(
             bar.contains("Enter, Space: Expand | o: Open | y: Copy | ?: Help | /: Search | q: Quit | https://example.test/pull/1#issuecomment-1"),
             "{bar}"
@@ -212,7 +212,7 @@ mod tests {
         // `o` still opens the PR for a comment with no page of its own.
         with_comment_rows(&mut app, &[1, 1]);
         press(&mut app, "j");
-        let bar = status_bar(&mut app, 160);
+        let bar = status_bar(&mut app, 160, 30);
         assert!(
             bar.contains(
                 "Enter, Space: Expand | ?: Help | /: Search | q: Quit | No page, o opens the PR"
@@ -234,9 +234,9 @@ mod tests {
         ]);
         tab(&mut app, 1);
         // Wide enough for all of it.
-        assert!(status_bar(&mut app, 200).contains(long));
+        assert!(status_bar(&mut app, 200, 30).contains(long));
         // Room for the hints, so only the URL is cut, in the middle.
-        let bar = status_bar(&mut app, 110);
+        let bar = status_bar(&mut app, 110, 30);
         assert!(
             bar.contains("https://github.com/") && bar.contains("…"),
             "{bar}"
@@ -246,7 +246,7 @@ mod tests {
             "{bar}"
         );
         // Narrower still: the other hints go, `o` stays.
-        let bar = status_bar(&mut app, 50);
+        let bar = status_bar(&mut app, 50, 30);
         assert!(bar.contains("…") && bar.contains("Enter, o: Open"), "{bar}");
         assert!(!bar.contains("?: Help"), "{bar}");
         assert!(bar.chars().count() <= 50, "{bar}");
@@ -257,23 +257,23 @@ mod tests {
         let mut app = app_with_check_pages();
         tab(&mut app, 1);
         press(&mut app, "y");
-        let bar = status_bar(&mut app, 160);
+        let bar = status_bar(&mut app, 160, 30);
         assert!(bar.starts_with("Copied the URL | Enter, o: Open"), "{bar}");
         press(&mut app, "k");
-        assert!(!status_bar(&mut app, 160).contains("Copied"));
+        assert!(!status_bar(&mut app, 160, 30).contains("Copied"));
     }
 
     #[test]
     fn the_status_bar_says_when_the_refresh_is_paused() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        assert!(!status_bar(&mut app, 160).contains("Refresh paused"));
+        assert!(!status_bar(&mut app, 160, 30).contains("Refresh paused"));
         press(&mut app, "p");
-        assert!(status_bar(&mut app, 160).starts_with("Refresh paused | "));
+        assert!(status_bar(&mut app, 160, 30).starts_with("Refresh paused | "));
         press(&mut app, "p");
         app.update(Msg::FocusLost);
-        assert!(status_bar(&mut app, 160).contains("Refresh paused"));
+        assert!(status_bar(&mut app, 160, 30).contains("Refresh paused"));
         app.update(Msg::FocusGained);
-        assert!(!status_bar(&mut app, 160).contains("Refresh paused"));
+        assert!(!status_bar(&mut app, 160, 30).contains("Refresh paused"));
     }
 
     #[test]

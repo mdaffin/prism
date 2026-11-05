@@ -504,16 +504,12 @@ mod tests {
         assert_eq!(with("✓ done"), 1);
         assert_eq!(with("… approving"), 3);
         assert_eq!(with("· waiting"), 2);
-        assert!(screen.iter().any(|line| line.contains("q: Cancel")));
+        assert!(shows(&screen, "q: Cancel"));
 
         press(&mut app, "q");
         let screen = lines(&draw(&mut app, 200, 30));
-        assert!(screen.iter().any(|line| line.contains("Cancelled: 2 PRs")));
-        assert!(
-            screen
-                .iter()
-                .any(|line| line.contains("check GitHub: #2, #3, #4"))
-        );
+        assert!(shows(&screen, "Cancelled: 2 PRs"));
+        assert!(shows(&screen, "check GitHub: #2, #3, #4"));
     }
 
     #[test]
@@ -598,11 +594,7 @@ mod tests {
             .drawn
             .buttons
             .iter()
-            .map(|area| {
-                (area.x..area.right())
-                    .map(|x| buffer[(x, area.y)].symbol())
-                    .collect()
-            })
+            .map(|area| text_at(&buffer, *area))
             .collect();
         assert_eq!(drawn, ["[ Approve ]", "[ Approve & merge ]", "[ Cancel ]"]);
     }
@@ -868,6 +860,6 @@ mod tests {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "e");
         assert!(matches!(app.mode, Mode::List));
-        assert!(status_bar(&mut app, 160).contains("Nothing has failed"));
+        assert!(status_bar(&mut app, 160, 30).contains("Nothing has failed"));
     }
 }

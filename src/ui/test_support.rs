@@ -175,6 +175,73 @@ pub(super) fn bar(app: &App, target: ScrollTarget) -> ScrollbarHit {
         .unwrap_or_else(|| panic!("no scrollbar for {target:?}"))
 }
 
+/// Whether some row of `screen` (as `lines` gives it) has `text` in it.
+pub(super) fn shows(screen: &[String], text: &str) -> bool {
+    screen.iter().any(|line| line.contains(text))
+}
+
+/// The screen row that is the header of the table, taken from where the table drew its rows (so
+/// that no other pane's text can be mistaken for it). It is the whole row, panes beside the table
+/// included, so a column's position in it is its position on screen.
+pub(super) fn table_header_line(app: &App, screen: &[String]) -> String {
+    let rows = app.drawn.areas.table_rows;
+    assert!(rows.y > 0, "the table has not been drawn");
+    screen[usize::from(rows.y) - 1].clone()
+}
+
+/// The first screen row of the table's rows (not another pane's) with `text` in it.
+pub(super) fn table_row_line(app: &App, screen: &[String], text: &str) -> String {
+    let rows = app.drawn.areas.table_rows;
+    screen[usize::from(rows.y)..usize::from(rows.bottom())]
+        .iter()
+        .find(|line| line.contains(text))
+        .unwrap_or_else(|| panic!("no table row has {text:?} in it"))
+        .clone()
+}
+
+/// Whether the cell at `position` is drawn reversed, as the highlighted row or a selection is.
+pub(super) fn reversed(buffer: &Buffer, position: impl Into<Position>) -> bool {
+    buffer[position.into()]
+        .modifier
+        .contains(ratatui::style::Modifier::REVERSED)
+}
+
+/// The text of the cells of `area`'s first row.
+pub(super) fn text_at(buffer: &Buffer, area: Rect) -> String {
+    (area.x..area.right())
+        .map(|x| buffer[(x, area.y)].symbol())
+        .collect()
+}
+
+/// Which border a scrollbar is on.
+#[derive(Clone, Copy)]
+pub(super) enum Axis {
+    /// On the right border: the thumb's rows are returned.
+    Vertical,
+    /// On the bottom border: the thumb's columns are returned.
+    Horizontal,
+}
+
+/// The rows (for a vertical bar) or columns (horizontal) of the thumb of the scrollbar on `area`'s
+/// border. The track is the border itself, so a pane has a scrollbar when it has a thumb.
+pub(super) fn thumb(buffer: &Buffer, area: Rect, axis: Axis) -> Vec<u16> {
+    match axis {
+        Axis::Vertical => (area.y + 1..area.bottom() - 1)
+            .filter(|&y| buffer[(area.right() - 1, y)].symbol() == "█")
+            .collect(),
+        Axis::Horizontal => (area.x + 1..area.right() - 1)
+            .filter(|&x| buffer[(x, area.bottom() - 1)].symbol() == super::panes::HORIZONTAL_THUMB)
+            .collect(),
+    }
+}
+
+/// The layout of a body of this size with these panes hidden and resized, with three rows for the
+/// approvers. It calls `pane_layout` directly, so a test sees the rects and dividers it returns.
+#[allow(dead_code)] // For the `pane_layout` tests of M4 of plan.md.
+pub(super) fn layout(width: u16, height: u16, hidden: &[Pane], sizes: &Sizes) -> PaneLayout {
+    pane_layout(Rect::new(0, 0, width, height), 3, hidden, sizes)
+}
+
 /// Whether `area`'s right border has a scrollbar (its track or thumb) beside the first row.
 pub(super) fn has_scrollbar(buffer: &Buffer, area: Rect) -> bool {
     matches!(buffer[(area.right() - 1, area.y + 1)].symbol(), "█" | "║")
@@ -198,8 +265,9 @@ pub(super) fn app_with_a_long_title() -> App {
     app_with(vec![by("alice", 1, &title), by("bob", 2, "Short")])
 }
 
-pub(super) fn status_bar(app: &mut App, width: u16) -> String {
-    let screen = lines(&draw(app, width, 30));
+/// The last row of the screen, the status bar, as drawn at this size.
+pub(super) fn status_bar(app: &mut App, width: u16, height: u16) -> String {
+    let screen = lines(&draw(app, width, height));
     screen.last().unwrap().trim_end().to_string()
 }
 

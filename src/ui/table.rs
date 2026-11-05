@@ -519,7 +519,7 @@ mod tests {
         // The header row of the table: the one with the `#` column.
         let header = |app: &mut App| {
             let screen = lines(&draw(app, 200, 30));
-            screen.into_iter().find(|l| l.contains(" # ")).unwrap()
+            table_header_line(app, &screen)
         };
         let row = |screen: &[String], number: &str| {
             screen
@@ -595,17 +595,12 @@ mod tests {
             ]
         );
         // Each is on the header row, over its own text, and none overlap.
-        let text_at = |area: &Rect| -> String {
-            (area.x..area.right())
-                .map(|x| buffer[(x, area.y)].symbol())
-                .collect()
-        };
-        assert!(text_at(&header[0].0).trim().starts_with('#'));
-        assert!(text_at(&header[1].0).trim().starts_with("Checks"));
-        assert!(text_at(&header[2].0).trim().starts_with("Review"));
-        assert!(text_at(&header[3].0).trim().starts_with("Author"));
-        assert!(text_at(&header[4].0).trim().starts_with("Updated"));
-        assert!(text_at(&header[5].0).trim().starts_with("Title"));
+        assert!(text_at(&buffer, header[0].0).trim().starts_with('#'));
+        assert!(text_at(&buffer, header[1].0).trim().starts_with("Checks"));
+        assert!(text_at(&buffer, header[2].0).trim().starts_with("Review"));
+        assert!(text_at(&buffer, header[3].0).trim().starts_with("Author"));
+        assert!(text_at(&buffer, header[4].0).trim().starts_with("Updated"));
+        assert!(text_at(&buffer, header[5].0).trim().starts_with("Title"));
         for pair in header.windows(2) {
             assert!(pair[0].0.right() <= pair[1].0.x);
             assert_eq!(pair[0].0.y, pair[1].0.y);
@@ -659,7 +654,7 @@ mod tests {
         draw(&mut app, 200, 30);
         click_header(&mut app, Sort::Number);
         let screen = lines(&draw(&mut app, 200, 30));
-        let header = screen.iter().find(|l| l.contains(" # ")).unwrap();
+        let header = table_header_line(&app, &screen);
         assert!(
             header.contains("# ▲") && !header.contains("Checks ▲"),
             "{header}"
@@ -937,7 +932,7 @@ mod tests {
             Some(model::parse_column_regex(r"Bump (?<container>.+?) to (?<version>\S+)$").unwrap());
         press(&mut app, "ss");
         let screen = lines(&draw(&mut app, 200, 30));
-        let top = screen.iter().find(|l| l.contains(" # ")).unwrap();
+        let top = table_header_line(&app, &screen);
         assert!(
             top.contains("container ▲") && !top.contains("version ▲"),
             "{top}"
@@ -954,20 +949,14 @@ mod tests {
         let screen = lines(&buffer);
 
         assert!(screen[0].starts_with("PRs"));
-        let header = screen.iter().find(|line| line.contains("Checks")).unwrap();
+        let header = table_header_line(&app, &screen);
         assert!(header.contains("# ") && header.contains("Review") && header.contains("Title"));
-        let open = screen
-            .iter()
-            .find(|line| line.contains("#7") && line.contains("["))
-            .unwrap();
+        let open = table_row_line(&app, &screen, "#7");
         assert!(open.contains("[ ]"));
         assert!(open.contains("· no checks"));
         assert!(open.contains("✓ approved"));
         assert!(open.contains("Bump example-lib"));
-        let merged = screen
-            .iter()
-            .find(|line| line.contains("#9") && line.contains("["))
-            .unwrap();
+        let merged = table_row_line(&app, &screen, "#9");
         assert!(merged.contains("· merged") && merged.contains("Old change"));
 
         // The helper finds cells, so a test can read their colours.
@@ -1006,7 +995,7 @@ mod tests {
         ]);
         let screen = lines(&draw(&mut app, 200, 30));
 
-        assert!(screen.iter().any(|l| l.contains("Author")));
+        assert!(shows(&screen, "Author"));
         assert!(
             screen
                 .iter()
@@ -1035,7 +1024,7 @@ mod tests {
         );
         let screen = lines(&draw(&mut app, 200, 30));
 
-        assert!(!screen.iter().any(|l| l.contains("Author")));
+        assert!(!shows(&screen, "Author"));
         assert!(
             !screen
                 .iter()
@@ -1053,7 +1042,7 @@ mod tests {
         let mut app = app_with_query("is:pr alice", vec![by("alice", 1, "Bump alpha")]);
         let screen = lines(&draw(&mut app, 200, 30));
 
-        assert!(screen.iter().any(|l| l.contains("Author")));
+        assert!(shows(&screen, "Author"));
     }
 
     #[test]
@@ -1066,9 +1055,9 @@ mod tests {
         press(&mut app, "frnv");
         let screen = lines(&draw(&mut app, 200, 30));
 
-        assert!(screen.iter().any(|l| l.contains("Bump beta")));
-        assert!(!screen.iter().any(|l| l.contains("Bump alpha")));
-        assert!(!screen.iter().any(|l| l.contains("Update gamma")));
+        assert!(shows(&screen, "Bump beta"));
+        assert!(!shows(&screen, "Bump alpha"));
+        assert!(!shows(&screen, "Update gamma"));
     }
 
     #[test]
@@ -1080,13 +1069,13 @@ mod tests {
         ]);
         // No box until there is a filter.
         let screen = lines(&draw(&mut app, 200, 30));
-        assert!(!screen.iter().any(|line| line.contains("Filter")));
+        assert!(!shows(&screen, "Filter"));
 
         press(&mut app, " jjfgamma");
         let screen = lines(&draw(&mut app, 200, 30));
-        assert!(screen.iter().any(|line| line.contains("Filter")));
-        assert!(screen.iter().any(|line| line.contains("Update gamma")));
-        assert!(!screen.iter().any(|line| line.contains("Bump alpha")));
+        assert!(shows(&screen, "Filter"));
+        assert!(shows(&screen, "Update gamma"));
+        assert!(!shows(&screen, "Bump alpha"));
         // PR 1 is selected, and the filter hides it.
         assert!(screen.last().unwrap().contains("1 selected (1 hidden)"));
     }
@@ -1103,20 +1092,14 @@ mod tests {
         );
         let screen = lines(&draw(&mut app, 200, 30));
 
-        let header = screen.iter().find(|line| line.contains("Checks")).unwrap();
+        let header = table_header_line(&app, &screen);
         assert!(header.contains("container") && header.contains("version"));
         assert!(!header.contains("Title"));
-        let bump = screen
-            .iter()
-            .find(|line| line.contains("#1") && line.contains("["))
-            .unwrap();
+        let bump = table_row_line(&app, &screen, "#1");
         assert!(bump.contains("alpha") && bump.contains("1.2"));
         assert!(!bump.contains("Bump"));
         // A title that doesn't match gets empty cells; the title is still not shown.
-        let fix = screen
-            .iter()
-            .find(|line| line.contains("#2") && line.contains("["))
-            .unwrap();
+        let fix = table_row_line(&app, &screen, "#2");
         assert!(!fix.contains("Fix beta"));
     }
 
@@ -1132,19 +1115,19 @@ mod tests {
     fn a_valid_regex_in_the_columns_box_changes_the_headers_on_enter() {
         let mut app = app_with(vec![pr(1, "Bump alpha to 1.2", "OPEN", "")]);
         let screen = lines(&draw(&mut app, 200, 30));
-        assert!(screen.iter().any(|line| line.contains("Title")));
+        assert!(shows(&screen, "Title"));
 
         press(&mut app, "c");
         assert!(app.typing == Typing::Columns);
         let screen = lines(&draw(&mut app, 200, 30));
-        assert!(screen.iter().any(|line| line.contains("Columns")));
+        assert!(shows(&screen, "Columns"));
         assert!(app.drawn.areas.columns != Rect::default());
 
         press(&mut app, r"Bump (?<container>.+?) to (?<version>\S+)$");
         key(&mut app, KeyCode::Enter);
         assert!(app.typing == Typing::Nothing);
         let screen = lines(&draw(&mut app, 200, 30));
-        let header = screen.iter().find(|line| line.contains("Checks")).unwrap();
+        let header = table_header_line(&app, &screen);
         assert!(header.contains("container") && header.contains("version"));
         assert!(!header.contains("Title"));
         // The box is gone, and has no area to catch a click.
@@ -1160,7 +1143,7 @@ mod tests {
         key(&mut app, KeyCode::Enter);
         assert!(app.columns.is_none());
         let screen = lines(&draw(&mut app, 200, 30));
-        assert!(screen.iter().any(|line| line.contains("Title")));
+        assert!(shows(&screen, "Title"));
     }
 
     #[test]
@@ -1181,7 +1164,7 @@ mod tests {
             let screen = lines(&draw(&mut app, 200, 30));
             let title = screen.iter().find(|line| line.contains("Columns")).unwrap();
             assert!(title.contains(reason), "{bad}: {title}");
-            let header = screen.iter().find(|line| line.contains("Checks")).unwrap();
+            let header = table_header_line(&app, &screen);
             assert!(header.contains("container"), "{bad}: the old regex stays");
 
             // Editing clears the error, and Esc leaves the old regex in use.
@@ -1247,8 +1230,8 @@ mod tests {
 
         press(&mut app, "f3.4");
         let screen = lines(&draw(&mut app, 200, 30));
-        assert!(screen.iter().any(|line| line.contains("#2")));
-        assert!(!screen.iter().any(|line| line.contains("#1")));
+        assert!(shows(&screen, "#2"));
+        assert!(!shows(&screen, "#1"));
 
         // "Bump" is in the titles but not in any column.
         for _ in 0..3 {
@@ -1256,7 +1239,7 @@ mod tests {
         }
         press(&mut app, "Bump");
         let screen = lines(&draw(&mut app, 200, 30));
-        assert!(screen.iter().any(|line| line.contains("No PRs match")));
+        assert!(shows(&screen, "No PRs match"));
     }
 
     #[test]
@@ -1392,22 +1375,22 @@ mod tests {
         let language = find(&buffer, " language ").unwrap();
         assert_eq!(language.y, label.y + 1);
         // Nothing is chosen to begin with, and the hints say Enter searches.
-        assert!(!buffer[label].modifier.contains(Modifier::REVERSED));
-        assert!(!buffer[language].modifier.contains(Modifier::REVERSED));
+        assert!(!reversed(&buffer, label));
+        assert!(!reversed(&buffer, language));
         let status = lines(&buffer).pop().unwrap();
         assert!(status.contains("Enter: Search | Tab/Up/Down: Choose"));
 
         key(&mut app, KeyCode::Tab);
         let buffer = draw(&mut app, 200, 40);
-        assert!(buffer[label].modifier.contains(Modifier::REVERSED));
-        assert!(!buffer[language].modifier.contains(Modifier::REVERSED));
+        assert!(reversed(&buffer, label));
+        assert!(!reversed(&buffer, language));
         // Now the hints say Enter takes it.
         assert!(lines(&buffer).pop().unwrap().contains("Enter: Take"));
 
         key(&mut app, KeyCode::Tab);
         let buffer = draw(&mut app, 200, 40);
-        assert!(!buffer[label].modifier.contains(Modifier::REVERSED));
-        assert!(buffer[language].modifier.contains(Modifier::REVERSED));
+        assert!(!reversed(&buffer, label));
+        assert!(reversed(&buffer, language));
     }
 
     #[test]
@@ -1421,7 +1404,7 @@ mod tests {
         let screen = lines(&buffer);
         // Ten values, eight rows: the ninth is highlighted at the bottom and the first has gone.
         assert!(find(&buffer, " interactions-desc ").is_some());
-        assert!(!screen.iter().any(|l| l.contains(" created-desc ")));
+        assert!(!shows(&screen, " created-desc "));
     }
 
     #[test]
@@ -1568,7 +1551,7 @@ mod tests {
         // The click did what it does anywhere else.
         assert_eq!(app.highlighted().unwrap().pr.number, 2);
         let screen = lines(&draw(&mut app, 200, 40));
-        assert!(screen.iter().any(|l| l.contains("not searched")));
+        assert!(shows(&screen, "not searched"));
 
         // `/` resumes the same text, and Esc restores the searched query.
         press(&mut app, "/");
@@ -1576,7 +1559,7 @@ mod tests {
         key(&mut app, KeyCode::Esc);
         assert_eq!(app.query.value(), "is:pr");
         let screen = lines(&draw(&mut app, 200, 40));
-        assert!(!screen.iter().any(|l| l.contains("not searched")));
+        assert!(!shows(&screen, "not searched"));
     }
 
     #[test]
