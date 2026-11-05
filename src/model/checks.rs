@@ -157,7 +157,7 @@ mod tests {
     use super::*;
 
     // The checks are built from JSON, as gh prints them.
-    fn run(name: &str, status: &str, conclusion: &str, started_at: Option<&str>) -> Check {
+    fn check_run(name: &str, status: &str, conclusion: &str, started_at: Option<&str>) -> Check {
         serde_json::from_value(serde_json::json!({
             "__typename": "CheckRun",
             "name": name,
@@ -169,7 +169,31 @@ mod tests {
         .unwrap()
     }
 
-    fn ctx(context: &str, state: &str, started_at: Option<&str>) -> Check {
+    /// A check run that finished with `conclusion`.
+    fn completed(name: &str, conclusion: &str) -> Check {
+        check_run(name, "COMPLETED", conclusion, None)
+    }
+
+    /// A finished check run that started at `started_at`.
+    fn completed_at(name: &str, conclusion: &str, started_at: &str) -> Check {
+        check_run(name, "COMPLETED", conclusion, Some(started_at))
+    }
+
+    fn in_progress(name: &str) -> Check {
+        check_run(name, "IN_PROGRESS", "", None)
+    }
+
+    /// A commit status, as an older CI reports.
+    fn status(context: &str, state: &str) -> Check {
+        status_at_time(context, state, None)
+    }
+
+    /// A commit status that started at `started_at`.
+    fn status_at(context: &str, state: &str, started_at: &str) -> Check {
+        status_at_time(context, state, Some(started_at))
+    }
+
+    fn status_at_time(context: &str, state: &str, started_at: Option<&str>) -> Check {
         serde_json::from_value(serde_json::json!({
             "__typename": "StatusContext",
             "context": context,
@@ -187,7 +211,7 @@ mod tests {
     fn an_unknown_check_keeps_the_pr_from_passing() {
         let checks = classify_checks(
             Mergeable::Other,
-            &[ctx("ci/legacy", "SUCCESS", None), Check::Unknown],
+            &[status("ci/legacy", "SUCCESS"), Check::Unknown],
         );
         assert_eq!(checks.state, CheckState::Pending);
         // It is listed, so the checks pane shows why.
@@ -197,43 +221,34 @@ mod tests {
         let checks = classify_checks(Mergeable::Other, &[Check::Unknown]);
         assert_eq!(checks.state, CheckState::Pending);
         // A failing check still outranks it.
-        let checks = classify_checks(
-            Mergeable::Other,
-            &[Check::Unknown, ctx("a", "FAILURE", None)],
-        );
+        let checks = classify_checks(Mergeable::Other, &[Check::Unknown, status("a", "FAILURE")]);
         assert_eq!(checks.state, CheckState::Failing);
     }
 
     #[test]
     fn check_run_state() {
+        assert_eq!(check_state(&in_progress("a")), CheckState::Pending);
         assert_eq!(
-            check_state(&run("a", "IN_PROGRESS", "", None)),
-            CheckState::Pending
-        );
-        assert_eq!(
-            check_state(&run("a", "QUEUED", "SUCCESS", None)),
+            check_state(&check_run("a", "QUEUED", "SUCCESS", None)),
             CheckState::Pending
         );
         for conclusion in ["SUCCESS", "NEUTRAL", "SKIPPED"] {
-            let check = run("a", "COMPLETED", conclusion, None);
+            let check = completed("a", conclusion);
             assert_eq!(check_state(&check), CheckState::Passing, "{conclusion}");
         }
         for conclusion in ["FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", ""] {
-            let check = run("a", "COMPLETED", conclusion, None);
+            let check = completed("a", conclusion);
             assert_eq!(check_state(&check), CheckState::Failing, "{conclusion}");
         }
     }
 
     #[test]
     fn status_context_state() {
-        assert_eq!(check_state(&ctx("c", "SUCCESS", None)), CheckState::Passing);
-        assert_eq!(check_state(&ctx("c", "PENDING", None)), CheckState::Pending);
-        assert_eq!(
-            check_state(&ctx("c", "EXPECTED", None)),
-            CheckState::Pending
-        );
-        assert_eq!(check_state(&ctx("c", "FAILURE", None)), CheckState::Failing);
-        assert_eq!(check_state(&ctx("c", "ERROR", None)), CheckState::Failing);
+        assert_eq!(check_state(&status("c", "SUCCESS")), CheckState::Passing);
+        assert_eq!(check_state(&status("c", "PENDING")), CheckState::Pending);
+        assert_eq!(check_state(&status("c", "EXPECTED")), CheckState::Pending);
+        assert_eq!(check_state(&status("c", "FAILURE")), CheckState::Failing);
+        assert_eq!(check_state(&status("c", "ERROR")), CheckState::Failing);
     }
 
     #[test]
@@ -241,21 +256,11 @@ mod tests {
         let checks = classify_checks(
             Mergeable::Other,
             &[
-                run(
-                    "build",
-                    "COMPLETED",
-                    "FAILURE",
-                    Some("2026-01-01T10:00:00Z"),
-                ),
-                run(
-                    "build",
-                    "COMPLETED",
-                    "SUCCESS",
-                    Some("2026-01-01T11:00:00Z"),
-                ),
-                run("build", "COMPLETED", "FAILURE", None),
-                ctx("ci/legacy", "PENDING", None),
-                ctx("ci/legacy", "SUCCESS", Some("2026-01-01T09:00:00Z")),
+                completed_at("build", "FAILURE", "2026-01-01T10:00:00Z"),
+                completed_at("build", "SUCCESS", "2026-01-01T11:00:00Z"),
+                completed("build", "FAILURE"),
+                status("ci/legacy", "PENDING"),
+                status_at("ci/legacy", "SUCCESS", "2026-01-01T09:00:00Z"),
             ],
         );
         assert_eq!(
@@ -281,12 +286,12 @@ mod tests {
         let checks = classify_checks(
             Mergeable::Other,
             &[
-                run("a", "COMPLETED", "SUCCESS", None),
-                run("b", "IN_PROGRESS", "", None),
-                run("c", "COMPLETED", "FAILURE", None),
-                run("d", "COMPLETED", "SUCCESS", None),
-                ctx("e", "ERROR", None),
-                run("f", "QUEUED", "", None),
+                completed("a", "SUCCESS"),
+                in_progress("b"),
+                completed("c", "FAILURE"),
+                completed("d", "SUCCESS"),
+                status("e", "ERROR"),
+                check_run("f", "QUEUED", "", None),
             ],
         );
         let keys: Vec<&str> = checks
@@ -299,9 +304,9 @@ mod tests {
 
     #[test]
     fn overall_state_priority() {
-        let pass = run("a", "COMPLETED", "SUCCESS", None);
-        let pend = run("b", "IN_PROGRESS", "", None);
-        let fail = run("c", "COMPLETED", "FAILURE", None);
+        let pass = completed("a", "SUCCESS");
+        let pend = in_progress("b");
+        let fail = completed("c", "FAILURE");
         let state = |mergeable, checks: &[&Check]| {
             let checks: Vec<Check> = checks.iter().map(|c| (*c).clone()).collect();
             classify_checks(mergeable, &checks).state

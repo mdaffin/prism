@@ -54,19 +54,19 @@ mod tests {
     #[test]
     fn humanises_times() {
         let now: jiff::Timestamp = "2026-03-10T12:00:00Z".parse().unwrap();
-        let ago = |timestamp| ago(timestamp, now);
-        assert_eq!(ago("2026-03-10T12:00:00Z"), "just now");
-        assert_eq!(ago("2026-03-10T11:59:01Z"), "just now");
-        assert_eq!(ago("2026-03-10T11:59:00Z"), "1 minute ago");
-        assert_eq!(ago("2026-03-10T11:15:00Z"), "45 minutes ago");
-        assert_eq!(ago("2026-03-10T09:00:00Z"), "3 hours ago");
-        assert_eq!(ago("2026-03-09T12:00:00Z"), "1 day ago");
-        assert_eq!(ago("2026-03-01T12:00:00Z"), "1 week ago");
-        assert_eq!(ago("2026-01-10T12:00:00Z"), "1 month ago");
-        assert_eq!(ago("2024-03-10T12:00:00Z"), "2 years ago");
+        let at = |timestamp| ago(timestamp, now);
+        assert_eq!(at("2026-03-10T12:00:00Z"), "just now");
+        assert_eq!(at("2026-03-10T11:59:01Z"), "just now");
+        assert_eq!(at("2026-03-10T11:59:00Z"), "1 minute ago");
+        assert_eq!(at("2026-03-10T11:15:00Z"), "45 minutes ago");
+        assert_eq!(at("2026-03-10T09:00:00Z"), "3 hours ago");
+        assert_eq!(at("2026-03-09T12:00:00Z"), "1 day ago");
+        assert_eq!(at("2026-03-01T12:00:00Z"), "1 week ago");
+        assert_eq!(at("2026-01-10T12:00:00Z"), "1 month ago");
+        assert_eq!(at("2024-03-10T12:00:00Z"), "2 years ago");
         // The future, such as a clock that is a little off, isn't an error.
-        assert_eq!(ago("2026-03-10T12:00:30Z"), "just now");
-        assert_eq!(ago("yesterday"), "yesterday");
+        assert_eq!(at("2026-03-10T12:00:30Z"), "just now");
+        assert_eq!(at("yesterday"), "yesterday");
     }
 
     #[test]
