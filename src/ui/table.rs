@@ -803,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn the_filter_matches_only_the_columns_shown() {
+    fn the_filter_ignores_hidden_columns() {
         let mut app = app_with(vec![by("alice", 1, "Bump alpha"), by("bob", 2, "Bump b")]);
         app.filter = tui_input::Input::new("bob".to_string());
         app.toggle_column(Column::Number);
@@ -1220,7 +1220,7 @@ mod tests {
     }
 
     #[test]
-    fn the_filter_matches_the_columns_shown() {
+    fn the_filter_matches_regex_group_cells_not_the_raw_title() {
         let mut app = app_with(vec![
             pr(1, "Bump alpha to 1.2", "OPEN", ""),
             pr(2, "Bump beta to 3.4", "OPEN", ""),

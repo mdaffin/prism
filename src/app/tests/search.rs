@@ -211,7 +211,7 @@ fn authors_come_from_the_rows_listed() {
 }
 
 #[test]
-fn up_goes_through_the_history_when_there_are_no_suggestions() {
+fn up_moves_in_the_suggestions_not_the_history_when_there_are_some() {
     let mut app = app_with_rows(2);
     press(&mut app, "/x");
     key(&mut app, KeyCode::Enter);

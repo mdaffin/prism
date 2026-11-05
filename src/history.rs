@@ -160,7 +160,7 @@ mod tests {
     use super::*;
 
     /// A history that was never written, holding `queries`.
-    fn history(queries: &[&str]) -> History {
+    fn history_of(queries: &[&str]) -> History {
         let mut history = History::load(None, 100);
         for query in queries {
             history.record(query);
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn up_walks_back_and_down_walks_forward_to_what_was_typed() {
-        let mut history = history(&["a", "b", "c"]);
+        let mut history = history_of(&["a", "b", "c"]);
         assert_eq!(history.previous("typed"), Some("c"));
         assert_eq!(history.previous("c"), Some("b"));
         assert_eq!(history.previous("b"), Some("a"));
@@ -193,23 +193,23 @@ mod tests {
 
     #[test]
     fn a_walk_skips_the_query_already_in_the_box() {
-        let mut history = history(&["a", "b"]);
+        let mut history = history_of(&["a", "b"]);
         assert_eq!(history.previous("b"), Some("a"));
         assert_eq!(history.next("a"), Some("b"));
         // The only entry is what is there, so there is nowhere to go.
-        assert_eq!(super::tests::history(&["a"]).previous("a"), None);
+        assert_eq!(history_of(&["a"]).previous("a"), None);
     }
 
     #[test]
     fn an_empty_history_walks_nowhere() {
-        let mut history = history(&[]);
+        let mut history = history_of(&[]);
         assert_eq!(history.previous("typed"), None);
         assert_eq!(history.next("typed"), None);
     }
 
     #[test]
     fn editing_a_recalled_query_starts_the_walk_again_from_the_edit() {
-        let mut history = history(&["a", "b"]);
+        let mut history = history_of(&["a", "b"]);
         assert_eq!(history.previous("typed"), Some("b"));
         assert_eq!(history.previous("b edited"), Some("b"));
         assert_eq!(history.next("b"), Some("b edited"));
@@ -217,14 +217,14 @@ mod tests {
 
     #[test]
     fn a_repeated_query_moves_to_the_newest_place() {
-        let history = history(&["a", "b", "c", "a"]);
+        let history = history_of(&["a", "b", "c", "a"]);
         assert_eq!(history.entries, ["b", "c", "a"]);
         assert_eq!(history.added, ["b", "c", "a"]);
     }
 
     #[test]
     fn empty_queries_are_not_kept() {
-        let history = history(&["", "   ", "a"]);
+        let history = history_of(&["", "   ", "a"]);
         assert_eq!(history.entries, ["a"]);
     }
 
@@ -238,7 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn loads_what_save_wrote_and_drops_repeats_and_blanks() {
+    fn load_drops_repeats_and_blanks() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("history");
         std::fs::write(&path, "a\n\nb\na\n").unwrap();
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn save_without_a_path_or_in_an_unwritable_place_does_nothing() {
-        let history = history(&["a"]);
+        let history = history_of(&["a"]);
         history.save();
         let dir = tempfile::tempdir().unwrap();
         // A file where the directory should be.
