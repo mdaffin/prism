@@ -2,7 +2,9 @@ use super::work::StatusFetch;
 use super::*;
 use crate::gh::{PrStatus, ReviewDecision};
 use crate::testing::{
-    PrBuilder, app_with, ctrl, ctrl_enter, ctrl_g, key, passing_run, press, status_context,
+    PrBuilder, app_with, ctrl, ctrl_enter, ctrl_g, key, passing_run, pr_details, press,
+    refresh_and_load, search_and_load, select_rows, status_context, with_check_rows,
+    with_comment_rows,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
 

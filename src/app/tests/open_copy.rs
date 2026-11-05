@@ -24,11 +24,7 @@ fn app_with_check_pages() -> App {
     }))
     .unwrap();
     let mut app = app_with(vec![pr]);
-    app.drawn.checks_layout = ChecksLayout {
-        count: 3,
-        first: 0,
-        viewport: 5,
-    };
+    with_check_rows(&mut app, 3, 0, 5);
     app
 }
 
@@ -56,23 +52,16 @@ fn o_opens_the_highlighted_checks_page_or_says_it_has_none() {
 #[test]
 fn o_opens_the_highlighted_comment_and_falls_back_to_the_pr() {
     let mut app = app_with_check_pages();
-    let details = serde_json::from_value(serde_json::json!({
-        "headRefName": "branch",
-        "body": "",
-        "comments": [
+    let details = pr_details(
+        "",
+        serde_json::json!([
             {"createdAt": "2026-01-02T03:00:00Z", "body": "a",
              "url": "https://example.test/pull/1#issuecomment-1"},
             {"createdAt": "2026-01-02T03:00:00Z", "body": "b"},
-        ],
-        "additions": 1,
-        "deletions": 1,
-    }))
-    .unwrap();
+        ]),
+    );
     app.details_loaded(1, Ok(details));
-    app.drawn.comment_layout = CommentLayout {
-        items: vec![(0, 1), (1, 1)],
-        viewport: 5,
-    };
+    with_comment_rows(&mut app, &[1, 1]);
     focus(&mut app, Pane::Comments);
     press(&mut app, "o");
     assert_eq!(
@@ -88,10 +77,9 @@ fn o_opens_the_highlighted_comment_and_falls_back_to_the_pr() {
 #[test]
 fn o_opens_a_reviews_page_and_a_threads_first_comment() {
     let mut app = app_with_check_pages();
-    let details = serde_json::from_value(serde_json::json!({
-        "headRefName": "branch",
-        "body": "",
-        "comments": [
+    let details = pr_details(
+        "",
+        serde_json::json!([
             {"createdAt": "2026-01-02T03:00:00Z", "body": "approved",
              "url": "https://example.test/pull/1#pullrequestreview-1",
              "kind": {"Review": "APPROVED"}},
@@ -99,16 +87,10 @@ fn o_opens_a_reviews_page_and_a_threads_first_comment() {
              "url": "https://example.test/pull/1#discussion_r1",
              "kind": {"Thread": {"path": "a.rs", "line": 3, "resolved": false, "outdated": false}},
              "replies": [{"createdAt": "2026-01-02T05:00:00Z", "body": "reply"}]},
-        ],
-        "additions": 1,
-        "deletions": 1,
-    }))
-    .unwrap();
+        ]),
+    );
     app.details_loaded(1, Ok(details));
-    app.drawn.comment_layout = CommentLayout {
-        items: vec![(0, 1), (1, 1)],
-        viewport: 5,
-    };
+    with_comment_rows(&mut app, &[1, 1]);
     focus(&mut app, Pane::Comments);
     press(&mut app, "o");
     assert_eq!(
@@ -177,10 +159,7 @@ fn enter_does_nothing_in_the_description_and_the_diff() {
 #[test]
 fn enter_in_the_comments_expands_the_highlighted_comment() {
     let mut app = app_with_rows(1);
-    app.drawn.comment_layout = CommentLayout {
-        items: vec![(0, 1), (1, 1)],
-        viewport: 5,
-    };
+    with_comment_rows(&mut app, &[1, 1]);
     focus(&mut app, Pane::Comments);
     key(&mut app, KeyCode::Enter);
     assert!(app.scroll.comments_open.contains(&0));
@@ -228,23 +207,16 @@ fn y_in_the_checks_copies_the_highlighted_checks_url_or_says_it_has_none() {
 #[test]
 fn y_in_the_comments_copies_the_comments_url_and_falls_back_to_the_pr() {
     let mut app = app_with_check_pages();
-    let details = serde_json::from_value(serde_json::json!({
-        "headRefName": "branch",
-        "body": "",
-        "comments": [
+    let details = pr_details(
+        "",
+        serde_json::json!([
             {"createdAt": "2026-01-02T03:00:00Z", "body": "a",
              "url": "https://example.test/pull/1#issuecomment-1"},
             {"createdAt": "2026-01-02T03:00:00Z", "body": "b"},
-        ],
-        "additions": 1,
-        "deletions": 1,
-    }))
-    .unwrap();
+        ]),
+    );
     app.details_loaded(1, Ok(details));
-    app.drawn.comment_layout = CommentLayout {
-        items: vec![(0, 1), (1, 1)],
-        viewport: 5,
-    };
+    with_comment_rows(&mut app, &[1, 1]);
     focus(&mut app, Pane::Comments);
     press(&mut app, "y");
     assert_eq!(

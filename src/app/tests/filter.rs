@@ -134,7 +134,7 @@ fn the_filter_box_takes_every_key_while_editing() {
 #[test]
 fn hidden_selected_prs_stay_selected_and_are_reviewed() {
     let mut app = app_with_titles();
-    press(&mut app, " jj ");
+    select_rows(&mut app, &[0, 2]);
     assert_eq!(app.selected, HashSet::from([1, 3]));
     press(&mut app, "fbeta");
     key(&mut app, KeyCode::Enter);
@@ -151,10 +151,7 @@ fn a_new_search_clears_the_filter() {
     let mut app = app_with_titles();
     press(&mut app, "fgamma");
     key(&mut app, KeyCode::Enter);
-    press(&mut app, "/");
-    key(&mut app, KeyCode::Enter);
-    let (id, _) = app.list_to_fetch().unwrap();
-    app.update(Msg::PrsLoaded(id, Ok(vec![titled(7, "Bump alpha")])));
+    search_and_load(&mut app, vec![titled(7, "Bump alpha")]);
     assert_eq!(app.filter.value(), "");
     assert_eq!(visible_numbers(&app), [7]);
 }

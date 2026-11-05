@@ -194,18 +194,14 @@ mod tests {
     #[test]
     fn the_status_bar_shows_the_highlighted_comments_url() {
         let mut app = app_with_check_pages();
-        let details = serde_json::from_value(serde_json::json!({
-            "headRefName": "branch",
-            "body": "",
-            "comments": [
+        let details = pr_details(
+            "",
+            serde_json::json!([
                 {"createdAt": "2026-01-02T03:00:00Z", "body": "a",
                  "url": "https://example.test/pull/1#issuecomment-1"},
                 {"createdAt": "2026-01-02T03:00:00Z", "body": "b"},
-            ],
-            "additions": 1,
-            "deletions": 1,
-        }))
-        .unwrap();
+            ]),
+        );
         app.details_loaded(1, Ok(details));
         tab(&mut app, 2);
         let bar = status_bar(&mut app, 160);
@@ -214,10 +210,7 @@ mod tests {
             "{bar}"
         );
         // `o` still opens the PR for a comment with no page of its own.
-        app.drawn.comment_layout = CommentLayout {
-            items: vec![(0, 1), (1, 1)],
-            viewport: 5,
-        };
+        with_comment_rows(&mut app, &[1, 1]);
         press(&mut app, "j");
         let bar = status_bar(&mut app, 160);
         assert!(

@@ -62,7 +62,7 @@ fn ctrl_o_and_ctrl_g_do_nothing_when_none_are_selected() {
 fn ctrl_o_opens_the_selection_from_every_pane() {
     for pane in PANES {
         let mut app = app_with_rows(3);
-        press(&mut app, " jj ");
+        select_rows(&mut app, &[0, 2]);
         app.focus = pane;
         ctrl(&mut app, 'o');
         assert_eq!(app.opens_to_run(), [1, 3], "{pane:?}");
@@ -73,7 +73,7 @@ fn ctrl_o_opens_the_selection_from_every_pane() {
 fn ctrl_g_reviews_the_selection_from_every_pane() {
     for pane in PANES {
         let mut app = app_with_rows(3);
-        press(&mut app, " jj ");
+        select_rows(&mut app, &[0, 2]);
         app.focus = pane;
         ctrl_g(&mut app);
         let Mode::Confirm(confirm) = &app.mode else {
@@ -155,7 +155,7 @@ fn a_pr_that_fails_to_open_is_shown_with_the_error() {
 #[test]
 fn space_toggles_the_highlighted_pr_until_new_results() {
     let mut app = app_with_rows(3);
-    press(&mut app, " jj ");
+    select_rows(&mut app, &[0, 2]);
     assert_eq!(app.selected, HashSet::from([1, 3]));
     press(&mut app, "k ");
     assert_eq!(app.selected, HashSet::from([1, 2, 3]));

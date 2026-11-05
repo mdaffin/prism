@@ -95,10 +95,7 @@ fn a_new_search_stops_waiting_for_fetches_of_pr_it_no_longer_lists() {
     assert_eq!(details.len(), 3);
 
     // The new list drops #1 and #3 but keeps #2, which was still loading.
-    press(&mut app, "/");
-    key(&mut app, KeyCode::Enter);
-    let (id, _) = app.list_to_fetch().unwrap();
-    app.update(Msg::PrsLoaded(id, Ok(prs([2, 4]))));
+    search_and_load(&mut app, prs([2, 4]));
     assert!(!app.details.contains_key(&1) && !app.details.contains_key(&3));
     assert!(!app.diffs.contains_key(&1) && !app.diffs.contains_key(&3));
     assert!(matches!(app.details[&2], Fetch::Loading(_)));
@@ -107,7 +104,11 @@ fn a_new_search_stops_waiting_for_fetches_of_pr_it_no_longer_lists() {
     // Their slots are free for the new list's PRs, and the late results are ignored.
     assert_eq!(started(app.details_to_fetch()), [4]);
     for &(number, id) in &details {
-        app.update(Msg::DetailsLoaded(number, id, Ok(details_with_body("old"))));
+        app.update(Msg::DetailsLoaded(
+            number,
+            id,
+            Ok(pr_details("old", serde_json::json!([]))),
+        ));
     }
     for &(number, id) in &diffs {
         app.update(Msg::DiffLoaded(number, id, Diff::parse("old")));
@@ -169,10 +170,7 @@ fn the_note_follows_the_latest_list_and_survives_a_failed_search() {
     app.update(Msg::PrsLoaded(id, Err(color_eyre::eyre::eyre!("boom"))));
     assert!(app.title().ends_with("more exist"));
 
-    press(&mut app, "/");
-    key(&mut app, KeyCode::Enter);
-    let (id, _) = app.list_to_fetch().unwrap();
-    app.update(Msg::PrsLoaded(id, Ok(prs(1..=1))));
+    search_and_load(&mut app, prs(1..=1));
     assert_eq!(app.title(), "PRs");
 }
 
@@ -207,7 +205,7 @@ fn ctrl_r_is_ignored_while_a_search_runs_and_under_dialogs() {
 #[test]
 fn ctrl_r_keeps_the_selection_by_number_when_rows_move() {
     let mut app = app_with_rows(3);
-    press(&mut app, " jj ");
+    select_rows(&mut app, &[0, 2]);
     assert_eq!(app.selected, HashSet::from([1, 3]));
     ctrl(&mut app, 'r');
     let (id, _) = app.list_to_fetch().unwrap();
@@ -222,10 +220,7 @@ fn ctrl_r_keeps_the_selection_by_number_when_rows_move() {
 fn a_new_search_still_clears_the_selection() {
     let mut app = app_with_rows(3);
     press(&mut app, " ");
-    press(&mut app, "/");
-    key(&mut app, KeyCode::Enter);
-    let (id, _) = app.list_to_fetch().unwrap();
-    app.update(Msg::PrsLoaded(id, Ok(prs([1, 2, 3]))));
+    search_and_load(&mut app, prs([1, 2, 3]));
     assert!(app.selected.is_empty());
 }
 
@@ -245,9 +240,7 @@ fn ctrl_r_keeps_the_highlight_on_the_same_pr_and_clears_the_filter() {
     assert_eq!(app.highlighted().unwrap().pr.number, 2);
 
     // If it is gone, the first row is highlighted.
-    ctrl(&mut app, 'r');
-    let (id, _) = app.list_to_fetch().unwrap();
-    app.update(Msg::PrsLoaded(id, Ok(vec![titled(8, "x"), titled(9, "y")])));
+    refresh_and_load(&mut app, Ok(vec![titled(8, "x"), titled(9, "y")]));
     assert_eq!(app.highlighted().unwrap().pr.number, 8);
 }
 
@@ -258,29 +251,13 @@ fn ctrl_r_drops_cached_details_and_diffs_but_a_new_search_keeps_them() {
     app.diffs_to_fetch();
     assert_eq!(app.details.len(), 2);
 
-    press(&mut app, "/");
-    key(&mut app, KeyCode::Enter);
-    let (id, _) = app.list_to_fetch().unwrap();
-    app.update(Msg::PrsLoaded(id, Ok(prs(1..=2))));
+    search_and_load(&mut app, prs(1..=2));
     assert_eq!((app.details.len(), app.diffs.len()), (2, 2));
 
-    ctrl(&mut app, 'r');
-    let (id, _) = app.list_to_fetch().unwrap();
-    app.update(Msg::PrsLoaded(id, Ok(prs(1..=2))));
+    refresh_and_load(&mut app, Ok(prs(1..=2)));
     assert_eq!((app.details.len(), app.diffs.len()), (0, 0));
     // So they are fetched again.
     assert_eq!(started(app.details_to_fetch()), [1, 2]);
-}
-
-fn details_with_body(body: &str) -> PrDetails {
-    serde_json::from_value(serde_json::json!({
-        "headRefName": "branch",
-        "body": body,
-        "comments": [],
-        "additions": 1,
-        "deletions": 1,
-    }))
-    .unwrap()
 }
 
 /// The body of the loaded details of a PR, if they are loaded.
@@ -298,14 +275,16 @@ fn a_result_from_before_ctrl_r_is_dropped() {
     let diffs = app.diffs_to_fetch();
     assert_eq!(started(details.clone()), [1, 2]);
 
-    ctrl(&mut app, 'r');
-    let (id, _) = app.list_to_fetch().unwrap();
-    app.update(Msg::PrsLoaded(id, Ok(prs(1..=2))));
+    refresh_and_load(&mut app, Ok(prs(1..=2)));
     assert!(app.details.is_empty() && app.diffs.is_empty());
 
     // The fetches that were running now finish, with what was current before the refresh.
     for &(number, id) in &details {
-        app.update(Msg::DetailsLoaded(number, id, Ok(details_with_body("old"))));
+        app.update(Msg::DetailsLoaded(
+            number,
+            id,
+            Ok(pr_details("old", serde_json::json!([]))),
+        ));
     }
     for &(number, id) in &diffs {
         app.update(Msg::DiffLoaded(number, id, Diff::parse("old")));
@@ -326,19 +305,29 @@ fn a_result_from_before_ctrl_r_does_not_replace_the_new_fetch() {
     let mut app = app_with_rows(1);
     let before = app.details_to_fetch()[0].1;
 
-    ctrl(&mut app, 'r');
-    let (id, _) = app.list_to_fetch().unwrap();
-    app.update(Msg::PrsLoaded(id, Ok(prs(1..=1))));
+    refresh_and_load(&mut app, Ok(prs(1..=1)));
     let after = app.details_to_fetch()[0].1;
     assert_ne!(before, after);
 
     // The old fetch finishes first and is ignored, so the PR is still loading.
-    app.update(Msg::DetailsLoaded(1, before, Ok(details_with_body("old"))));
+    app.update(Msg::DetailsLoaded(
+        1,
+        before,
+        Ok(pr_details("old", serde_json::json!([]))),
+    ));
     assert!(matches!(app.details[&1], Fetch::Loading(current) if current == after));
-    app.update(Msg::DetailsLoaded(1, after, Ok(details_with_body("new"))));
+    app.update(Msg::DetailsLoaded(
+        1,
+        after,
+        Ok(pr_details("new", serde_json::json!([]))),
+    ));
     assert_eq!(loaded_body(&app, 1).as_deref(), Some("new"));
     // A late duplicate doesn't overwrite what loaded.
-    app.update(Msg::DetailsLoaded(1, before, Ok(details_with_body("old"))));
+    app.update(Msg::DetailsLoaded(
+        1,
+        before,
+        Ok(pr_details("old", serde_json::json!([]))),
+    ));
     assert_eq!(loaded_body(&app, 1).as_deref(), Some("new"));
 }
 
@@ -358,7 +347,11 @@ fn a_result_from_before_a_changed_pr_was_dropped_is_ignored() {
 
     // The details of #1 that were running are stale; those of #2 are not.
     for &(number, id) in &details {
-        app.update(Msg::DetailsLoaded(number, id, Ok(details_with_body("d"))));
+        app.update(Msg::DetailsLoaded(
+            number,
+            id,
+            Ok(pr_details("d", serde_json::json!([]))),
+        ));
     }
     assert!(matches!(app.details[&1], Fetch::Loading(_)));
     assert_eq!(loaded_body(&app, 2).as_deref(), Some("d"));
@@ -373,9 +366,7 @@ fn a_result_from_before_a_changed_pr_was_dropped_is_ignored() {
 fn a_failed_ctrl_r_keeps_the_list_and_the_selection() {
     let mut app = app_with_rows(3);
     press(&mut app, " ");
-    ctrl(&mut app, 'r');
-    let (id, _) = app.list_to_fetch().unwrap();
-    app.update(Msg::PrsLoaded(id, Err(color_eyre::eyre::eyre!("boom"))));
+    refresh_and_load(&mut app, Err(color_eyre::eyre::eyre!("boom")));
     assert_eq!(numbers(&app), [1, 2, 3]);
     assert_eq!(app.selected, HashSet::from([1]));
     assert!(app.errors.text().unwrap().contains("boom"));

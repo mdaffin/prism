@@ -803,14 +803,12 @@ mod tests {
             .find(|line| line.contains("✓ approved") && line.contains("no checks"));
         assert!(summary.unwrap().contains("Loading…"));
 
-        let details = serde_json::from_value(serde_json::json!({
-            "headRefName": "renovate/example-lib",
-            "body": "",
-            "comments": [],
-            "additions": 12,
-            "deletions": 3,
-        }))
-        .unwrap();
+        let details = crate::gh::PrDetails {
+            head_ref_name: "renovate/example-lib".to_string(),
+            additions: 12,
+            deletions: 3,
+            ..pr_details("", serde_json::json!([]))
+        };
         app.details_loaded(7, Ok(details));
         let buffer = draw(&mut app, 200, 30);
         let screen = lines(&buffer);
@@ -833,23 +831,14 @@ mod tests {
     /// An app whose description is `body`, and one open comment of `comment_body`, drawn at 200
     /// by 40.
     fn app_with_text(body: &str, comment_body: &str) -> App {
-        let mut app = app_with(vec![
-            pr(1, "Bump alpha", "OPEN", ""),
-            pr(2, "Bump beta", "OPEN", ""),
-        ]);
-        let details = serde_json::from_value(serde_json::json!({
-            "headRefName": "branch",
-            "body": body,
-            "comments": [{
-                "author": {"login": "someone"},
-                "createdAt": "2026-01-02T03:00:00Z",
-                "body": comment_body,
-            }],
-            "additions": 1,
-            "deletions": 1,
-        }))
-        .unwrap();
-        app.details_loaded(1, Ok(details));
+        let details = pr_details(body, serde_json::json!([comment("someone", comment_body)]));
+        let mut app = app_with_details(
+            vec![
+                pr(1, "Bump alpha", "OPEN", ""),
+                pr(2, "Bump beta", "OPEN", ""),
+            ],
+            details,
+        );
         draw(&mut app, 200, 40);
         app
     }
@@ -1119,14 +1108,8 @@ mod tests {
     fn a_wide_table_in_the_description_scrolls_sideways() {
         let mut app = app_with(vec![pr_checked(1, "MERGEABLE", vec![])]);
         let wide = "x".repeat(120);
-        let details = serde_json::from_value(serde_json::json!({
-            "headRefName": "branch",
-            "body": format!("Some prose\n\n| Name | Value |\n|---|---|\n| first | {wide}END |"),
-            "comments": [],
-            "additions": 1,
-            "deletions": 1,
-        }))
-        .unwrap();
+        let body = format!("Some prose\n\n| Name | Value |\n|---|---|\n| first | {wide}END |");
+        let details = pr_details(&body, serde_json::json!([]));
         app.details_loaded(1, Ok(details));
         let screen = lines(&draw(&mut app, 200, 40));
         assert!(screen.iter().any(|line| line.contains("scroll tables")));
@@ -1150,17 +1133,21 @@ mod tests {
         assert!(app.scroll.description_x < at_end);
     }
 
+    /// `n` review requests of people called `{prefix}0`, `{prefix}1` and so on, as JSON.
+    fn requests(prefix: &str, n: usize) -> serde_json::Value {
+        (0..n)
+            .map(|i| {
+                serde_json::json!({"of": {"Person": format!("{prefix}{i}")}, "code_owner": false})
+            })
+            .collect()
+    }
+
     /// Details with these approvals and requests (as JSON), and nothing else.
     fn details_with_approvers(approvers: serde_json::Value) -> crate::gh::PrDetails {
-        serde_json::from_value(serde_json::json!({
-            "headRefName": "branch",
-            "body": "",
-            "comments": [],
-            "additions": 1,
-            "deletions": 1,
-            "approvers": approvers,
-        }))
-        .unwrap()
+        crate::gh::PrDetails {
+            approvers: serde_json::from_value(approvers).unwrap(),
+            ..pr_details("", serde_json::json!([]))
+        }
     }
 
     #[test]
@@ -1188,19 +1175,12 @@ mod tests {
     #[test]
     fn the_approvers_pane_grows_with_its_lines_up_to_a_limit() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        let requests = |n: usize| -> serde_json::Value {
-            (0..n)
-                .map(
-                    |i| serde_json::json!({"of": {"Person": format!("u{i}")}, "code_owner": false}),
-                )
-                .collect()
-        };
         let mut heights = Vec::new();
         for n in [2, 4, 30] {
             app.details_loaded(
                 1,
                 Ok(details_with_approvers(
-                    serde_json::json!({"requests": requests(n)}),
+                    serde_json::json!({"requests": requests("u", n)}),
                 )),
             );
             draw(&mut app, 200, 60);
@@ -1213,13 +1193,10 @@ mod tests {
     #[test]
     fn a_short_terminal_keeps_most_of_the_details_for_the_description() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        let requests: serde_json::Value = (0..30)
-            .map(|i| serde_json::json!({"of": {"Person": format!("u{i}")}, "code_owner": false}))
-            .collect();
         app.details_loaded(
             1,
             Ok(details_with_approvers(
-                serde_json::json!({"requests": requests}),
+                serde_json::json!({"requests": requests("u", 30)}),
             )),
         );
         draw(&mut app, 100, 24);
@@ -1298,13 +1275,10 @@ mod tests {
     #[test]
     fn a_long_list_of_approvers_scrolls_with_a_scrollbar() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        let requests: Vec<_> = (0..30)
-            .map(|i| serde_json::json!({"of": {"Person": format!("user{i}")}, "code_owner": false}))
-            .collect();
         app.details_loaded(
             1,
             Ok(details_with_approvers(
-                serde_json::json!({"requests": requests}),
+                serde_json::json!({"requests": requests("user", 30)}),
             )),
         );
         let buffer = draw(&mut app, 200, 40);
@@ -1320,10 +1294,9 @@ mod tests {
     #[test]
     fn reviews_and_threads_are_headed_by_what_they_are_and_a_thread_shows_its_replies() {
         let mut app = app_with(vec![pr_checked(1, "MERGEABLE", vec![])]);
-        let details = serde_json::from_value(serde_json::json!({
-            "headRefName": "branch",
-            "body": "",
-            "comments": [
+        let details = pr_details(
+            "",
+            serde_json::json!([
                 {"author": {"login": "alice"}, "createdAt": "2026-01-02T03:00:00Z", "body": "plain"},
                 {"author": {"login": "bob"}, "createdAt": "2026-01-02T04:00:00Z",
                  "body": "Looks good", "kind": {"Review": "APPROVED"}},
@@ -1336,11 +1309,8 @@ mod tests {
                 {"author": {"login": "erin"}, "createdAt": "2026-01-02T06:00:00Z",
                  "body": "Old", "kind": {"Thread": {
                     "path": "src/lib.rs", "line": null, "resolved": false, "outdated": true}}},
-            ],
-            "additions": 1,
-            "deletions": 1,
-        }))
-        .unwrap();
+            ]),
+        );
         app.details_loaded(1, Ok(details));
         app.focus = Pane::Comments;
         let screen = lines(&draw(&mut app, 200, 40));
@@ -1365,24 +1335,12 @@ mod tests {
     fn an_open_comment_is_rendered_as_markdown_and_its_table_scrolls_sideways() {
         let mut app = app_with(vec![pr_checked(1, "MERGEABLE", vec![])]);
         let wide = "x".repeat(120);
-        let comment = |body: String| {
-            serde_json::json!({
-                "author": {"login": "someone"},
-                "createdAt": "2026-01-02T03:00:00Z",
-                "body": body,
-            })
-        };
-        let details = serde_json::from_value(serde_json::json!({
-            "headRefName": "branch",
-            "body": "",
-            "comments": [
-                comment("first".to_string()),
-                comment(format!("Some **bold** prose\n\n| Name | Value |\n|---|---|\n| a | {wide}END |")),
-            ],
-            "additions": 1,
-            "deletions": 1,
-        }))
-        .unwrap();
+        let table =
+            format!("Some **bold** prose\n\n| Name | Value |\n|---|---|\n| a | {wide}END |");
+        let details = pr_details(
+            "",
+            serde_json::json!([comment("someone", "first"), comment("someone", &table)]),
+        );
         app.details_loaded(1, Ok(details));
         app.focus = Pane::Comments;
         // Collapsed, there are only the headers.
@@ -1663,29 +1621,17 @@ mod tests {
     }
 
     /// An app whose first PR has this description and, if given, one comment with this body.
-    fn app_with_bodies(body: &str, comment: Option<&str>) -> App {
-        let comments: Vec<serde_json::Value> = comment
+    fn app_with_bodies(body: &str, comment_body: Option<&str>) -> App {
+        let comments: Vec<serde_json::Value> = comment_body
             .map(|body| {
-                serde_json::json!({
-                    "author": {"login": "someone"},
-                    "createdAt": "2026-01-02T03:00:00Z",
-                    "body": body,
-                    "url": "https://example.test/c",
-                })
+                let mut comment = comment("someone", body);
+                comment["url"] = "https://example.test/c".into();
+                comment
             })
             .into_iter()
             .collect();
-        let details = serde_json::from_value(serde_json::json!({
-            "headRefName": "branch",
-            "body": body,
-            "comments": comments,
-            "additions": 1,
-            "deletions": 1,
-        }))
-        .unwrap();
-        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        app.details_loaded(1, Ok(details));
-        app
+        let details = pr_details(body, comments.into());
+        app_with_details(vec![pr(1, "Bump alpha", "OPEN", "")], details)
     }
 
     /// Clicks the first place `text` is drawn on screen, and returns the pages queued.

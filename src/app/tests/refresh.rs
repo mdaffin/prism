@@ -278,9 +278,7 @@ fn results_for_an_older_list_are_dropped() {
     let mut app = app_with_rows(2);
     let fetch = start_status_refresh(&mut app).unwrap();
     // Ctrl-R replaces the list while the refresh runs.
-    ctrl(&mut app, 'r');
-    let (id, _) = app.list_to_fetch().unwrap();
-    app.update(Msg::PrsLoaded(id, Ok(prs(1..=2))));
+    refresh_and_load(&mut app, Ok(prs(1..=2)));
     let update = update(vec![status(1, "MERGED", true, "APPROVED", UNCHANGED)]);
     app.update(Msg::StatusRefreshed(fetch.id, update));
     assert_eq!(app.rows[0].pr.state, PrState::Open);

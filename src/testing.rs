@@ -3,8 +3,8 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
 
-use crate::app::{App, Msg};
-use crate::gh::Pr;
+use crate::app::{App, ChecksLayout, CommentLayout, Msg};
+use crate::gh::{Pr, PrDetails};
 
 /// Builds a `Pr` as gh lists it. `PrBuilder::new(number)` is an open, mergeable PR titled "t" by
 /// alice, with no review and no checks, updated on 2026-01-01: set only what a test cares about.
@@ -90,7 +90,12 @@ impl PrBuilder {
 
 /// An app that has loaded these PRs, in the order given before the table sorts them.
 pub fn app_with(prs: Vec<Pr>) -> App {
-    let mut app = App::new("PRs".to_string(), "is:pr".to_string(), false);
+    app_with_query("is:pr", prs)
+}
+
+/// Like `app_with`, for a search of `query`.
+pub fn app_with_query(query: &str, prs: Vec<Pr>) -> App {
+    let mut app = App::new("PRs".to_string(), query.to_string(), false);
     let (id, _) = app.list_to_fetch().unwrap();
     app.update(Msg::PrsLoaded(id, Ok(prs)));
     app
@@ -140,4 +145,87 @@ pub fn passing_run() -> Value {
 /// A commit status from "ci" in `state`: `"SUCCESS"`, `"PENDING"` or `"FAILURE"`.
 pub fn status_context(state: &str) -> Value {
     json!({"__typename": "StatusContext", "context": "ci", "state": state})
+}
+
+/// A comment by `author` with this body, made at 2026-01-02 03:00. Add `url`, `kind` or `replies`
+/// to the JSON for the ones that matter.
+pub fn comment(author: &str, body: &str) -> Value {
+    json!({
+        "author": {"login": author},
+        "createdAt": "2026-01-02T03:00:00Z",
+        "body": body,
+    })
+}
+
+/// The details of a PR on the branch "branch", with +1 -1 lines and no approvers. `comments` is a
+/// JSON array of `comment(..)`s or hand-written ones.
+pub fn pr_details(body: &str, comments: Value) -> PrDetails {
+    serde_json::from_value(json!({
+        "headRefName": "branch",
+        "body": body,
+        "comments": comments,
+        "additions": 1,
+        "deletions": 1,
+    }))
+    .unwrap()
+}
+
+/// An app that has loaded `prs`, and then the `details` of the first one.
+pub fn app_with_details(prs: Vec<Pr>, details: PrDetails) -> App {
+    let number = prs[0].number;
+    let mut app = app_with(prs);
+    app.details_loaded(number, Ok(details));
+    app
+}
+
+/// Searches again (`/`, Enter) and delivers `prs` as the result.
+pub fn search_and_load(app: &mut App, prs: Vec<Pr>) {
+    press(app, "/");
+    key(app, KeyCode::Enter);
+    let (id, _) = app.list_to_fetch().unwrap();
+    app.update(Msg::PrsLoaded(id, Ok(prs)));
+}
+
+/// Refreshes the list with Ctrl-R and delivers `result`.
+pub fn refresh_and_load(app: &mut App, result: color_eyre::Result<Vec<Pr>>) {
+    ctrl(app, 'r');
+    let (id, _) = app.list_to_fetch().unwrap();
+    app.update(Msg::PrsLoaded(id, result));
+}
+
+/// Selects the rows at these positions of the visible list, as Space and `j` would, and leaves
+/// the highlight on the last of them.
+pub fn select_rows(app: &mut App, rows: &[usize]) {
+    for &row in rows {
+        while app.table.selected() != Some(row) {
+            let before = app.table.selected();
+            press(app, if before < Some(row) { "j" } else { "k" });
+        }
+        press(app, " ");
+    }
+}
+
+/// Records that the comments pane drew comments of these heights (header included) one under the
+/// other, in a viewport of 5 lines, as `update` needs to keep the highlighted one on screen.
+pub fn with_comment_rows(app: &mut App, heights: &[usize]) {
+    let mut start = 0;
+    let items = heights
+        .iter()
+        .map(|&height| {
+            let item = (start, height);
+            start += height;
+            item
+        })
+        .collect();
+    app.drawn.comment_layout = CommentLayout { items, viewport: 5 };
+}
+
+/// Records that the checks pane drew `count` checks below `first` other rows (1 for a conflict
+/// row, else 0), in a viewport of `viewport` rows.
+pub fn with_check_rows(app: &mut App, count: usize, first: usize, viewport: usize) {
+    app.drawn.checks_layout = ChecksLayout {
+        count,
+        first,
+        viewport,
+    };
 }

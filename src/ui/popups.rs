@@ -466,7 +466,7 @@ mod tests {
     fn colours_the_checks_in_the_confirm_dialog() {
         let mut app = one_of_each();
         // Select everything, then open the dialog.
-        press(&mut app, " j j j j ");
+        select_rows(&mut app, &[0, 1, 2, 3, 4]);
         ctrl_g(&mut app);
         let buffer = draw(&mut app, 200, 40);
         for (label, colour) in [
@@ -491,7 +491,7 @@ mod tests {
     #[test]
     fn shows_each_pr_of_a_running_batch_and_what_cancelling_did() {
         let mut app = app_with((1..=6).map(|n| pr(n, "Bump alpha", "OPEN", "")).collect());
-        press(&mut app, " j j j j j ");
+        select_rows(&mut app, &[0, 1, 2, 3, 4, 5]);
         ctrl_g(&mut app);
         key(&mut app, KeyCode::Enter);
         // Four approvals run at once; two wait.

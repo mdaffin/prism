@@ -12,7 +12,7 @@ fn enter_confirms_the_highlighted_pr_when_none_are_selected() {
 #[test]
 fn enter_confirms_only_the_highlighted_pr_even_with_a_selection() {
     let mut app = app_with_rows(3);
-    press(&mut app, " jj ");
+    select_rows(&mut app, &[0, 2]);
     key(&mut app, KeyCode::Enter);
     assert_eq!(confirm_numbers(&app), [3]);
 }

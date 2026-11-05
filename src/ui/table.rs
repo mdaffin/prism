@@ -697,7 +697,7 @@ mod tests {
 
     #[test]
     fn there_is_no_author_header_to_click_when_the_search_names_one_author() {
-        let mut app = app_for_query("is:pr author:alice", vec![by("alice", 1, "Bump alpha")]);
+        let mut app = app_with_query("is:pr author:alice", vec![by("alice", 1, "Bump alpha")]);
         draw(&mut app, 200, 30);
         let sorts: Vec<Sort> = app
             .drawn
@@ -998,13 +998,6 @@ mod tests {
         }
     }
 
-    fn app_for_query(query: &str, prs: Vec<Pr>) -> App {
-        let mut app = App::new("PRs".to_string(), query.to_string(), false);
-        let (id, _) = app.list_to_fetch().unwrap();
-        app.update(Msg::PrsLoaded(id, Ok(prs)));
-        app
-    }
-
     #[test]
     fn draws_the_author_of_each_pr() {
         let mut app = app_with(vec![
@@ -1036,7 +1029,7 @@ mod tests {
 
     #[test]
     fn hides_the_author_column_when_the_query_names_one_author() {
-        let mut app = app_for_query(
+        let mut app = app_with_query(
             "is:pr author:app/renovate",
             vec![by("app/renovate", 1, "Bump alpha")],
         );
@@ -1057,7 +1050,7 @@ mod tests {
 
     #[test]
     fn a_search_term_does_not_hide_the_author_column() {
-        let mut app = app_for_query("is:pr alice", vec![by("alice", 1, "Bump alpha")]);
+        let mut app = app_with_query("is:pr alice", vec![by("alice", 1, "Bump alpha")]);
         let screen = lines(&draw(&mut app, 200, 30));
 
         assert!(screen.iter().any(|l| l.contains("Author")));
@@ -1636,7 +1629,7 @@ mod tests {
     #[test]
     fn says_which_query_found_nothing_and_points_to_the_search_box() {
         for width in [200, 100] {
-            let mut app = app_for_query("is:pr label:nothing", Vec::new());
+            let mut app = app_with_query("is:pr label:nothing", Vec::new());
             let screen = lines(&draw(&mut app, width, 30)).join("\n");
             assert!(
                 screen.contains(

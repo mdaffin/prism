@@ -1468,14 +1468,16 @@ mod tests {
         assert_eq!(review.url.as_deref(), Some("https://r/1"));
     }
 
+    /// A page after the first: no reviews, threads or approvers, because the query leaves their keys
+    /// out (`@include(if: false)`).
+    const LATER_PAGE: &str = r#"{"repository": {"pullRequest": {
+      "headRefName": "b", "headRefOid": "head1", "body": null, "additions": 1, "deletions": 1,
+      "comments": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}
+    }}}"#;
+
     #[test]
     fn a_later_page_has_no_reviews_or_threads_and_still_parses() {
-        // `@include(if: false)` leaves the keys out.
-        let json = r#"{"repository": {"pullRequest": {
-          "headRefName": "b", "headRefOid": "head1", "body": null, "additions": 1, "deletions": 1,
-          "comments": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}
-        }}}"#;
-        let data: DetailsData = serde_json::from_str(json).unwrap();
+        let data: DetailsData = serde_json::from_str(LATER_PAGE).unwrap();
         let (details, next) = data.into_page();
         assert!(details.comments.is_empty() && next.is_none());
     }
@@ -1556,26 +1558,32 @@ mod tests {
 
     #[test]
     fn a_later_page_has_no_approvers() {
-        let json = r#"{"repository": {"pullRequest": {
-          "headRefName": "b", "headRefOid": "head1", "body": null, "additions": 1, "deletions": 1,
-          "comments": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": []}
-        }}}"#;
-        let data: DetailsData = serde_json::from_str(json).unwrap();
+        let data: DetailsData = serde_json::from_str(LATER_PAGE).unwrap();
         assert_eq!(data.into_page().0.approvers, Approvers::default());
+    }
+
+    /// The status of PR 1 on `master`, whose latest commit has this `statusCheckRollup` (JSON, or
+    /// `null` for a commit with none).
+    fn status_json(rollup: &str) -> String {
+        format!(
+            r#"{{
+              "number": 1, "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": null,
+              "updatedAt": "2026-01-02T03:04:05Z", "baseRefName": "master",
+              "commits": {{"nodes": [{{"commit": {{"statusCheckRollup": {rollup}}}}}]}}
+            }}"#
+        )
     }
 
     #[test]
     fn a_required_check_that_has_not_started_is_pending() {
-        let json = r#"{
-          "number": 1, "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": null,
-          "updatedAt": "2026-01-02T03:04:05Z", "baseRefName": "master",
-          "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"nodes": [
-            {"__typename": "CheckRun", "name": "build", "status": "COMPLETED",
-             "conclusion": "SUCCESS", "startedAt": null, "detailsUrl": null,
-             "checkSuite": {"workflowRun": null}}
-          ]}}}}]}
-        }"#;
-        let mut status: GqlStatus = serde_json::from_str(json).unwrap();
+        let json = status_json(
+            r#"{"contexts": {"nodes": [
+              {"__typename": "CheckRun", "name": "build", "status": "COMPLETED",
+               "conclusion": "SUCCESS", "startedAt": null, "detailsUrl": null,
+               "checkSuite": {"workflowRun": null}}
+            ]}}"#,
+        );
+        let mut status: GqlStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(status.base_branch(), Some("master"));
         status.add_required(&["build".to_string(), "Build (Pull Request)".to_string()]);
         let status = PrStatus::from(status);
@@ -1586,12 +1594,7 @@ mod tests {
 
     #[test]
     fn a_required_check_is_added_to_a_commit_with_no_rollup() {
-        let json = r#"{
-          "number": 1, "state": "OPEN", "mergeable": "MERGEABLE", "reviewDecision": null,
-          "updatedAt": "2026-01-02T03:04:05Z", "baseRefName": "master",
-          "commits": {"nodes": [{"commit": {"statusCheckRollup": null}}]}
-        }"#;
-        let mut status: GqlStatus = serde_json::from_str(json).unwrap();
+        let mut status: GqlStatus = serde_json::from_str(&status_json("null")).unwrap();
         status.add_required(&["Build (Pull Request)".to_string()]);
         assert_eq!(PrStatus::from(status).status_check_rollup.len(), 1);
     }

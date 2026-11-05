@@ -4,7 +4,10 @@ use super::*;
 pub(super) use crate::app::Msg;
 pub(super) use crate::app::{MIN_COLUMNS, MIN_ROWS};
 pub(super) use crate::gh::Pr;
-pub(super) use crate::testing::{PrBuilder, app_with, ctrl, ctrl_g, key, press};
+pub(super) use crate::testing::{
+    PrBuilder, app_with, app_with_details, app_with_query, comment, ctrl, ctrl_g, key, pr_details,
+    press, select_rows, with_comment_rows,
+};
 pub(super) use crossterm::event::KeyCode;
 pub(super) use ratatui::Terminal;
 pub(super) use ratatui::backend::TestBackend;
@@ -129,19 +132,8 @@ pub(super) fn app_with_long_panes() -> App {
         pr_checked(3, "MERGEABLE", vec![]),
     ]);
     let long = vec!["a line"; 100].join("\n\n");
-    let comment = serde_json::json!({
-        "author": {"login": "someone"},
-        "createdAt": "2026-01-02T03:00:00Z",
-        "body": long,
-    });
-    let details = serde_json::from_value(serde_json::json!({
-        "headRefName": "branch",
-        "body": long,
-        "comments": [comment, comment, comment],
-        "additions": 1,
-        "deletions": 1,
-    }))
-    .unwrap();
+    let comment = comment("someone", &long);
+    let details = pr_details(&long, serde_json::json!([comment, comment, comment]));
     app.details_loaded(1, Ok(details));
     app.diff_loaded(1, Ok(vec!["+added"; 200].join("\n")));
     draw(&mut app, 200, 40);

@@ -14,11 +14,7 @@ fn tab_cycles_focus_and_arrows_act_on_the_focused_pane() {
 
     key(&mut app, KeyCode::Tab);
     assert!(app.focus == Pane::Checks);
-    app.drawn.checks_layout = ChecksLayout {
-        count: 4,
-        first: 0,
-        viewport: 2,
-    };
+    with_check_rows(&mut app, 4, 0, 2);
     press(&mut app, "jjj");
     assert_eq!((app.scroll.check, app.scroll.checks), (3, 2));
     key(&mut app, KeyCode::PageUp);
@@ -27,10 +23,7 @@ fn tab_cycles_focus_and_arrows_act_on_the_focused_pane() {
     // In the comments pane the arrows go comment by comment, and a page scrolls.
     key(&mut app, KeyCode::Tab);
     assert!(app.focus == Pane::Comments);
-    app.drawn.comment_layout = CommentLayout {
-        items: vec![(0, 1), (1, 1), (2, 1)],
-        viewport: 5,
-    };
+    with_comment_rows(&mut app, &[1, 1, 1]);
     press(&mut app, "jj");
     assert_eq!(app.scroll.comment, 2);
     key(&mut app, KeyCode::PageDown);
@@ -83,10 +76,7 @@ fn tab_cycles_focus_and_arrows_act_on_the_focused_pane() {
 fn down_and_up_scroll_a_tall_comment_before_moving_to_the_next() {
     let mut app = app_with_rows(1);
     // A one line comment, an open one ten lines tall, and another one line comment.
-    app.drawn.comment_layout = CommentLayout {
-        items: vec![(0, 1), (1, 10), (11, 1)],
-        viewport: 5,
-    };
+    with_comment_rows(&mut app, &[1, 10, 1]);
     focus(&mut app, Pane::Comments);
     let state = |app: &App| (app.scroll.comment, app.scroll.comments);
 
@@ -128,10 +118,7 @@ fn down_and_up_scroll_a_tall_comment_before_moving_to_the_next() {
 #[test]
 fn the_wheel_steps_through_the_comments_like_down_and_up() {
     let mut app = app_with_rows(1);
-    app.drawn.comment_layout = CommentLayout {
-        items: vec![(0, 1), (1, 10), (11, 1)],
-        viewport: 5,
-    };
+    with_comment_rows(&mut app, &[1, 10, 1]);
     let state = |app: &App| (app.scroll.comment, app.scroll.comments);
     app.wheel(Pane::Comments, 1);
     assert_eq!(state(&app), (1, 0));
@@ -153,10 +140,7 @@ fn home_and_end_jump_to_the_first_and_last_item_or_the_ends_of_a_pane() {
     assert_eq!(app.table.selected(), Some(0));
 
     // In the comments the highlight goes to the first or last comment, with the view.
-    app.drawn.comment_layout = CommentLayout {
-        items: vec![(0, 1), (1, 10), (11, 1)],
-        viewport: 5,
-    };
+    with_comment_rows(&mut app, &[1, 10, 1]);
     focus(&mut app, Pane::Comments);
     key(&mut app, KeyCode::End);
     assert_eq!((app.scroll.comment, app.scroll.comments), (2, 11));
@@ -173,11 +157,7 @@ fn home_and_end_jump_to_the_first_and_last_item_or_the_ends_of_a_pane() {
     key(&mut app, KeyCode::End);
     assert_eq!(app.scroll.diff, u16::MAX);
     // In the checks too, and the view follows the highlight.
-    app.drawn.checks_layout = ChecksLayout {
-        count: 5,
-        first: 0,
-        viewport: 3,
-    };
+    with_check_rows(&mut app, 5, 0, 3);
     focus(&mut app, Pane::Checks);
     key(&mut app, KeyCode::End);
     assert_eq!((app.scroll.check, app.scroll.checks), (4, 2));
@@ -189,11 +169,7 @@ fn home_and_end_jump_to_the_first_and_last_item_or_the_ends_of_a_pane() {
 fn up_and_down_move_the_checks_highlight_and_keep_it_on_screen() {
     let mut app = app_with_rows(1);
     // A conflict row above five checks, three rows high.
-    app.drawn.checks_layout = ChecksLayout {
-        count: 5,
-        first: 1,
-        viewport: 3,
-    };
+    with_check_rows(&mut app, 5, 1, 3);
     focus(&mut app, Pane::Checks);
     let state = |app: &App| (app.scroll.check, app.scroll.checks);
     press(&mut app, "j");
@@ -219,10 +195,7 @@ fn up_and_down_move_the_checks_highlight_and_keep_it_on_screen() {
 #[test]
 fn enter_and_space_expand_the_highlighted_comment_instead_of_reviewing() {
     let mut app = app_with_rows(2);
-    app.drawn.comment_layout = CommentLayout {
-        items: vec![(0, 1), (1, 1)],
-        viewport: 5,
-    };
+    with_comment_rows(&mut app, &[1, 1]);
     focus(&mut app, Pane::Comments);
     press(&mut app, "j");
     key(&mut app, KeyCode::Enter);
