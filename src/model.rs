@@ -12,6 +12,12 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::gh::{Check, Comment, Conclusion, ContextState, Mergeable, ReviewDecision, RunStatus};
 
+mod text;
+mod time;
+
+pub use text::{clean_body, first_line, one_line, regex_error_line};
+pub use time::{ago, short_age};
+
 /// The state of a single check, or of all a PR's checks together.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckState {
@@ -152,53 +158,6 @@ fn started_at_of(check: &Check) -> &Option<String> {
     }
 }
 
-/// How long before `now` a timestamp such as `2026-01-02T03:04:05Z` was, like `3 hours ago`.
-/// A timestamp that can't be read is shown as it is.
-pub fn ago(timestamp: &str, now: jiff::Timestamp) -> String {
-    let Ok(then) = timestamp.parse::<jiff::Timestamp>() else {
-        return timestamp.to_string();
-    };
-    let seconds = now.as_second() - then.as_second();
-    let units = [
-        (365 * 24 * 3600, "year"),
-        (30 * 24 * 3600, "month"),
-        (7 * 24 * 3600, "week"),
-        (24 * 3600, "day"),
-        (3600, "hour"),
-        (60, "minute"),
-    ];
-    for (size, unit) in units {
-        if seconds >= size {
-            let n = seconds / size;
-            return format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" });
-        }
-    }
-    "just now".to_string()
-}
-
-/// How long before `now` a timestamp was, in the fewest characters: `5m`, `2h`, `3d`, `2w`, `4mo`,
-/// `1y`. Under a minute is `now`. A timestamp that can't be read is shown as it is.
-pub fn short_age(timestamp: &str, now: jiff::Timestamp) -> String {
-    let Ok(then) = timestamp.parse::<jiff::Timestamp>() else {
-        return timestamp.to_string();
-    };
-    let seconds = now.as_second() - then.as_second();
-    let units = [
-        (365 * 24 * 3600, "y"),
-        (30 * 24 * 3600, "mo"),
-        (7 * 24 * 3600, "w"),
-        (24 * 3600, "d"),
-        (3600, "h"),
-        (60, "m"),
-    ];
-    for (size, unit) in units {
-        if seconds >= size {
-            return format!("{}{unit}", seconds / size);
-        }
-    }
-    "now".to_string()
-}
-
 /// A column of the table that can be hidden: every one but the checkbox and the title columns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Column {
@@ -281,39 +240,6 @@ pub fn review_label(review_decision: ReviewDecision) -> &'static str {
         ReviewDecision::ChangesRequested => "✗ changes",
         ReviewDecision::Other => "· needed",
     }
-}
-
-static HTML_COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<!--.*?-->").unwrap());
-static BLANK_LINES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{3,}").unwrap());
-
-/// Joins the lines of `text` with spaces, so it fits in one row.
-pub fn one_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// The line of a regex error that says what is wrong: the one after `error:` if there is one, as
-/// the first line of a syntax error only says that there is one.
-pub fn regex_error_line(error: &str) -> &str {
-    error
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("error: "))
-        .unwrap_or_else(|| first_line(error))
-}
-
-/// The first line of `text` that isn't blank, such as the headline of an error message.
-pub fn first_line(text: &str) -> &str {
-    text.lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or_default()
-}
-
-/// Removes HTML comments and runs of blank lines from a PR or comment body.
-pub fn clean_body(body: Option<&str>) -> String {
-    let body = body.unwrap_or_default().replace("\r\n", "\n");
-    let body = HTML_COMMENT.replace_all(&body, "");
-    let body = BLANK_LINES.replace_all(&body, "\n\n");
-    body.trim().to_string()
 }
 
 /// A body rendered as markdown, and where the links in it are.
@@ -1008,39 +934,6 @@ mod tests {
     }
 
     #[test]
-    fn humanises_times() {
-        let now: jiff::Timestamp = "2026-03-10T12:00:00Z".parse().unwrap();
-        let ago = |timestamp| ago(timestamp, now);
-        assert_eq!(ago("2026-03-10T12:00:00Z"), "just now");
-        assert_eq!(ago("2026-03-10T11:59:01Z"), "just now");
-        assert_eq!(ago("2026-03-10T11:59:00Z"), "1 minute ago");
-        assert_eq!(ago("2026-03-10T11:15:00Z"), "45 minutes ago");
-        assert_eq!(ago("2026-03-10T09:00:00Z"), "3 hours ago");
-        assert_eq!(ago("2026-03-09T12:00:00Z"), "1 day ago");
-        assert_eq!(ago("2026-03-01T12:00:00Z"), "1 week ago");
-        assert_eq!(ago("2026-01-10T12:00:00Z"), "1 month ago");
-        assert_eq!(ago("2024-03-10T12:00:00Z"), "2 years ago");
-        // The future, such as a clock that is a little off, isn't an error.
-        assert_eq!(ago("2026-03-10T12:00:30Z"), "just now");
-        assert_eq!(ago("yesterday"), "yesterday");
-    }
-
-    #[test]
-    fn shortens_times_to_a_number_and_a_unit() {
-        let now: jiff::Timestamp = "2026-03-10T12:00:00Z".parse().unwrap();
-        let short = |timestamp| short_age(timestamp, now);
-        assert_eq!(short("2026-03-10T11:59:30Z"), "now");
-        assert_eq!(short("2026-03-10T11:15:00Z"), "45m");
-        assert_eq!(short("2026-03-10T09:00:00Z"), "3h");
-        assert_eq!(short("2026-03-07T12:00:00Z"), "3d");
-        assert_eq!(short("2026-02-24T12:00:00Z"), "2w");
-        assert_eq!(short("2025-12-10T12:00:00Z"), "3mo");
-        assert_eq!(short("2024-03-10T12:00:00Z"), "2y");
-        assert_eq!(short("2026-03-10T12:00:30Z"), "now");
-        assert_eq!(short("yesterday"), "yesterday");
-    }
-
-    #[test]
     fn checks_pane_lists_the_worst_first() {
         let checks = classify_checks(
             Mergeable::Other,
@@ -1102,26 +995,6 @@ mod tests {
         assert_eq!(review_label(decision("CHANGES_REQUESTED")), "✗ changes");
         assert_eq!(review_label(decision("REVIEW_REQUIRED")), "· needed");
         assert_eq!(review_label(decision("")), "· needed");
-    }
-
-    #[test]
-    fn the_first_line_skips_blank_ones() {
-        assert_eq!(first_line("\n  headline  \nrest"), "headline");
-        assert_eq!(first_line("one"), "one");
-        assert_eq!(first_line(" \n"), "");
-    }
-
-    #[test]
-    fn cleans_body() {
-        assert_eq!(clean_body(None), "");
-        assert_eq!(
-            clean_body(Some(
-                "<!-- a\nmulti-line -->Hello<!-- b -->\n\n\n\n\nWorld<!-- c -->\n"
-            )),
-            "Hello\n\nWorld"
-        );
-        assert_eq!(clean_body(Some("one\r\n\r\n\r\n\r\ntwo")), "one\n\ntwo");
-        assert_eq!(clean_body(Some("keep\n\nthis")), "keep\n\nthis");
     }
 
     /// The text of `line` that a link covers.
