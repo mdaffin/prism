@@ -1247,4 +1247,26 @@ mod tests {
         wheel(&mut app, diff, true);
         assert_eq!(app.scroll.diff, 0);
     }
+
+    #[test]
+    fn the_approvers_pane_is_above_the_diff_in_both_layouts() {
+        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        for width in [200, 100] {
+            draw(&mut app, width, 40);
+            let areas = &app.drawn.areas;
+            let (approvers, description, diff) = (areas.approvers, areas.description, areas.diff);
+            // The diff is right under it, in the same columns.
+            assert_eq!((approvers.x, approvers.width), (diff.x, diff.width));
+            assert_eq!(approvers.bottom(), diff.y);
+            // Wide, the description is above it, in the same column. Narrow, it is beside it.
+            if width == 200 {
+                assert_eq!(approvers.y, description.bottom());
+                assert_eq!(approvers.x, description.x);
+            } else {
+                assert!(approvers.x >= description.right());
+            }
+            // With a line to say, it is as short as it can be.
+            assert_eq!(approvers.height, MIN_APPROVERS_ROWS);
+        }
+    }
 }

@@ -389,3 +389,23 @@ fn all_three_boxes_take_the_word_editing_keys() {
     app.update(alt(KeyCode::Backspace));
     assert_eq!(app.columns_input.value(), "(?<a>x) ");
 }
+
+#[test]
+fn a_failed_search_keeps_the_old_results() {
+    let mut app = app_with_rows(3);
+    press(&mut app, " ");
+    press(&mut app, "/");
+    key(&mut app, KeyCode::Enter);
+    let (id, _) = app.list_to_fetch().unwrap();
+    app.update(Msg::PrsLoaded(
+        id,
+        Err(color_eyre::eyre::eyre!("bad query")),
+    ));
+    assert_eq!(
+        app.errors.search.as_deref(),
+        Some("Search failed: bad query")
+    );
+    assert!(!app.list.searching);
+    assert_eq!(numbers(&app), [1, 2, 3]);
+    assert_eq!(app.selected, HashSet::from([1]));
+}

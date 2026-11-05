@@ -81,26 +81,6 @@ fn refreshes_run_at_most_four_at_once() {
 }
 
 #[test]
-fn a_failed_search_keeps_the_old_results() {
-    let mut app = app_with_rows(3);
-    press(&mut app, " ");
-    press(&mut app, "/");
-    key(&mut app, KeyCode::Enter);
-    let (id, _) = app.list_to_fetch().unwrap();
-    app.update(Msg::PrsLoaded(
-        id,
-        Err(color_eyre::eyre::eyre!("bad query")),
-    ));
-    assert_eq!(
-        app.errors.search.as_deref(),
-        Some("Search failed: bad query")
-    );
-    assert!(!app.list.searching);
-    assert_eq!(numbers(&app), [1, 2, 3]);
-    assert_eq!(app.selected, HashSet::from([1]));
-}
-
-#[test]
 fn a_timed_refresh_covers_the_open_rows_once_at_a_time() {
     let mut app = App::new(String::new(), "is:pr".to_string(), false);
     let (id, _) = app.list_to_fetch().unwrap();
