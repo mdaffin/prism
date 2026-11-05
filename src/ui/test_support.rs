@@ -5,8 +5,8 @@ pub(super) use crate::app::Msg;
 pub(super) use crate::app::{MIN_COLUMNS, MIN_ROWS};
 pub(super) use crate::gh::Pr;
 pub(super) use crate::testing::{
-    PrBuilder, app_with, app_with_details, app_with_query, comment, ctrl, ctrl_g, key, pr_details,
-    press, select_rows, with_comment_rows,
+    PrBuilder, app_with, app_with_details, app_with_query, assert_list_mode, comment, ctrl, ctrl_g,
+    key, pr_details, press, select_rows, with_comment_rows,
 };
 pub(super) use crossterm::event::KeyCode;
 pub(super) use ratatui::Terminal;
@@ -26,6 +26,22 @@ pub(super) fn draw(app: &mut App, width: u16, height: u16) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|frame| view(app, frame)).unwrap();
     terminal.backend().buffer().clone()
+}
+
+/// A terminal wide enough for the wide layout, with every pane beside the list.
+pub(super) const WIDE: (u16, u16) = (200, 40);
+
+/// A terminal too narrow for the wide layout, so the panes go under the list.
+pub(super) const NARROW: (u16, u16) = (100, 40);
+
+/// Draws the app on a `WIDE` screen.
+pub(super) fn draw_wide(app: &mut App) -> Buffer {
+    draw(app, WIDE.0, WIDE.1)
+}
+
+/// Draws the app on a `NARROW` screen.
+pub(super) fn draw_narrow(app: &mut App) -> Buffer {
+    draw(app, NARROW.0, NARROW.1)
 }
 
 /// The text of each screen row.
@@ -136,7 +152,7 @@ pub(super) fn app_with_long_panes() -> App {
     let details = pr_details(&long, serde_json::json!([comment, comment, comment]));
     app.details_loaded(1, Ok(details));
     app.diff_loaded(1, Ok(vec!["+added"; 200].join("\n")));
-    draw(&mut app, 200, 40);
+    draw_wide(&mut app);
     app
 }
 

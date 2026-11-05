@@ -35,11 +35,13 @@ fn refreshed_rows_update_in_place() {
 
 #[test]
 fn refresh_failures_are_listed_few_at_a_time_after_a_search_failure() {
-    let mut app = app_with_rows(5);
-    app.to_refresh = (1..=5).collect();
+    // Two more failures than are listed.
+    let failures = MAX_LISTED_ERRORS as u64 + 2;
+    let mut app = app_with_rows(failures);
+    app.to_refresh = (1..=failures).collect();
     app.refreshes_to_fetch();
     app.update(Msg::PrRefreshed(1, Err(color_eyre::eyre::eyre!("a\nb"))));
-    for number in 2..=5 {
+    for number in 2..=failures {
         app.update(Msg::PrRefreshed(
             number,
             Err(color_eyre::eyre::eyre!("failed")),
@@ -49,11 +51,14 @@ fn refresh_failures_are_listed_few_at_a_time_after_a_search_failure() {
     app.errors.search = Some("Search failed: bad query".to_string());
     let text = app.errors.text().unwrap();
     let lines: Vec<&str> = text.lines().collect();
-    assert_eq!(lines.len(), 5);
+    assert_eq!(lines.len(), MAX_LISTED_ERRORS + 2);
     assert_eq!(lines[0], "Search failed: bad query");
     // Each failure takes one line, however many lines the error has.
     assert_eq!(lines[1], "Refreshing #1 failed: a b");
-    assert_eq!(lines[4], "… and 2 more refreshes failed");
+    assert_eq!(
+        lines[MAX_LISTED_ERRORS + 1],
+        "… and 2 more refreshes failed"
+    );
 
     // New results make them all stale.
     let (id, _) = {
@@ -66,12 +71,13 @@ fn refresh_failures_are_listed_few_at_a_time_after_a_search_failure() {
 
 #[test]
 fn refreshes_run_at_most_four_at_once() {
-    let mut app = app_with_rows(6);
-    app.to_refresh = (1..=6).collect();
-    assert_eq!(app.refreshes_to_fetch(), [1, 2, 3, 4]);
+    let limit = MAX_REFRESHES as u64;
+    let mut app = app_with_rows(limit + 2);
+    app.to_refresh = (1..=limit + 2).collect();
+    assert_eq!(app.refreshes_to_fetch(), (1..=limit).collect::<Vec<_>>());
     assert!(app.refreshes_to_fetch().is_empty());
     app.update(Msg::PrRefreshed(1, Ok(pr(1, "OPEN"))));
-    assert_eq!(app.refreshes_to_fetch(), [5]);
+    assert_eq!(app.refreshes_to_fetch(), [limit + 1]);
 }
 
 #[test]

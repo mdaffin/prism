@@ -15,7 +15,7 @@ fn ctrl_a_selects_open_prs_with_passing_checks_only() {
     ctrl(&mut app, 'a');
     assert_eq!(app.selected, HashSet::from([1, 5]));
     // Nothing starts: it only selects.
-    assert!(matches!(app.mode, Mode::List));
+    assert_list_mode(&app);
 }
 
 #[test]
@@ -110,8 +110,9 @@ fn ctrl_o_opens_the_selected_prs_in_table_order() {
 
 #[test]
 fn ctrl_o_asks_before_opening_more_than_five() {
-    let mut app = app_with_rows(6);
-    for _ in 0..6 {
+    let count = MAX_OPEN_WITHOUT_ASKING as u64 + 1;
+    let mut app = app_with_rows(count);
+    for _ in 0..count {
         press(&mut app, " j");
     }
     ctrl(&mut app, 'o');
@@ -120,24 +121,25 @@ fn ctrl_o_asks_before_opening_more_than_five() {
     // Cancel leaves everything alone.
     press(&mut app, "l");
     key(&mut app, KeyCode::Enter);
-    assert!(matches!(app.mode, Mode::List));
+    assert_list_mode(&app);
     assert!(app.opens_to_run().is_empty());
 
     ctrl(&mut app, 'o');
     key(&mut app, KeyCode::Enter);
-    assert!(matches!(app.mode, Mode::List));
-    assert_eq!(app.opens_to_run(), [1, 2, 3, 4, 5, 6]);
+    assert_list_mode(&app);
+    assert_eq!(app.opens_to_run(), (1..=count).collect::<Vec<_>>());
 }
 
 #[test]
 fn five_selected_prs_open_without_asking() {
-    let mut app = app_with_rows(5);
-    for _ in 0..5 {
+    let count = MAX_OPEN_WITHOUT_ASKING as u64;
+    let mut app = app_with_rows(count);
+    for _ in 0..count {
         press(&mut app, " j");
     }
     ctrl(&mut app, 'o');
-    assert!(matches!(app.mode, Mode::List));
-    assert_eq!(app.opens_to_run().len(), 5);
+    assert_list_mode(&app);
+    assert_eq!(app.opens_to_run().len() as u64, count);
 }
 
 #[test]

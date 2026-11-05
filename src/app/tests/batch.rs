@@ -58,11 +58,11 @@ fn the_dialog_moves_between_choices_and_closes() {
     }
     assert_eq!(confirm(&app).choice, 2);
     key(&mut app, KeyCode::Enter);
-    assert!(matches!(app.mode, Mode::List));
+    assert_list_mode(&app);
 
     key(&mut app, KeyCode::Enter);
     key(&mut app, KeyCode::Esc);
-    assert!(matches!(app.mode, Mode::List));
+    assert_list_mode(&app);
     assert!(!app.should_quit);
 }
 
@@ -79,15 +79,16 @@ fn a_list_loading_under_the_dialog_keeps_it_open() {
 
 #[test]
 fn approvals_run_at_most_four_at_once() {
-    let mut app = app_with_rows(6);
-    start_approving(&mut app, 6);
-    assert_eq!(app.approvals_to_run(), [1, 2, 3, 4]);
+    let limit = MAX_APPROVALS as u64;
+    let mut app = app_with_rows(limit + 2);
+    start_approving(&mut app, limit as usize + 2);
+    assert_eq!(app.approvals_to_run(), (1..=limit).collect::<Vec<_>>());
     assert!(app.approvals_to_run().is_empty());
     approve(&mut app, 2, Ok(()));
-    assert_eq!(app.approvals_to_run(), [5]);
+    assert_eq!(app.approvals_to_run(), [limit + 1]);
     approve(&mut app, 1, Ok(()));
     approve(&mut app, 3, Ok(()));
-    assert_eq!(app.approvals_to_run(), [6]);
+    assert_eq!(app.approvals_to_run(), [limit + 2]);
     assert!(app.approvals_to_run().is_empty());
 }
 
@@ -110,9 +111,7 @@ fn q_cancels_the_approvals_that_have_not_started() {
     approve(&mut app, 1, Ok(()));
 
     key(&mut app, KeyCode::Char('q'));
-    let Mode::Results(summary) = &app.mode else {
-        panic!("the results aren't shown");
-    };
+    let summary = results(&app);
     assert!(!app.should_quit);
     assert_eq!((summary.approved, summary.total), (1, 6));
     // 2 to 4 were running; 5 and 6 never started.
@@ -144,9 +143,7 @@ fn a_result_from_a_cancelled_batch_does_not_touch_the_next_one() {
     assert!(matches!(app.mode, Mode::Running(_)));
     assert_eq!(app.approvals_to_run(), [1]);
     app.update(Msg::Approved(old, 1, Ok(())));
-    let Mode::Running(batch) = &app.mode else {
-        panic!("the new batch was ended by an old result");
-    };
+    let batch = running(&app);
     assert_eq!(batch.items[0].approval, ItemStatus::Working);
     approve(&mut app, 1, Ok(()));
     assert!(matches!(app.mode, Mode::Results(_)));
@@ -161,9 +158,7 @@ fn q_while_approving_to_merge_cancels_the_merges_too() {
 
     key(&mut app, KeyCode::Char('q'));
     assert_eq!(app.merge_to_run(), None);
-    let Mode::Results(summary) = &app.mode else {
-        panic!("the results aren't shown");
-    };
+    let summary = results(&app);
     assert_eq!(summary.approved, 2);
     assert_eq!(summary.interrupted, [3, 4]);
     // PRs 1 and 2 were approved but their merges didn't start.
@@ -184,9 +179,7 @@ fn q_while_merging_cancels_the_merges_not_yet_started() {
 
     key(&mut app, KeyCode::Char('q'));
     assert_eq!(app.merge_to_run(), None);
-    let Mode::Results(summary) = &app.mode else {
-        panic!("the results aren't shown");
-    };
+    let summary = results(&app);
     assert_eq!(summary.approved, 4);
     assert_eq!(summary.merged, Some((1, 4)));
     assert_eq!(summary.interrupted, [2]);
@@ -205,9 +198,7 @@ fn the_last_approval_shows_results_and_refreshes_the_batch() {
     assert!(app.refreshes_to_fetch().is_empty());
 
     approve(&mut app, 2, Ok(()));
-    let Mode::Results(summary) = &app.mode else {
-        panic!("the results aren't shown");
-    };
+    let summary = results(&app);
     assert_eq!((summary.approved, summary.total), (2, 3));
     assert_eq!(
         summary.failures,
@@ -220,7 +211,7 @@ fn the_last_approval_shows_results_and_refreshes_the_batch() {
     assert_eq!(app.refreshes_to_fetch(), [1, 2, 3]);
 
     key(&mut app, KeyCode::Char('q'));
-    assert!(matches!(app.mode, Mode::List));
+    assert_list_mode(&app);
     assert!(!app.should_quit);
 }
 
@@ -259,9 +250,7 @@ fn approve_and_merge_merges_approved_prs_one_at_a_time() {
 
     // Only the approved PRs are merged, one at a time. Pending checks use auto-merge; no
     // checks don't.
-    let Mode::Running(batch) = &app.mode else {
-        panic!("the batch stopped before merging");
-    };
+    let batch = running(&app);
     assert_eq!(batch.progress(), (1, 4));
     assert_eq!(app.merge_to_run(), Some((1, false)));
     assert_eq!(app.merge_to_run(), None);
@@ -272,9 +261,7 @@ fn approve_and_merge_merges_approved_prs_one_at_a_time() {
     merge(&mut app, 3, Err(color_eyre::eyre::eyre!("not mergeable")));
     assert_eq!(app.merge_to_run(), None);
 
-    let Mode::Results(summary) = &app.mode else {
-        panic!("the results aren't shown");
-    };
+    let summary = results(&app);
     assert_eq!((summary.approved, summary.total), (3, 4));
     // Auto-merge counts as merged.
     assert_eq!(summary.merged, Some((2, 3)));
@@ -310,9 +297,7 @@ fn an_approved_pr_merges_while_others_are_still_being_approved() {
     assert!(matches!(app.mode, Mode::Running(_)));
     assert_eq!(app.merge_to_run(), Some((3, false)));
     merge(&mut app, 3, Ok(()));
-    let Mode::Results(summary) = &app.mode else {
-        panic!("the results aren't shown");
-    };
+    let summary = results(&app);
     assert_eq!(summary.merged, Some((3, 3)));
 }
 
@@ -324,9 +309,7 @@ fn approve_and_merge_with_no_approvals_skips_merging() {
         approve(&mut app, number, Err(color_eyre::eyre::eyre!("no")));
     }
     assert_eq!(app.merge_to_run(), None);
-    let Mode::Results(summary) = &app.mode else {
-        panic!("the results aren't shown");
-    };
+    let summary = results(&app);
     assert_eq!(summary.merged, Some((0, 0)));
 }
 

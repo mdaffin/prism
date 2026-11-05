@@ -4,7 +4,7 @@ use super::*;
 fn tab_cycles_focus_and_arrows_act_on_the_focused_pane() {
     let mut app = app_with_rows(3);
     app.drawn.page = 5;
-    assert!(app.focus == Pane::Table);
+    assert_eq!(app.focus, Pane::Table);
 
     // The table moves its highlight; a page is clamped to the last row.
     key(&mut app, KeyCode::Down);
@@ -13,7 +13,7 @@ fn tab_cycles_focus_and_arrows_act_on_the_focused_pane() {
     assert_eq!(app.table.selected(), Some(2));
 
     key(&mut app, KeyCode::Tab);
-    assert!(app.focus == Pane::Checks);
+    assert_eq!(app.focus, Pane::Checks);
     with_check_rows(&mut app, 4, 0, 2);
     press(&mut app, "jjj");
     assert_eq!((app.scroll.check, app.scroll.checks), (3, 2));
@@ -22,7 +22,7 @@ fn tab_cycles_focus_and_arrows_act_on_the_focused_pane() {
 
     // In the comments pane the arrows go comment by comment, and a page scrolls.
     key(&mut app, KeyCode::Tab);
-    assert!(app.focus == Pane::Comments);
+    assert_eq!(app.focus, Pane::Comments);
     with_comment_rows(&mut app, &[1, 1, 1]);
     press(&mut app, "jj");
     assert_eq!(app.scroll.comment, 2);
@@ -35,7 +35,7 @@ fn tab_cycles_focus_and_arrows_act_on_the_focused_pane() {
     assert_eq!((app.scroll.comment, app.scroll.comments), (1, 0));
 
     key(&mut app, KeyCode::Tab);
-    assert!(app.focus == Pane::Description);
+    assert_eq!(app.focus, Pane::Description);
     press(&mut app, "jj");
     key(&mut app, KeyCode::PageDown);
     assert_eq!(app.scroll.description, 7);
@@ -50,7 +50,7 @@ fn tab_cycles_focus_and_arrows_act_on_the_focused_pane() {
 
     // The approvers, above the diff, scroll a line at a time.
     key(&mut app, KeyCode::Tab);
-    assert!(app.focus == Pane::Approvers);
+    assert_eq!(app.focus, Pane::Approvers);
     press(&mut app, "jj");
     assert_eq!(app.scroll.approvers, 2);
     key(&mut app, KeyCode::Up);
@@ -61,15 +61,15 @@ fn tab_cycles_focus_and_arrows_act_on_the_focused_pane() {
     press(&mut app, "l");
 
     key(&mut app, KeyCode::Tab);
-    assert!(app.focus == Pane::Diff);
+    assert_eq!(app.focus, Pane::Diff);
     press(&mut app, "k");
     key(&mut app, KeyCode::Down);
     assert_eq!(app.scroll.diff, 1);
 
     key(&mut app, KeyCode::Tab);
-    assert!(app.focus == Pane::Table);
+    assert_eq!(app.focus, Pane::Table);
     key(&mut app, KeyCode::BackTab);
-    assert!(app.focus == Pane::Diff);
+    assert_eq!(app.focus, Pane::Diff);
 }
 
 #[test]
@@ -199,7 +199,7 @@ fn enter_and_space_expand_the_highlighted_comment_instead_of_reviewing() {
     focus(&mut app, Pane::Comments);
     press(&mut app, "j");
     key(&mut app, KeyCode::Enter);
-    assert!(matches!(app.mode, Mode::List));
+    assert_list_mode(&app);
     assert!(app.scroll.comments_open.contains(&1));
     press(&mut app, " ");
     assert!(app.scroll.comments_open.is_empty());

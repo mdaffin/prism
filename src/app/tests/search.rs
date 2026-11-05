@@ -30,7 +30,7 @@ fn help_opens_with_question_mark_and_closes_again() {
         press(&mut app, "?");
         assert!(matches!(app.mode, Mode::Help(_)));
         key(&mut app, close);
-        assert!(matches!(app.mode, Mode::List));
+        assert_list_mode(&app);
     }
     // `q` closed the popup rather than quitting.
     assert!(!app.should_quit);

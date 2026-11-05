@@ -578,7 +578,7 @@ mod tests {
     #[test]
     fn a_click_focuses_the_pane_under_it() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let panes = [
             (Pane::Checks, app.drawn.areas.checks),
             (Pane::Comments, app.drawn.areas.comments),
@@ -589,16 +589,16 @@ mod tests {
         for (pane, area) in panes {
             // The border counts as part of the pane, so click on it and inside it.
             press_at(&mut app, Position::new(area.x, area.y));
-            assert!(app.focus == pane);
+            assert_eq!(app.focus, pane);
             app.focus = Pane::Table;
             press_at(&mut app, Position::new(area.x + 2, area.y + 1));
-            assert!(app.focus == pane);
+            assert_eq!(app.focus, pane);
             app.focus = Pane::Table;
         }
         // The search box and the title are in no pane.
         app.focus = Pane::Diff;
         press_at(&mut app, Position::new(0, 0));
-        assert!(app.focus == Pane::Diff);
+        assert_eq!(app.focus, Pane::Diff);
     }
 
     /// A point inside each pane.
@@ -691,29 +691,29 @@ mod tests {
     #[test]
     fn hiding_the_focused_pane_moves_the_focus_and_tab_skips_hidden_panes() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         // Focus the checks, then hide them: the focus moves on to the next shown pane.
         key(&mut app, KeyCode::Tab);
-        assert!(app.focus == Pane::Checks);
+        assert_eq!(app.focus, Pane::Checks);
         press(&mut app, "1");
-        assert!(app.focus == Pane::Comments);
+        assert_eq!(app.focus, Pane::Comments);
         // Tab from the list now goes straight to the comments, and Shift-Tab round to the diff.
         key(&mut app, KeyCode::BackTab);
         key(&mut app, KeyCode::BackTab);
-        assert!(app.focus == Pane::Diff);
+        assert_eq!(app.focus, Pane::Diff);
         press(&mut app, "5");
-        assert!(app.focus == Pane::Table);
+        assert_eq!(app.focus, Pane::Table);
         key(&mut app, KeyCode::Tab);
-        assert!(app.focus == Pane::Comments);
+        assert_eq!(app.focus, Pane::Comments);
         // A hidden pane takes no clicks and no sideways scrolling.
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let checks = app.drawn.areas.checks;
         assert!(checks.is_empty());
         press_at(&mut app, Position::new(checks.x, checks.y));
-        assert!(app.focus == Pane::Comments);
+        assert_eq!(app.focus, Pane::Comments);
         press(&mut app, "0");
         key(&mut app, KeyCode::Tab);
-        assert!(app.focus == Pane::Description);
+        assert_eq!(app.focus, Pane::Description);
     }
 
     #[test]
@@ -728,13 +728,13 @@ mod tests {
     #[test]
     fn a_hidden_panes_stale_data_is_dropped_so_nothing_acts_on_it() {
         let mut app = app_with_long_panes();
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert!(!app.drawn.comment_layout.items.is_empty());
         assert!(app.drawn.checks_layout.count > 0);
         press(&mut app, "1");
         press(&mut app, "2");
         press(&mut app, "3");
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert!(app.drawn.comment_layout.items.is_empty());
         assert_eq!(app.drawn.checks_layout.count, 0);
         assert!(app.drawn.description_links.is_empty());
@@ -776,7 +776,7 @@ mod tests {
     #[test]
     fn dragging_the_border_between_the_columns_resizes_them_and_clamps() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let columns = divider(&app, StackId::Columns, 0, 1);
         assert_eq!(app.drawn.areas.table.width, 100);
         drag_divider(&mut app, &columns, 60, (200, 40));
@@ -794,7 +794,7 @@ mod tests {
     #[test]
     fn dragging_a_border_inside_a_column_resizes_the_two_panes_beside_it() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let (list, checks, comments) = (
             app.drawn.areas.table,
             app.drawn.areas.checks,
@@ -822,7 +822,7 @@ mod tests {
     #[test]
     fn a_resized_layout_keeps_its_fractions_when_the_terminal_changes_size() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let columns = divider(&app, StackId::Columns, 0, 1);
         drag_divider(&mut app, &columns, 50, (200, 40));
         assert_eq!(app.drawn.areas.table.width, 50);
@@ -841,7 +841,7 @@ mod tests {
     #[test]
     fn the_narrow_layouts_borders_can_be_dragged_too() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        draw(&mut app, 100, 40);
+        draw_narrow(&mut app);
         let list = app.drawn.areas.table;
         let rows = divider(&app, StackId::Rows, 0, 1);
         drag_divider(&mut app, &rows, list.bottom() + 6, (100, 40));
@@ -858,43 +858,43 @@ mod tests {
     #[test]
     fn a_click_on_a_border_still_focuses_and_does_not_resize() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let checks = app.drawn.areas.checks;
         press_at(&mut app, Position::new(checks.x + 4, checks.y));
         release_at(&mut app, Position::new(checks.x + 4, checks.y));
-        assert!(app.focus == Pane::Checks);
+        assert_eq!(app.focus, Pane::Checks);
         assert!(app.sizes.is_default());
     }
 
     #[test]
     fn plus_and_minus_and_the_arrows_resize_the_focused_pane_and_equals_resets() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let list = app.drawn.areas.table;
         press(&mut app, "+");
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert!(app.drawn.areas.table.height > list.height);
         // A draw between the presses, as there is in use: the border is read from the last one.
         press(&mut app, "-");
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         press(&mut app, "-");
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert!(app.drawn.areas.table.height < list.height);
         // Wider and narrower, and from the details' side the other way round.
         press(&mut app, ">");
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert!(app.drawn.areas.table.width > list.width);
         key(&mut app, KeyCode::Tab);
         key(&mut app, KeyCode::Tab);
         key(&mut app, KeyCode::Tab);
-        assert!(app.focus == Pane::Description);
+        assert_eq!(app.focus, Pane::Description);
         let width = app.drawn.areas.description.width;
         press(&mut app, ">");
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert!(app.drawn.areas.description.width > width);
         // The last pane of a stack has the border before it to move, and `=` puts it all back.
         press(&mut app, "=");
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert!(app.sizes.is_default());
         assert_eq!(app.drawn.areas.table, list);
     }
@@ -903,7 +903,7 @@ mod tests {
     fn a_pane_with_no_border_to_move_that_way_says_so() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         // Narrow: the list takes the whole width, so there is no wider or narrower for it.
-        draw(&mut app, 100, 40);
+        draw_narrow(&mut app);
         press(&mut app, ">");
         assert!(
             app.note
@@ -918,12 +918,12 @@ mod tests {
     fn a_pane_hidden_when_the_stack_was_resized_does_not_come_back_squashed() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "1");
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let border = divider(&app, StackId::Left, 0, 2);
         let top = app.drawn.areas.table;
         drag_divider(&mut app, &border, top.bottom() + 2, (200, 40));
         press(&mut app, "1");
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let checks = app.drawn.areas.checks;
         assert!(checks.height >= MIN_ROWS, "{checks:?}");
     }
@@ -937,17 +937,17 @@ mod tests {
         let below = Position::new(hit.track.x, hit.track.bottom() - 1);
         press_at(&mut app, below);
         release_at(&mut app, below);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let after = bar(&app, ScrollTarget::Diff);
         assert_eq!(after.offset, hit.viewport, "a page down");
         // And a click above the thumb pages back up to the start.
         let above = Position::new(hit.track.x, hit.track.y);
         press_at(&mut app, above);
         release_at(&mut app, above);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert_eq!(bar(&app, ScrollTarget::Diff).offset, 0);
         // Nothing else happened to the click: the focus stays where it was.
-        assert!(app.focus == Pane::Table);
+        assert_eq!(app.focus, Pane::Table);
     }
 
     #[test]
@@ -959,20 +959,20 @@ mod tests {
         press_at(&mut app, Position::new(hit.track.x, hit.track.y));
         let off_bar = Position::new(2, hit.track.bottom() + 5);
         drag_to(&mut app, off_bar);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let end = bar(&app, ScrollTarget::Diff);
         assert_eq!(end.offset, end.content - end.viewport, "to the end");
         // Back to the middle of the track: about the middle of the content.
         let middle = Position::new(2, hit.track.y + hit.track.height / 2);
         drag_to(&mut app, middle);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let mid = bar(&app, ScrollTarget::Diff).offset;
         let max = end.content - end.viewport;
         assert!(mid > max / 4 && mid < max * 3 / 4, "{mid} of {max}");
         // Once released, a drag does nothing.
         release_at(&mut app, middle);
         drag_to(&mut app, Position::new(2, hit.track.y));
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert_eq!(bar(&app, ScrollTarget::Diff).offset, mid);
     }
 
@@ -980,11 +980,11 @@ mod tests {
     fn dragging_the_lists_thumb_scrolls_the_list_and_keeps_the_highlight_on_screen() {
         let prs: Vec<Pr> = (1..=60).map(|n| by("alice", n, "Bump alpha")).collect();
         let mut app = app_with(prs);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let hit = bar(&app, ScrollTarget::Table);
         press_at(&mut app, Position::new(hit.track.x, hit.track.y));
         drag_to(&mut app, Position::new(hit.track.x, hit.track.bottom() - 1));
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let after = bar(&app, ScrollTarget::Table);
         assert_eq!(after.offset, after.content - after.viewport);
         let selected = app.table.selected().unwrap();
@@ -997,7 +997,7 @@ mod tests {
     #[test]
     fn dragging_a_horizontal_thumb_scrolls_sideways() {
         let mut app = app_with_a_long_title();
-        draw(&mut app, 100, 40);
+        draw_narrow(&mut app);
         let hit = bar(&app, ScrollTarget::ListX);
         assert!(!hit.vertical);
         press_at(&mut app, Position::new(hit.track.x, hit.track.y));
@@ -1006,7 +1006,7 @@ mod tests {
             &mut app,
             Position::new(hit.track.right() + 3, hit.track.y + 4),
         );
-        draw(&mut app, 100, 40);
+        draw_narrow(&mut app);
         let end = bar(&app, ScrollTarget::ListX);
         assert_eq!(end.offset, end.content - end.viewport);
         assert_eq!(usize::from(app.list_x), end.offset);
@@ -1014,14 +1014,14 @@ mod tests {
         // A click on the track left of the thumb pages back.
         press_at(&mut app, Position::new(hit.track.x, hit.track.y));
         release_at(&mut app, Position::new(hit.track.x, hit.track.y));
-        draw(&mut app, 100, 40);
+        draw_narrow(&mut app);
         assert!(bar(&app, ScrollTarget::ListX).offset < end.offset);
     }
 
     #[test]
     fn a_bar_that_is_not_drawn_has_nothing_to_click() {
         let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert!(
             !app.drawn
                 .areas
@@ -1032,7 +1032,7 @@ mod tests {
         // A click on the table's right border focuses it as before.
         let table = app.drawn.areas.table;
         press_at(&mut app, Position::new(table.right() - 1, table.y + 3));
-        assert!(app.focus == Pane::Table);
+        assert_eq!(app.focus, Pane::Table);
     }
 
     #[test]
@@ -1068,7 +1068,7 @@ mod tests {
         assert_eq!(app.scroll.comment, 1);
         assert_eq!(app.scroll.comments, 0);
 
-        assert!(app.focus == Pane::Table);
+        assert_eq!(app.focus, Pane::Table);
     }
 
     #[test]
@@ -1077,7 +1077,7 @@ mod tests {
             pr(1, "Bump alpha", "OPEN", ""),
             pr(2, "Bump beta", "OPEN", ""),
         ]);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let rows = app.drawn.areas.table_rows;
         let diff = app.drawn.areas.diff;
         let drag = |app: &mut App, x: u16, y: u16| drag_to(app, Position::new(x, y));
@@ -1095,13 +1095,13 @@ mod tests {
         assert!(matches!(app.mode, Mode::Help(_)));
         assert!(app.selected.is_empty());
         assert_eq!(app.highlighted().unwrap().pr.number, 1);
-        assert!(app.focus == Pane::Table);
+        assert_eq!(app.focus, Pane::Table);
     }
 
     #[test]
     fn a_wide_terminal_puts_the_list_beside_the_details() {
         let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let areas = &app.drawn.areas;
         // The list, checks and comments are one column on the left, the details on the right.
         assert_eq!(areas.table.x, 0);
@@ -1186,7 +1186,7 @@ mod tests {
     #[test]
     fn every_pane_is_drawn_and_clickable_in_a_narrow_terminal() {
         let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
-        draw(&mut app, 100, 40);
+        draw_narrow(&mut app);
         for pane in [
             Pane::Checks,
             Pane::Approvers,
@@ -1205,7 +1205,7 @@ mod tests {
             };
             assert!(area.width > 2 && area.height > 2, "{pane:?}");
             press_at(&mut app, Position::new(area.x + 1, area.y + 1));
-            assert!(app.focus == pane, "{pane:?}");
+            assert_eq!(app.focus, pane, "{pane:?}");
         }
     }
 
@@ -1214,7 +1214,7 @@ mod tests {
         use crossterm::event::{KeyModifiers, MouseEventKind};
         let mut app = app_with_a_long_title();
         app.diff_loaded(1, Ok(format!("+{}END", "x".repeat(300))));
-        draw(&mut app, 100, 40);
+        draw_narrow(&mut app);
         let table = app.drawn.areas.table;
         let diff = app.drawn.areas.diff;
         let scroll = |app: &mut App, kind, modifiers, area: Rect| {
@@ -1235,13 +1235,13 @@ mod tests {
         );
         assert!(app.scroll.diff_x > 0);
         // The focus stays where it was.
-        assert!(app.focus == Pane::Table);
+        assert_eq!(app.focus, Pane::Table);
     }
 
     #[test]
     fn the_wheel_is_ignored_while_a_box_is_edited() {
         let mut app = app_with_long_panes();
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let diff = Position::new(app.drawn.areas.diff.x + 2, app.drawn.areas.diff.y + 1);
         press(&mut app, "f");
         wheel(&mut app, diff, true);

@@ -468,7 +468,7 @@ mod tests {
         // Select everything, then open the dialog.
         select_rows(&mut app, &[0, 1, 2, 3, 4]);
         ctrl_g(&mut app);
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         for (label, colour) in [
             ("✓ passing", Color::Green),
             ("… pending", Color::Yellow),
@@ -540,11 +540,11 @@ mod tests {
     #[test]
     fn the_mouse_is_ignored_in_a_dialog() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let diff = Position::new(app.drawn.areas.diff.x + 2, app.drawn.areas.diff.y + 1);
         press(&mut app, "?");
         press_at(&mut app, diff);
-        assert!(app.focus == Pane::Table);
+        assert_eq!(app.focus, Pane::Table);
         // Not even a box's area is live behind a dialog.
         press_at(&mut app, Position::new(2, 2));
         assert!(app.typing == Typing::Nothing);
@@ -570,7 +570,7 @@ mod tests {
         press(&mut app, " j ");
         ctrl_g(&mut app);
         assert!(matches!(app.mode, Mode::Confirm(_)));
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         app
     }
 
@@ -582,14 +582,14 @@ mod tests {
         }
         ctrl(&mut app, 'o');
         assert!(matches!(app.mode, Mode::ConfirmOpen(_)));
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         app
     }
 
     #[test]
     fn the_buttons_are_recorded_where_they_are_drawn() {
         let mut app = app_confirming();
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         let drawn: Vec<String> = app
             .drawn
             .buttons
@@ -616,7 +616,7 @@ mod tests {
     fn clicking_cancel_closes_the_confirm_dialog() {
         let mut app = app_confirming();
         click_button(&mut app, 2);
-        assert!(matches!(app.mode, Mode::List));
+        assert_list_mode(&app);
         assert!(app.approvals_to_run().is_empty());
     }
 
@@ -624,12 +624,12 @@ mod tests {
     fn clicking_open_or_cancel_answers_the_open_dialog() {
         let mut app = app_confirming_open();
         click_button(&mut app, 0);
-        assert!(matches!(app.mode, Mode::List));
+        assert_list_mode(&app);
         assert_eq!(app.opens_to_run(), [1, 2, 3, 4, 5, 6]);
 
         let mut app = app_confirming_open();
         click_button(&mut app, 1);
-        assert!(matches!(app.mode, Mode::List));
+        assert_list_mode(&app);
         assert!(app.opens_to_run().is_empty());
     }
 
@@ -637,19 +637,19 @@ mod tests {
     fn clicking_ok_closes_the_help_and_results_popups() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "?");
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert_eq!(app.drawn.buttons.len(), 1);
         click_button(&mut app, 0);
-        assert!(matches!(app.mode, Mode::List));
+        assert_list_mode(&app);
 
         let mut app = app_confirming();
         click_button(&mut app, 0);
         // `q` cancels the running batch, which shows the results.
         press(&mut app, "q");
         assert!(matches!(app.mode, Mode::Results(_)));
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         click_button(&mut app, 0);
-        assert!(matches!(app.mode, Mode::List));
+        assert_list_mode(&app);
     }
 
     #[test]
@@ -671,7 +671,7 @@ mod tests {
         // Nor does a click behind it reach the panes.
         let diff = Position::new(app.drawn.areas.diff.x + 2, app.drawn.areas.diff.y + 1);
         press_at(&mut app, diff);
-        assert!(app.focus == Pane::Table);
+        assert_eq!(app.focus, Pane::Table);
     }
 
     #[test]
@@ -686,7 +686,7 @@ mod tests {
     fn a_click_does_nothing_while_a_batch_runs() {
         let mut app = app_confirming();
         click_button(&mut app, 0);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert!(app.drawn.buttons.is_empty());
         for position in [Position::new(80, 20), Position::new(0, 0)] {
             press_at(&mut app, position);
@@ -699,7 +699,7 @@ mod tests {
         let mut app = app_confirming();
         assert!(!app.drawn.buttons.is_empty());
         press(&mut app, "q");
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert!(app.drawn.buttons.is_empty());
     }
 
@@ -759,7 +759,7 @@ mod tests {
         assert_eq!(app.drawn.popup.offset, 0);
         // The popup still closes.
         key(&mut app, KeyCode::Esc);
-        assert!(matches!(app.mode, Mode::List));
+        assert_list_mode(&app);
     }
 
     #[test]
@@ -848,10 +848,10 @@ mod tests {
             assert!(screen.contains("OK"), "{screen}");
             // It closes with e or Esc.
             press(&mut app, "e");
-            assert!(matches!(app.mode, Mode::List));
+            assert_list_mode(&app);
             press(&mut app, "e");
             key(&mut app, KeyCode::Esc);
-            assert!(matches!(app.mode, Mode::List));
+            assert_list_mode(&app);
         }
     }
 
@@ -859,7 +859,7 @@ mod tests {
     fn e_with_nothing_failed_says_so_and_opens_nothing() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "e");
-        assert!(matches!(app.mode, Mode::List));
+        assert_list_mode(&app);
         assert!(status_bar(&mut app, 160, 30).contains("Nothing has failed"));
     }
 }

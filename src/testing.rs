@@ -3,7 +3,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::{Value, json};
 
-use crate::app::{App, ChecksLayout, CommentLayout, Msg};
+use crate::app::{App, ChecksLayout, CommentLayout, Mode, Msg};
 use crate::gh::{Pr, PrDetails};
 
 /// Builds a `Pr` as gh lists it. `PrBuilder::new(number)` is an open, mergeable PR titled "t" by
@@ -228,4 +228,12 @@ pub fn with_check_rows(app: &mut App, count: usize, first: usize, viewport: usiz
         first,
         viewport,
     };
+}
+
+/// Asserts that no dialog is open.
+pub fn assert_list_mode(app: &App) {
+    assert!(
+        matches!(app.mode, Mode::List),
+        "a dialog is open, not the list"
+    );
 }

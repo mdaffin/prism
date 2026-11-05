@@ -24,10 +24,10 @@ const MAX_DIFF_FETCHES: usize = 4;
 pub(super) const MAX_CACHED_DIFFS: usize = 30;
 
 /// The most approvals to run at once.
-const MAX_APPROVALS: usize = 4;
+pub(super) const MAX_APPROVALS: usize = 4;
 
 /// The most row refreshes to run at once.
-const MAX_REFRESHES: usize = 4;
+pub(super) const MAX_REFRESHES: usize = 4;
 
 /// Tells one fetch from another for the same PR. A result that arrives after its entry was
 /// dropped, perhaps for a newer fetch, no longer has the id of the entry and is dropped too.

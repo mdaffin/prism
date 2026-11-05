@@ -131,7 +131,7 @@ fn enter_in_the_checks_opens_the_highlighted_check_like_o() {
     focus(&mut app, Pane::Checks);
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.pages_to_run(), ["https://example.test/job"]);
-    assert!(matches!(app.mode, Mode::List));
+    assert_list_mode(&app);
 
     // The second check has no page.
     press(&mut app, "j");
@@ -163,7 +163,7 @@ fn enter_in_the_comments_expands_the_highlighted_comment() {
     focus(&mut app, Pane::Comments);
     key(&mut app, KeyCode::Enter);
     assert!(app.scroll.comments_open.contains(&0));
-    assert!(matches!(app.mode, Mode::List));
+    assert_list_mode(&app);
     key(&mut app, KeyCode::Enter);
     assert!(!app.scroll.comments_open.contains(&0));
 }

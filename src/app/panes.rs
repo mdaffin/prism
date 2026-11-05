@@ -68,7 +68,7 @@ pub enum Pane {
 
 impl Pane {
     /// Every pane, in the order Tab cycles through them.
-    const ORDER: [Pane; 6] = [
+    pub(super) const ORDER: [Pane; 6] = [
         Pane::Table,
         Pane::Checks,
         Pane::Comments,

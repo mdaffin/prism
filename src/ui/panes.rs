@@ -769,17 +769,17 @@ mod tests {
         let mut app = one_of_each();
         // The conflicting PR is last.
         press(&mut app, "jjjj");
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         let screen = lines(&buffer);
 
         let conflict = find(&buffer, "Merge conflict").unwrap();
-        let status = Position::new(conflict.x - 11, conflict.y);
+        let status = Position::new(conflict.x - (CHECK_STATUS_WIDTH + 1), conflict.y);
         assert!(screen[usize::from(status.y)].contains("✗ conflict"));
         assert_eq!(buffer[status].fg, Color::Red);
         // Above the check that passed, which is the only other row.
         let build = find(&buffer, "CI/build").unwrap();
         assert!(build.y > conflict.y);
-        let passed = Position::new(build.x - 11, build.y);
+        let passed = Position::new(build.x - (CHECK_STATUS_WIDTH + 1), build.y);
         assert!(screen[usize::from(passed.y)].contains("✓ passing"));
         assert_eq!(buffer[passed].fg, Color::Green);
     }
@@ -787,7 +787,7 @@ mod tests {
     #[test]
     fn a_conflict_with_no_checks_still_shows_the_conflict() {
         let mut app = app_with(vec![pr_checked(1, "CONFLICTING", vec![])]);
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         assert!(find(&buffer, "Merge conflict").is_some());
         assert!(find(&buffer, "No checks.").is_none());
     }
@@ -839,7 +839,7 @@ mod tests {
             ],
             details,
         );
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         app
     }
 
@@ -872,7 +872,7 @@ mod tests {
         assert_eq!(app.copy_to_run().as_deref(), Some(body.as_str()));
         assert!(status_bar(&mut app, 160, 30).contains("Copied"));
         // The cells under the drag are drawn reversed, the others are not.
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         let first = text_cell(&view, 0, 0);
         assert!(reversed(&buffer, first));
         // The border is never in it.
@@ -896,8 +896,8 @@ mod tests {
         // Esc clears the selection, and then `y` is the URL's.
         key(&mut app, KeyCode::Esc);
         assert!(app.selection().is_none());
-        draw(&mut app, 200, 40);
-        let buffer = draw(&mut app, 200, 40);
+        draw_wide(&mut app);
+        let buffer = draw_wide(&mut app);
         assert!(
             !buffer[text_cell(&view, 0, 6)]
                 .modifier
@@ -937,7 +937,7 @@ mod tests {
             Position::new(area.x + 3, area.y + 1)
         };
         press_at(&mut app, header);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let view = app.drawn.comment_text.clone();
         assert!(view.rows[0].header && view.rows.len() > 1);
         // From the body: the text is selected.
@@ -980,20 +980,20 @@ mod tests {
             1,
             Ok("@@ -1,2 +1,2 @@\n context line\n-removed line\n+added line\n".to_string()),
         );
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let view = app.drawn.diff_text.clone();
         assert_eq!(view.rows.len(), 4);
         // From the middle of the second line to the end of the fourth.
         press_at(&mut app, text_cell(&view, 1, 9));
         drag_to(&mut app, text_cell(&view, 3, 30));
         release_at(&mut app, text_cell(&view, 3, 30));
-        assert!(app.focus == Pane::Diff);
+        assert_eq!(app.focus, Pane::Diff);
         assert_eq!(
             app.copy_to_run().as_deref(),
             Some("line\n-removed line\n+added line")
         );
         // Drawn reversed where it was selected, and `y` copies it again.
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         assert!(
             buffer[text_cell(&view, 2, 0)]
                 .modifier
@@ -1013,13 +1013,13 @@ mod tests {
         let mut app = app_with_text("body", "");
         let long = format!("+{}END", "x".repeat(300));
         app.diff_loaded(1, Ok(format!("{long}\n+short")));
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let width = app.drawn.diff_text.inner.width;
         // Scroll to the end, where only the tail of the long line is on screen.
         for _ in 0..200 {
             app.focus = Pane::Diff;
             press(&mut app, "l");
-            draw(&mut app, 200, 40);
+            draw_wide(&mut app);
         }
         let view = app.drawn.diff_text.clone();
         assert!(view.hscroll > 100, "{}", view.hscroll);
@@ -1028,7 +1028,7 @@ mod tests {
         release_at(&mut app, text_cell(&view, 0, width - 1));
         assert_eq!(app.copy_to_run().as_deref(), Some("END"));
         // The reversed cells are under the pointer, not at the start of the line.
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         assert!(
             buffer[text_cell(&view, 0, width - 1)]
                 .modifier
@@ -1044,7 +1044,7 @@ mod tests {
     #[test]
     fn a_failed_or_loading_diff_has_nothing_to_select() {
         let mut app = app_with_text("body", "");
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let inner = app.drawn.areas.diff;
         press_at(&mut app, Position::new(inner.x + 2, inner.y + 1));
         drag_to(&mut app, Position::new(inner.x + 9, inner.y + 1));
@@ -1062,7 +1062,7 @@ mod tests {
         let below = Position::new(view.inner.x + 2, view.inner.bottom() + 1);
         for _ in 0..5 {
             drag_to(&mut app, below);
-            draw(&mut app, 200, 40);
+            draw_wide(&mut app);
         }
         assert_eq!(app.scroll.description, 5);
         release_at(&mut app, below);
@@ -1076,7 +1076,7 @@ mod tests {
         let mut app = app_with_long_panes();
         app.focus = Pane::Checks;
         press(&mut app, "jj");
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         assert_eq!(app.scroll.check, 2);
         // The first row under the header is check 0; the highlight is on the third.
         let checks = app.drawn.areas.checks;
@@ -1088,11 +1088,11 @@ mod tests {
         assert!(!reversed(0) && !reversed(1) && reversed(2));
 
         // It stays through redraws, and goes back to the first when the PR changes.
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert_eq!(app.scroll.check, 2);
         app.focus = Pane::Table;
         press(&mut app, "j");
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert_eq!(app.scroll.check, 0);
     }
 
@@ -1103,7 +1103,7 @@ mod tests {
         let body = format!("Some prose\n\n| Name | Value |\n|---|---|\n| first | {wide}END |");
         let details = pr_details(&body, serde_json::json!([]));
         app.details_loaded(1, Ok(details));
-        let screen = lines(&draw(&mut app, 200, 40));
+        let screen = lines(&draw_wide(&mut app));
         assert!(shows(&screen, "scroll tables"));
         assert!(!shows(&screen, "END"));
 
@@ -1111,13 +1111,13 @@ mod tests {
         for _ in 0..20 {
             press(&mut app, "l");
         }
-        let screen = lines(&draw(&mut app, 200, 40));
+        let screen = lines(&draw_wide(&mut app));
         assert!(shows(&screen, "END"));
         // The prose stays where it was, and the scroll stops at the table's end.
         assert!(shows(&screen, "Some prose"));
         let at_end = app.scroll.description_x;
         press(&mut app, "l");
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert_eq!(app.scroll.description_x, at_end);
 
         // And it scrolls back.
@@ -1246,13 +1246,13 @@ mod tests {
     #[test]
     fn the_approvers_pane_says_when_there_is_nothing_and_while_it_loads() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        let screen = lines(&draw(&mut app, 200, 40));
+        let screen = lines(&draw_wide(&mut app));
         assert!(shows(&screen, "Loading…"));
         app.details_loaded(1, Ok(details_with_approvers(serde_json::json!({}))));
-        let screen = lines(&draw(&mut app, 200, 40));
+        let screen = lines(&draw_wide(&mut app));
         assert!(shows(&screen, "No reviews or review requests."));
         app.details_loaded(1, Err(color_eyre::eyre::eyre!("boom")));
-        let screen = lines(&draw(&mut app, 200, 40));
+        let screen = lines(&draw_wide(&mut app));
         assert!(shows(&screen, "Failed to load details: boom"));
     }
 
@@ -1265,12 +1265,12 @@ mod tests {
                 serde_json::json!({"requests": requests("user", 30)}),
             )),
         );
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         assert!(has_scrollbar(&buffer, app.drawn.areas.approvers));
         assert!(find(&buffer, "@user0 ").is_some() && find(&buffer, "@user29 ").is_none());
         focus(&mut app, Pane::Approvers);
         key(&mut app, KeyCode::End);
-        let screen = lines(&draw(&mut app, 200, 40));
+        let screen = lines(&draw_wide(&mut app));
         assert!(shows(&screen, "@user29 "));
         assert!(!shows(&screen, "@user0 "));
     }
@@ -1297,7 +1297,7 @@ mod tests {
         );
         app.details_loaded(1, Ok(details));
         app.focus = Pane::Comments;
-        let screen = lines(&draw(&mut app, 200, 40));
+        let screen = lines(&draw_wide(&mut app));
         let has = |text: &str| shows(&screen, text);
         assert!(has("▶ @alice · "));
         assert!(!has("@alice · approved"));
@@ -1308,7 +1308,7 @@ mod tests {
 
         // Opening the thread shows the first comment, then each reply under who wrote it.
         press(&mut app, "jj ");
-        let screen = lines(&draw(&mut app, 200, 40));
+        let screen = lines(&draw_wide(&mut app));
         let has = |text: &str| shows(&screen, text);
         assert!(has("Why this?"));
         assert!(has("@dave · 2026-01-02 05:30"));
@@ -1328,12 +1328,12 @@ mod tests {
         app.details_loaded(1, Ok(details));
         app.focus = Pane::Comments;
         // Collapsed, there are only the headers.
-        let screen = lines(&draw(&mut app, 200, 40));
+        let screen = lines(&draw_wide(&mut app));
         assert!(shows(&screen, "▶ @someone"));
         assert!(!shows(&screen, "Some bold prose"));
 
         press(&mut app, "j ");
-        let screen = lines(&draw(&mut app, 200, 40));
+        let screen = lines(&draw_wide(&mut app));
         assert!(shows(&screen, "▼ @someone"));
         assert!(shows(&screen, "Some bold prose"));
         assert!(!shows(&screen, "END"));
@@ -1341,12 +1341,12 @@ mod tests {
         for _ in 0..20 {
             press(&mut app, "l");
         }
-        let screen = lines(&draw(&mut app, 200, 40));
+        let screen = lines(&draw_wide(&mut app));
         assert!(shows(&screen, "END"));
 
         // Collapsing hides it again.
         press(&mut app, " ");
-        let screen = lines(&draw(&mut app, 200, 40));
+        let screen = lines(&draw_wide(&mut app));
         assert!(!shows(&screen, "Some bold prose"));
     }
 
@@ -1360,8 +1360,8 @@ mod tests {
         press_at(&mut app, header(1));
         assert_eq!(app.scroll.comment, 1);
         assert!(app.scroll.comments_open.contains(&1));
-        assert!(app.focus == Pane::Comments);
-        draw(&mut app, 200, 40);
+        assert_eq!(app.focus, Pane::Comments);
+        draw_wide(&mut app);
         // The body is under the header now, and a click on it does nothing more.
         press_at(&mut app, header(2));
         assert_eq!(app.scroll.comment, 1);
@@ -1380,12 +1380,12 @@ mod tests {
         let comments = app.drawn.areas.comments;
         press_at(&mut app, Position::new(comments.x + 2, comments.y + 1));
         assert!(app.scroll.comments_open.contains(&0));
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         // Scroll to the end, where the pane's scroll has been clamped, so the second comment's
         // header is some way down the pane.
         let second = app.drawn.comment_layout.items[1].0;
         app.scroll.comments = u16::MAX;
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let row = u16::try_from(second).unwrap() - app.scroll.comments;
         assert!(row > 0);
         press_at(
@@ -1404,14 +1404,14 @@ mod tests {
         press_at(&mut app, Position::new(checks.x + 2, checks.y + 3));
         assert_eq!(app.scroll.check, 1);
         app.scroll.checks = 5;
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         press_at(&mut app, Position::new(checks.x + 2, checks.y + 2));
         assert_eq!(app.scroll.check, 5);
         // The border and the header highlight nothing.
         press_at(&mut app, Position::new(checks.x + 2, checks.y));
         press_at(&mut app, Position::new(checks.x + 2, checks.y + 1));
         assert_eq!(app.scroll.check, 5);
-        assert!(app.focus == Pane::Checks);
+        assert_eq!(app.focus, Pane::Checks);
     }
 
     #[test]
@@ -1421,7 +1421,7 @@ mod tests {
         key(&mut app, KeyCode::Tab);
         key(&mut app, KeyCode::Tab);
         press(&mut app, " ");
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         let areas = &app.drawn.areas;
         for (name, area) in [
             ("checks", areas.checks),
@@ -1436,7 +1436,7 @@ mod tests {
     #[test]
     fn a_pane_whose_text_fits_has_no_scrollbar() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         let areas = &app.drawn.areas;
         for (name, area) in [
             ("table", areas.table),
@@ -1452,7 +1452,7 @@ mod tests {
     #[test]
     fn the_scrollbar_thumb_moves_to_the_bottom_with_the_scroll() {
         let mut app = app_with_long_panes();
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         let diff = app.drawn.areas.diff;
         let at_top = thumb(&buffer, diff, Axis::Vertical);
         assert_eq!(at_top.first(), Some(&(diff.y + 1)));
@@ -1462,7 +1462,7 @@ mod tests {
             key(&mut app, KeyCode::Tab);
         }
         key(&mut app, KeyCode::End);
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         let at_bottom = thumb(&buffer, diff, Axis::Vertical);
         assert_eq!(at_bottom.last(), Some(&(diff.bottom() - 2)));
         assert!(at_bottom.first() > Some(&(diff.y + 1)));
@@ -1529,7 +1529,7 @@ mod tests {
         let mut app = app_with(vec![by("alice", 1, &title), by("bob", 2, "Short")]);
         app.diff_loaded(1, Ok(format!("+{}", "x".repeat(300))));
         app.diff_loaded(2, Ok("+short".to_string()));
-        let buffer = draw(&mut app, 100, 40);
+        let buffer = draw_narrow(&mut app);
         let areas = &app.drawn.areas;
         assert!(has_horizontal_scrollbar(&buffer, areas.table));
         assert!(has_horizontal_scrollbar(&buffer, areas.diff));
@@ -1538,7 +1538,7 @@ mod tests {
 
         // The second PR's diff fits; the list still has the first PR's long title.
         press(&mut app, "j");
-        let buffer = draw(&mut app, 100, 40);
+        let buffer = draw_narrow(&mut app);
         assert!(!has_horizontal_scrollbar(&buffer, app.drawn.areas.diff));
         assert!(has_horizontal_scrollbar(&buffer, app.drawn.areas.table));
     }
@@ -1551,7 +1551,7 @@ mod tests {
             "MERGEABLE",
             vec![run(&name, "COMPLETED", "SUCCESS")],
         )]);
-        let buffer = draw(&mut app, 100, 40);
+        let buffer = draw_narrow(&mut app);
         assert!(has_horizontal_scrollbar(&buffer, app.drawn.areas.checks));
     }
 
@@ -1559,7 +1559,7 @@ mod tests {
     fn no_pane_has_a_horizontal_scrollbar_when_its_text_fits() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         app.diff_loaded(1, Ok("+added".to_string()));
-        let buffer = draw(&mut app, 100, 40);
+        let buffer = draw_narrow(&mut app);
         let areas = &app.drawn.areas;
         for (name, area) in [
             ("table", areas.table),
@@ -1575,7 +1575,7 @@ mod tests {
     fn the_horizontal_thumb_moves_from_the_left_end_to_the_right_end() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         app.diff_loaded(1, Ok(format!("+{}", "x".repeat(300))));
-        let buffer = draw(&mut app, 100, 40);
+        let buffer = draw_narrow(&mut app);
         let diff = app.drawn.areas.diff;
         let at_start = thumb(&buffer, diff, Axis::Horizontal);
         assert_eq!(at_start.first(), Some(&(diff.x + 1)));
@@ -1585,7 +1585,7 @@ mod tests {
         for _ in 0..60 {
             key(&mut app, KeyCode::Right);
         }
-        let buffer = draw(&mut app, 100, 40);
+        let buffer = draw_narrow(&mut app);
         let at_end = thumb(&buffer, diff, Axis::Horizontal);
         assert_eq!(at_end.last(), Some(&(diff.right() - 2)));
         assert!(at_end.first() > Some(&(diff.x + 1)));
@@ -1622,7 +1622,7 @@ mod tests {
                 ["https://a.example/n"],
                 "{text}"
             );
-            assert!(app.focus == Pane::Description);
+            assert_eq!(app.focus, Pane::Description);
         }
     }
 
@@ -1649,7 +1649,7 @@ mod tests {
             vec!["line"; 80].join("\n\n")
         );
         let mut app = app_with_bodies(&body, None);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         focus(&mut app, Pane::Description);
         key(&mut app, KeyCode::End);
         assert_eq!(
@@ -1663,7 +1663,7 @@ mod tests {
         let url = "https://a.example/a/very/long/path/that/cannot/fit/on/one/row";
         let mut app = app_with_bodies(&format!("[{url}]({url})"), None);
         // The pane is under 60 columns wide.
-        let buffer = draw(&mut app, 100, 40);
+        let buffer = draw_narrow(&mut app);
         let description = app.drawn.areas.description;
         assert!(find(&buffer, url).is_none(), "it is wrapped");
         // Every row inside the pane that has text is the link.
@@ -1687,11 +1687,11 @@ mod tests {
     fn a_link_in_a_table_still_opens_when_the_table_is_scrolled_sideways() {
         let body = "| Package | Change |\n|---|---|\n| [lib](https://a.example/l) | a long cell to make the table wider than the pane it is in |";
         let mut app = app_with_bodies(body, None);
-        draw(&mut app, 100, 40);
+        draw_narrow(&mut app);
         focus(&mut app, Pane::Description);
         assert_eq!(click_text(&mut app, 100, "lib"), ["https://a.example/l"]);
         key(&mut app, KeyCode::Right);
-        draw(&mut app, 100, 40);
+        draw_narrow(&mut app);
         assert!(app.scroll.description_x > 0);
         assert_eq!(
             click_text(&mut app, 100, "a.example/l"),
@@ -1702,7 +1702,7 @@ mod tests {
     #[test]
     fn a_click_on_a_link_in_an_open_comment_opens_it_without_toggling_the_comment() {
         let mut app = app_with_bodies("desc", Some("Look at [this](https://a.example/c1) one."));
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         focus(&mut app, Pane::Comments);
         press(&mut app, " ");
         assert_eq!(click_text(&mut app, 200, "this"), ["https://a.example/c1"]);
@@ -1712,7 +1712,7 @@ mod tests {
     #[test]
     fn a_click_on_a_comments_header_still_toggles_it_and_a_collapsed_comment_has_no_links() {
         let mut app = app_with_bodies("desc", Some("Look at [this](https://a.example/c1) one."));
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         assert!(find(&buffer, "this").is_none());
         let header = find(&buffer, "@someone").unwrap();
         press_at(&mut app, header);
@@ -1746,7 +1746,7 @@ mod tests {
     #[test]
     fn clicks_do_nothing_with_links_when_the_details_have_not_loaded() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         let description = app.drawn.areas.description;
         assert!(find(&buffer, "Loading").is_some());
         press_at(
@@ -1760,7 +1760,7 @@ mod tests {
     fn a_failed_details_fetch_shows_gh_s_first_line_in_the_comments_and_description() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         app.details_loaded(1, Err(gh_failure()));
-        let screen = lines(&draw(&mut app, 200, 40)).join("\n");
+        let screen = lines(&draw_wide(&mut app)).join("\n");
         // Once in each of the Comments, Approvers and Description panes.
         let message = "Failed to load details: GraphQL: Could not resolve to a PullRequest";
         assert_eq!(screen.matches(message).count(), 3, "{screen}");

@@ -1,9 +1,9 @@
-use super::work::StatusFetch;
+use super::work::{MAX_APPROVALS, MAX_REFRESHES, StatusFetch};
 use super::*;
 use crate::gh::{PrStatus, ReviewDecision};
 use crate::testing::{
-    PrBuilder, app_with, ctrl, ctrl_enter, ctrl_g, key, passing_run, pr_details, press,
-    refresh_and_load, search_and_load, select_rows, status_context, with_check_rows,
+    PrBuilder, app_with, assert_list_mode, ctrl, ctrl_enter, ctrl_g, key, passing_run, pr_details,
+    press, refresh_and_load, search_and_load, select_rows, status_context, with_check_rows,
     with_comment_rows,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -34,7 +34,7 @@ fn numbers(app: &App) -> Vec<u64> {
 
 /// Presses Tab until `pane` has focus.
 pub(super) fn focus(app: &mut App, pane: Pane) {
-    for _ in 0..5 {
+    for _ in 0..Pane::ORDER.len() {
         if app.focus == pane {
             return;
         }
@@ -131,6 +131,22 @@ pub(super) fn confirm(app: &App) -> &Confirm {
     match &app.mode {
         Mode::Confirm(confirm) => confirm,
         _ => panic!("the confirm dialog isn't open"),
+    }
+}
+
+/// The batch that is running.
+pub(super) fn running(app: &App) -> &Batch {
+    match &app.mode {
+        Mode::Running(batch) => batch,
+        _ => panic!("no batch is running"),
+    }
+}
+
+/// The results of a batch that has finished.
+pub(super) fn results(app: &App) -> &Summary {
+    match &app.mode {
+        Mode::Results(summary) => summary,
+        _ => panic!("the results aren't shown"),
     }
 }
 

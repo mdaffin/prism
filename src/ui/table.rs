@@ -668,7 +668,7 @@ mod tests {
         assert!(row("#3") < row("#9"));
         // The highlight stayed on the PR it was on, which was the first listed.
         assert_eq!(app.highlighted().unwrap().pr.number, 9);
-        assert!(app.focus == Pane::Table);
+        assert_eq!(app.focus, Pane::Table);
     }
 
     #[test]
@@ -761,11 +761,11 @@ mod tests {
     fn hiding_the_number_unfreezes_it_and_the_checkbox_alone_stays() {
         let mut app = app_with_a_long_title();
         app.toggle_column(Column::Number);
-        draw(&mut app, 100, 40);
+        draw_narrow(&mut app);
         for _ in 0..8 {
             press(&mut app, "l");
         }
-        draw(&mut app, 100, 40);
+        draw_narrow(&mut app);
         let table = app.drawn.areas.table;
         assert!(app.list_x > 0);
         for (area, sort) in &app.drawn.areas.table_header {
@@ -799,7 +799,7 @@ mod tests {
         press(&mut app, "s");
         assert!(matches!(app.mode, Mode::PickColumns(_)));
         key(&mut app, KeyCode::Esc);
-        assert!(matches!(app.mode, Mode::List));
+        assert_list_mode(&app);
     }
 
     #[test]
@@ -886,13 +886,13 @@ mod tests {
     #[test]
     fn the_headers_follow_a_table_that_scrolls_sideways_and_stay_clear_of_the_frozen_columns() {
         let mut app = app_with_a_long_title();
-        draw(&mut app, 100, 40);
+        draw_narrow(&mut app);
         let before = app.drawn.areas.table_header.clone();
         let number = before.iter().find(|(_, s)| *s == Sort::Number).unwrap().0;
         for _ in 0..8 {
             press(&mut app, "l");
         }
-        draw(&mut app, 100, 40);
+        draw_narrow(&mut app);
         assert!(app.list_x > 0);
         let table = app.drawn.areas.table;
         let after = &app.drawn.areas.table_header;
@@ -1207,7 +1207,7 @@ mod tests {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "c");
         press(&mut app, "(?<a>x)");
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let area = app.drawn.areas.columns;
         press_at(&mut app, Position::new(area.x + 1 + 2, area.y + 1));
         assert!(app.typing == Typing::Columns);
@@ -1258,7 +1258,7 @@ mod tests {
         // Only the 20 even PRs are shown; the table is too short to show them all.
         press(&mut app, "feven");
         key(&mut app, KeyCode::Enter);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         click_table_row(&mut app, 2, 5);
         assert_eq!(app.table.selected(), Some(2));
         assert_eq!(app.highlighted().unwrap().pr.number, 6);
@@ -1267,7 +1267,7 @@ mod tests {
         for _ in 0..30 {
             press(&mut app, "j");
         }
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let offset = app.drawn.areas.table_offset;
         assert!(offset > 0);
         click_table_row(&mut app, 0, 5);
@@ -1327,11 +1327,11 @@ mod tests {
     #[test]
     fn the_table_has_a_scrollbar_only_with_more_rows_than_fit() {
         let mut app = app_with((1..=80).map(|n| pr(n, "Bump", "OPEN", "")).collect());
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         assert!(has_scrollbar(&buffer, app.drawn.areas.table));
 
         press(&mut app, "f#80");
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         assert!(!has_scrollbar(&buffer, app.drawn.areas.table));
     }
 
@@ -1340,7 +1340,7 @@ mod tests {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "fbump");
         key(&mut app, KeyCode::Enter);
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         let search = app.drawn.areas.search;
         let filter = app.drawn.areas.filter;
         // Not being edited: nothing is cyan.
@@ -1348,7 +1348,7 @@ mod tests {
         assert_ne!(buffer[(filter.x, filter.y + 1)].fg, Color::Cyan);
 
         press(&mut app, "/");
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         assert_eq!(buffer[(search.x, search.y + 1)].fg, Color::Cyan);
         assert_eq!(buffer[(search.x + 1, search.y)].fg, Color::Cyan);
         assert_ne!(buffer[(search.x + 1, search.y + 1)].fg, Color::Cyan);
@@ -1356,7 +1356,7 @@ mod tests {
 
         key(&mut app, KeyCode::Esc);
         press(&mut app, "f");
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         assert_eq!(buffer[(filter.x, filter.y + 1)].fg, Color::Cyan);
         assert_ne!(buffer[(filter.x + 1, filter.y + 1)].fg, Color::Cyan);
         assert_ne!(buffer[(search.x, search.y + 1)].fg, Color::Cyan);
@@ -1366,7 +1366,7 @@ mod tests {
     fn the_suggestions_are_listed_under_the_word_with_the_chosen_one_reversed() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "/ la");
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         let search = app.drawn.areas.search;
         let label = find(&buffer, " label ").unwrap();
         // Inside the box's border, which starts under the word: "is:pr " is six columns.
@@ -1381,14 +1381,14 @@ mod tests {
         assert!(status.contains("Enter: Search | Tab/Up/Down: Choose"));
 
         key(&mut app, KeyCode::Tab);
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         assert!(reversed(&buffer, label));
         assert!(!reversed(&buffer, language));
         // Now the hints say Enter takes it.
         assert!(lines(&buffer).pop().unwrap().contains("Enter: Take"));
 
         key(&mut app, KeyCode::Tab);
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         assert!(!reversed(&buffer, label));
         assert!(reversed(&buffer, language));
     }
@@ -1400,7 +1400,7 @@ mod tests {
         for _ in 0..9 {
             key(&mut app, KeyCode::Down);
         }
-        let buffer = draw(&mut app, 200, 40);
+        let buffer = draw_wide(&mut app);
         let screen = lines(&buffer);
         // Ten values, eight rows: the ninth is highlighted at the bottom and the first has gone.
         assert!(find(&buffer, " interactions-desc ").is_some());
@@ -1421,14 +1421,14 @@ mod tests {
     #[test]
     fn the_list_scrolls_sideways_keeping_the_checkbox_and_number() {
         let mut app = app_with_a_long_title();
-        let buffer = draw(&mut app, 100, 40);
+        let buffer = draw_narrow(&mut app);
         let table = app.drawn.areas.table;
         assert!(!pane_row(&buffer, table, 1).contains("END"));
 
         for _ in 0..40 {
             key(&mut app, KeyCode::Right);
         }
-        let buffer = draw(&mut app, 100, 40);
+        let buffer = draw_narrow(&mut app);
         let row = pane_row(&buffer, table, 1);
         assert!(row.starts_with("[ ] #1 "), "the first columns stay: {row}");
         assert!(row.trim_end().ends_with("END"), "{row}");
@@ -1442,21 +1442,21 @@ mod tests {
         for _ in 0..40 {
             key(&mut app, KeyCode::Left);
         }
-        let buffer = draw(&mut app, 100, 40);
+        let buffer = draw_narrow(&mut app);
         assert!(pane_row(&buffer, table, 1).contains("alice"));
     }
 
     #[test]
     fn the_lists_scroll_stays_when_the_highlight_moves() {
         let mut app = app_with_a_long_title();
-        draw(&mut app, 100, 40);
+        draw_narrow(&mut app);
         for _ in 0..3 {
             key(&mut app, KeyCode::Right);
         }
         let x = app.list_x;
         assert!(x > 0);
         press(&mut app, "j");
-        draw(&mut app, 100, 40);
+        draw_narrow(&mut app);
         assert_eq!(app.list_x, x);
     }
 
@@ -1466,7 +1466,7 @@ mod tests {
         for _ in 0..5 {
             key(&mut app, KeyCode::Right);
         }
-        let buffer = draw(&mut app, 100, 40);
+        let buffer = draw_narrow(&mut app);
         assert_eq!(app.list_x, 0);
         assert!(pane_row(&buffer, app.drawn.areas.table, 1).contains("alice"));
     }
@@ -1485,7 +1485,7 @@ mod tests {
     #[test]
     fn a_click_on_the_search_box_edits_the_query_with_the_cursor_there() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         click_search(&mut app, 3);
         assert!(app.typing == Typing::Search);
         assert_eq!(app.query.cursor(), 3);
@@ -1497,14 +1497,14 @@ mod tests {
     #[test]
     fn a_click_on_the_filter_box_edits_the_filter_only_while_it_is_drawn() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert_eq!(app.drawn.areas.filter, Rect::default());
         press_at(&mut app, Position::new(2, 4));
         assert!(app.typing != Typing::Filter);
 
         press(&mut app, "fbump");
         key(&mut app, KeyCode::Enter);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert!(app.typing == Typing::Nothing);
         click_filter(&mut app, 2);
         assert!(app.typing == Typing::Filter);
@@ -1515,10 +1515,10 @@ mod tests {
     fn the_filter_box_has_no_area_once_it_is_emptied() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "fbump");
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert!(app.drawn.areas.filter != Rect::default());
         key(&mut app, KeyCode::Esc);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         assert_eq!(app.drawn.areas.filter, Rect::default());
     }
 
@@ -1526,7 +1526,7 @@ mod tests {
     fn a_click_on_the_other_box_switches_to_it() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "fbump");
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         click_search(&mut app, 0);
         assert!(app.typing == Typing::Search);
         assert_eq!(app.filter.value(), "bump");
@@ -1540,7 +1540,7 @@ mod tests {
             pr(1, "Bump alpha", "OPEN", ""),
             pr(2, "Bump beta", "OPEN", ""),
         ]);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         press(&mut app, "/");
         press(&mut app, " label:deps");
         click_table_row(&mut app, 1, 20);
@@ -1550,7 +1550,7 @@ mod tests {
         assert!(app.list_to_fetch().is_none(), "not submitted");
         // The click did what it does anywhere else.
         assert_eq!(app.highlighted().unwrap().pr.number, 2);
-        let screen = lines(&draw(&mut app, 200, 40));
+        let screen = lines(&draw_wide(&mut app));
         assert!(shows(&screen, "not searched"));
 
         // `/` resumes the same text, and Esc restores the searched query.
@@ -1558,7 +1558,7 @@ mod tests {
         assert_eq!(app.query.value(), "is:pr label:deps");
         key(&mut app, KeyCode::Esc);
         assert_eq!(app.query.value(), "is:pr");
-        let screen = lines(&draw(&mut app, 200, 40));
+        let screen = lines(&draw_wide(&mut app));
         assert!(!shows(&screen, "not searched"));
     }
 
@@ -1569,12 +1569,12 @@ mod tests {
             pr(2, "Update beta", "OPEN", ""),
         ]);
         press(&mut app, "fbump");
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         let diff = Position::new(app.drawn.areas.diff.x + 2, app.drawn.areas.diff.y + 1);
         press_at(&mut app, diff);
 
         assert!(app.typing == Typing::Nothing);
-        assert!(app.focus == Pane::Diff);
+        assert_eq!(app.focus, Pane::Diff);
         assert_eq!(app.filter.value(), "bump");
         assert_eq!(app.visible_rows().count(), 1);
     }
@@ -1582,7 +1582,7 @@ mod tests {
     #[test]
     fn ctrl_r_runs_the_submitted_query_not_the_unsearched_text() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        draw(&mut app, 200, 40);
+        draw_wide(&mut app);
         press(&mut app, "/");
         press(&mut app, " label:deps");
         // A click in the Comments pane, away from the table and the search box.
