@@ -129,9 +129,9 @@ mod tests {
     fn the_status_bar_shows_the_focused_panes_keys() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         for expected in [
-            "Enter: Review | o: Open | y: Copy | ?: Help",
-            "Enter, o: Open | y: Copy | ?: Help",
-            "Enter, Space: Expand | o: Open | y: Copy | ?: Help",
+            "o: Open | y: Copy | ?: Help",
+            "o: Open | y: Copy | ?: Help",
+            "Space: Expand | o: Open | y: Copy | ?: Help",
             "?: Help | /: Search",
             "?: Help | /: Search",
             "?: Help | /: Search",
@@ -177,7 +177,9 @@ mod tests {
         tab(&mut app, 1);
         let bar = status_bar(&mut app, 160, 30);
         assert!(
-            bar.contains("Enter, o: Open | y: Copy | ?: Help | /: Search | q: Quit | https://example.test/job"),
+            bar.contains(
+                "o: Open | y: Copy | ?: Help | /: Search | q: Quit | https://example.test/job"
+            ),
             "{bar}"
         );
 
@@ -206,7 +208,7 @@ mod tests {
         tab(&mut app, 2);
         let bar = status_bar(&mut app, 160, 30);
         assert!(
-            bar.contains("Enter, Space: Expand | o: Open | y: Copy | ?: Help | /: Search | q: Quit | https://example.test/pull/1#issuecomment-1"),
+            bar.contains("Space: Expand | o: Open | y: Copy | ?: Help | /: Search | q: Quit | https://example.test/pull/1#issuecomment-1"),
             "{bar}"
         );
         // `o` still opens the PR for a comment with no page of its own.
@@ -214,9 +216,7 @@ mod tests {
         press(&mut app, "j");
         let bar = status_bar(&mut app, 160, 30);
         assert!(
-            bar.contains(
-                "Enter, Space: Expand | ?: Help | /: Search | q: Quit | No page, o opens the PR"
-            ),
+            bar.contains("Space: Expand | ?: Help | /: Search | q: Quit | No page, o opens the PR"),
             "{bar}"
         );
         assert!(!bar.contains("o: Open"), "{bar}");
@@ -247,7 +247,7 @@ mod tests {
         );
         // Narrower still: the other hints go, `o` stays.
         let bar = status_bar(&mut app, 50, 30);
-        assert!(bar.contains("…") && bar.contains("Enter, o: Open"), "{bar}");
+        assert!(bar.contains("…") && bar.contains("o: Open"), "{bar}");
         assert!(!bar.contains("?: Help"), "{bar}");
         assert!(bar.chars().count() <= 50, "{bar}");
     }
@@ -258,7 +258,7 @@ mod tests {
         tab(&mut app, 1);
         press(&mut app, "y");
         let bar = status_bar(&mut app, 160, 30);
-        assert!(bar.starts_with("Copied the URL | Enter, o: Open"), "{bar}");
+        assert!(bar.starts_with("Copied the URL | o: Open"), "{bar}");
         press(&mut app, "k");
         assert!(!status_bar(&mut app, 160, 30).contains("Copied"));
     }

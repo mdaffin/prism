@@ -316,8 +316,6 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('o') => self.open_selected(),
-                // Ctrl-Enter reaches us only from a terminal with the kitty keyboard protocol.
-                KeyCode::Char('g') | KeyCode::Enter => self.review_selected(),
                 KeyCode::Char('a') => self.select_passing(),
                 KeyCode::Char('r') => self.refresh_list(),
                 _ => {}
@@ -370,7 +368,7 @@ impl App {
             KeyCode::End => self.jump_focused(true),
             KeyCode::Char(' ') if self.focus == Pane::Comments => self.toggle_comment(),
             KeyCode::Char(' ') => self.toggle_selected(),
-            KeyCode::Enter => self.enter_focused(),
+            KeyCode::Enter => self.review_selected(),
             _ => {}
         }
     }

@@ -126,49 +126,6 @@ fn o_does_nothing_in_the_description_and_the_diff() {
 }
 
 #[test]
-fn enter_in_the_checks_opens_the_highlighted_check_like_o() {
-    let mut app = app_with_check_pages();
-    focus(&mut app, Pane::Checks);
-    key(&mut app, KeyCode::Enter);
-    assert_eq!(app.pages_to_run(), ["https://example.test/job"]);
-    assert_list_mode(&app);
-
-    // The second check has no page.
-    press(&mut app, "j");
-    key(&mut app, KeyCode::Enter);
-    assert!(app.pages_to_run().is_empty());
-    assert_eq!(
-        app.errors.text().as_deref(),
-        Some("The highlighted check has no page")
-    );
-}
-
-#[test]
-fn enter_does_nothing_in_the_description_and_the_diff() {
-    let mut app = app_with_rows(2);
-    press(&mut app, " ");
-    for pane in [Pane::Description, Pane::Diff] {
-        focus(&mut app, pane);
-        key(&mut app, KeyCode::Enter);
-        assert!(matches!(app.mode, Mode::List), "{pane:?}");
-        assert!(app.opens_to_run().is_empty(), "{pane:?}");
-        assert!(app.pages_to_run().is_empty(), "{pane:?}");
-    }
-}
-
-#[test]
-fn enter_in_the_comments_expands_the_highlighted_comment() {
-    let mut app = app_with_rows(1);
-    with_comment_rows(&mut app, &[1, 1]);
-    focus(&mut app, Pane::Comments);
-    key(&mut app, KeyCode::Enter);
-    assert!(app.scroll.comments_open.contains(&0));
-    assert_list_mode(&app);
-    key(&mut app, KeyCode::Enter);
-    assert!(!app.scroll.comments_open.contains(&0));
-}
-
-#[test]
 fn y_in_the_table_copies_the_highlighted_prs_url() {
     let mut app = app_with_rows(3);
     press(&mut app, " j");

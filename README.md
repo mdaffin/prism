@@ -117,8 +117,8 @@ a workflow whose newest run was cancelled before reporting anything, even if an 
 
 ## Approving and merging
 
-Select PRs with `Space` (or `Ctrl-A` for every visible PR with passing checks), then press `Ctrl-G`
-(or `Enter` to review just the highlighted PR). A dialog lists the PRs and offers
+Select PRs with `Space` (or `Ctrl-A` for every visible PR with passing checks), then press `Enter`.
+A dialog lists the PRs and offers
 **Approve**, **Approve & merge** or **Cancel**; closed and merged PRs that were selected are left
 out.
 
@@ -135,7 +135,7 @@ out.
 
 ## Shortcuts
 
-Press `?` in the program for the same list. Enter, `o` and `y` act on the highlighted item of the
+Press `?` in the program for the same list. `o` and `y` act on the highlighted item of the
 focused pane; the Ctrl-keys work from any pane and act on the selected PRs.
 
 <!-- keys:start -->
@@ -160,8 +160,7 @@ focused pane; the Ctrl-keys work from any pane and act on the selected PRs.
 | `Home/End` | Everywhere | Jump to the first or last item, or the top or bottom of a pane |
 | `Space` | Everywhere | Toggle selection (not in the comments) |
 | `Ctrl-O` | Everywhere | Open the selected PRs in the browser, asking first for more than five |
-| `Ctrl-G` | Everywhere | Review the selected PRs |
-| `Ctrl-Enter` | Everywhere | Like Ctrl-G, in a terminal with the kitty keyboard protocol (kitty, WezTerm, Ghostty, iTerm2); elsewhere it is Enter |
+| `Enter` | Everywhere | Review the selected PRs |
 | `Ctrl-A` | Everywhere | Select every visible PR with passing checks |
 | `Ctrl-R` | Everywhere | Run the query again, keeping the selection |
 | `p` | Everywhere | Pause or resume the timed refresh, which also pauses while the terminal is out of focus |
@@ -171,15 +170,14 @@ focused pane; the Ctrl-keys work from any pane and act on the selected PRs.
 | `Ctrl-C` | Everywhere | Quit from anywhere |
 | `Search box: Tab, Down` | Everywhere | Choose the next suggestion, the first to begin with; Enter takes the chosen one |
 | `Search box: Shift-Tab, Up` | Everywhere | Choose the previous suggestion; without a list, Up goes through the queries searched before |
-| `Enter` | Pull requests | Review the highlighted PR |
 | `o` | Pull requests | Open the highlighted PR in the browser |
 | `y` | Pull requests | Copy the highlighted PR's URL |
 | `Left/Right, h/l` | Pull requests | Scroll the list sideways, keeping the number in view (also Shift-wheel) |
-| `Enter, o` | Checks | Open the highlighted check's page |
+| `o` | Checks | Open the highlighted check's page |
 | `y` | Checks | Copy the highlighted check's URL |
 | `Left/Right, h/l` | Checks | Scroll the check names sideways (also Shift-wheel) |
 | `Up/Down, j/k` | Comments | Go comment by comment, scrolling a line at a time until the next one is on screen |
-| `Enter, Space` | Comments | Expand or collapse the highlighted comment |
+| `Space` | Comments | Expand or collapse the highlighted comment |
 | `o` | Comments | Open the highlighted comment, or its PR if it has no page |
 | `y` | Comments | Copy the highlighted comment's URL, or its PR's if it has no page |
 | `Left/Right, h/l` | Comments | Scroll the open comments' tables sideways (also Shift-wheel) |
@@ -188,8 +186,7 @@ focused pane; the Ctrl-keys work from any pane and act on the selected PRs.
 <!-- keys:end -->
 
 `y` copies with an OSC 52 escape sequence, so it works over SSH if the terminal supports that; in
-tmux, turn on `set-clipboard`. `Ctrl-Enter` needs a terminal with the kitty keyboard protocol;
-elsewhere use `Ctrl-G`. The timed refresh pauses while the terminal is out of focus, if the
+tmux, turn on `set-clipboard`. The timed refresh pauses while the terminal is out of focus, if the
 terminal reports that, and catches up when focus returns.
 
 The table above is generated from the program's key list. After changing it, run

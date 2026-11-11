@@ -19,8 +19,7 @@ use clap::Parser;
 use color_eyre::eyre::{Result, eyre};
 use crossterm::event::{
     DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event,
-    EventStream, KeyEventKind, KeyboardEnhancementFlags, MouseEventKind,
-    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    EventStream, KeyEventKind, MouseEventKind,
 };
 use crossterm::execute;
 use futures::StreamExt;
@@ -51,22 +50,10 @@ async fn main() -> Result<()> {
     if mouse {
         execute!(std::io::stdout(), EnableMouseCapture)?;
     }
-    // Ctrl-Enter is only told from Enter by a terminal that has the kitty keyboard protocol, so ask
-    // for it only where it is there; any other terminal keeps Ctrl-G.
-    let enhanced = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
-    if enhanced {
-        execute!(
-            std::io::stdout(),
-            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-        )?;
-    }
-    // ratatui's panic hook doesn't know about the mouse, the focus events or these flags.
+    // ratatui's panic hook doesn't know about the mouse or the focus events.
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = execute!(std::io::stdout(), DisableFocusChange);
-        if enhanced {
-            let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
-        }
         if mouse {
             let _ = execute!(std::io::stdout(), DisableMouseCapture);
         }
@@ -74,9 +61,6 @@ async fn main() -> Result<()> {
     }));
     let result = run(terminal, settings).await;
     let _ = execute!(std::io::stdout(), DisableFocusChange);
-    if enhanced {
-        let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
-    }
     if mouse {
         let _ = execute!(std::io::stdout(), DisableMouseCapture);
     }

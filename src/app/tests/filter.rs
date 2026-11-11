@@ -142,7 +142,7 @@ fn hidden_selected_prs_stay_selected_and_are_reviewed() {
     assert_eq!(app.selected, HashSet::from([1, 3]));
     assert_eq!(app.hidden_selected(), 2);
 
-    ctrl_g(&mut app);
+    review(&mut app);
     assert_eq!(confirm_numbers(&app), [1, 3]);
 }
 

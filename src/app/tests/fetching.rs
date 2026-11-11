@@ -196,6 +196,7 @@ fn ctrl_r_is_ignored_while_a_search_runs_and_under_dialogs() {
     ctrl(&mut app, 'r');
     assert_eq!(app.list_to_fetch(), None);
     key(&mut app, KeyCode::Esc);
+    press(&mut app, " ");
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::Confirm(_)));
     ctrl(&mut app, 'r');

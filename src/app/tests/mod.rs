@@ -2,8 +2,8 @@ use super::work::{MAX_APPROVALS, MAX_REFRESHES, StatusFetch};
 use super::*;
 use crate::gh::{PrStatus, ReviewDecision};
 use crate::testing::{
-    PrBuilder, app_with, assert_list_mode, ctrl, ctrl_enter, ctrl_g, key, passing_run, pr_details,
-    press, refresh_and_load, search_and_load, select_rows, status_context, with_check_rows,
+    PrBuilder, app_with, assert_list_mode, ctrl, key, passing_run, pr_details, press,
+    refresh_and_load, review, search_and_load, select_rows, status_context, with_check_rows,
     with_comment_rows,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -118,7 +118,7 @@ pub(super) fn start_approving(app: &mut App, count: usize) {
     for _ in 0..count {
         press(app, " j");
     }
-    ctrl_g(app);
+    review(app);
     key(app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::Running(_)));
 }

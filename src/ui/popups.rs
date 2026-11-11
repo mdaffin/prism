@@ -467,7 +467,7 @@ mod tests {
         let mut app = one_of_each();
         // Select everything, then open the dialog.
         select_rows(&mut app, &[0, 1, 2, 3, 4]);
-        ctrl_g(&mut app);
+        review(&mut app);
         let buffer = draw_wide(&mut app);
         for (label, colour) in [
             ("✓ passing", Color::Green),
@@ -492,7 +492,7 @@ mod tests {
     fn shows_each_pr_of_a_running_batch_and_what_cancelling_did() {
         let mut app = app_with((1..=6).map(|n| pr(n, "Bump alpha", "OPEN", "")).collect());
         select_rows(&mut app, &[0, 1, 2, 3, 4, 5]);
-        ctrl_g(&mut app);
+        review(&mut app);
         key(&mut app, KeyCode::Enter);
         // Four approvals run at once; two wait.
         assert_eq!(app.approvals_to_run().len(), 4);
@@ -568,7 +568,7 @@ mod tests {
             pr(2, "Bump beta", "OPEN", ""),
         ]);
         press(&mut app, " j ");
-        ctrl_g(&mut app);
+        review(&mut app);
         assert!(matches!(app.mode, Mode::Confirm(_)));
         draw_wide(&mut app);
         app
@@ -832,7 +832,8 @@ mod tests {
         let rows: Vec<usize> = groups.iter().map(|title| row(title)).collect();
         assert!(rows.windows(2).all(|pair| pair[0] < pair[1]), "{rows:?}");
         // Each group lists its own keys under its title.
-        assert!(row("Review the highlighted PR") > row("Pull requests"));
+        assert!(row("Review the selected PRs") > row("Everywhere"));
+        assert!(row("Open the highlighted PR in the browser") > row("Pull requests"));
         assert!(row("Open the highlighted check's page") > row("Checks"));
         assert!(row("Expand or collapse the highlighted comment") > row("Comments"));
         assert!(row("Scroll the description's tables sideways") > row("Description"));

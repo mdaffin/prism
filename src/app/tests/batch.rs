@@ -1,20 +1,13 @@
 use super::*;
 
 #[test]
-fn enter_confirms_the_highlighted_pr_when_none_are_selected() {
-    let mut app = app_with_rows(3);
-    press(&mut app, "j");
-    key(&mut app, KeyCode::Enter);
-    assert_eq!(confirm_numbers(&app), [2]);
-    assert_eq!(confirm(&app).choices().len(), 3);
-}
-
-#[test]
-fn enter_confirms_only_the_highlighted_pr_even_with_a_selection() {
+fn enter_confirms_the_selected_prs_not_the_highlighted_one() {
     let mut app = app_with_rows(3);
     select_rows(&mut app, &[0, 2]);
+    press(&mut app, "j");
     key(&mut app, KeyCode::Enter);
-    assert_eq!(confirm_numbers(&app), [3]);
+    assert_eq!(confirm_numbers(&app), [1, 3]);
+    assert_eq!(confirm(&app).choices().len(), 3);
 }
 
 #[test]
@@ -34,7 +27,7 @@ fn closed_and_merged_prs_are_left_out_of_a_review_and_listed() {
     let prs = vec![pr(1, "OPEN"), pr(2, "CLOSED"), pr(3, "MERGED")];
     let mut app = app_with(prs);
     press(&mut app, " j j ");
-    ctrl_g(&mut app);
+    review(&mut app);
     assert_eq!(confirm_numbers(&app), [1]);
     assert_eq!(confirm(&app).left_out, [2, 3]);
 }
@@ -43,7 +36,7 @@ fn closed_and_merged_prs_are_left_out_of_a_review_and_listed() {
 fn with_only_a_closed_pr_to_review_there_is_nothing_to_choose_but_cancel() {
     let prs = vec![pr(1, "OPEN"), pr(2, "CLOSED"), pr(3, "MERGED")];
     let mut app = app_with(prs);
-    press(&mut app, "j");
+    press(&mut app, "j ");
     key(&mut app, KeyCode::Enter);
     assert!(confirm(&app).prs.is_empty());
     assert_eq!(confirm(&app).choices(), [Choice::Cancel]);
@@ -52,6 +45,7 @@ fn with_only_a_closed_pr_to_review_there_is_nothing_to_choose_but_cancel() {
 #[test]
 fn the_dialog_moves_between_choices_and_closes() {
     let mut app = app_with_rows(3);
+    press(&mut app, " ");
     key(&mut app, KeyCode::Enter);
     key(&mut app, KeyCode::Right);
     assert_eq!(confirm(&app).choice, 1);
@@ -74,6 +68,7 @@ fn a_list_loading_under_the_dialog_keeps_it_open() {
     press(&mut app, "/");
     key(&mut app, KeyCode::Enter);
     let (id, _) = app.list_to_fetch().unwrap();
+    press(&mut app, " ");
     key(&mut app, KeyCode::Enter);
     app.update(Msg::PrsLoaded(id, Ok(prs([7]))));
     assert_eq!(confirm_numbers(&app), [1]);
@@ -140,7 +135,7 @@ fn a_result_from_a_cancelled_batch_does_not_touch_the_next_one() {
 
     // The same PR is approved again, and then the first batch's approval comes back. It is
     // still selected from the first batch.
-    ctrl_g(&mut app);
+    review(&mut app);
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::Running(_)));
     assert_eq!(app.approvals_to_run(), [1]);
@@ -229,7 +224,7 @@ fn start_approving_and_merging() -> App {
     let mut app = app_with(prs);
     assert_eq!(numbers(&app), [1, 2, 3, 4]);
     press(&mut app, " j j j ");
-    ctrl_g(&mut app);
+    review(&mut app);
     key(&mut app, KeyCode::Right);
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::Running(_)));
@@ -313,26 +308,4 @@ fn approve_and_merge_with_no_approvals_skips_merging() {
     assert_eq!(app.merge_to_run(), None);
     let summary = results(&app);
     assert_eq!(summary.merged, Some((0, 0)));
-}
-
-#[test]
-fn ctrl_enter_reviews_the_selection_like_ctrl_g() {
-    let open = |app: &mut App| matches!(app.mode, Mode::Confirm(_));
-    let mut with_g = app_with(vec![PrBuilder::new(1).title("Bump").build()]);
-    let mut with_enter = app_with(vec![PrBuilder::new(1).title("Bump").build()]);
-    for app in [&mut with_g, &mut with_enter] {
-        press(app, " ");
-    }
-    ctrl_g(&mut with_g);
-    ctrl_enter(&mut with_enter);
-    assert!(open(&mut with_g) && open(&mut with_enter));
-    let numbers = |app: &App| match &app.mode {
-        Mode::Confirm(confirm) => confirm.prs.iter().map(|pr| pr.number).collect::<Vec<_>>(),
-        _ => unreachable!(),
-    };
-    assert_eq!(numbers(&with_g), numbers(&with_enter));
-    // A plain Enter still reviews only the highlighted PR through its own path, and is not this.
-    let mut plain = app_with(vec![PrBuilder::new(1).title("Bump").build()]);
-    key(&mut plain, KeyCode::Enter);
-    assert!(matches!(plain.mode, Mode::Confirm(_)));
 }

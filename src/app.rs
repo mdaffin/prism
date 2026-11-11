@@ -1068,21 +1068,6 @@ impl App {
         self.note = Some(note.to_string());
     }
 
-    /// Enter: acts on the highlighted item of the focused pane. The table reviews its highlighted
-    /// PR, the comments expand or collapse the highlighted comment, the checks open it, and the
-    /// description and the diff do nothing.
-    fn enter_focused(&mut self) {
-        match self.focus {
-            Pane::Table => {
-                let numbers = self.highlighted().map(|row| row.pr.number);
-                self.open_confirm(numbers.into_iter().collect());
-            }
-            Pane::Checks => self.open_focused(),
-            Pane::Comments => self.toggle_comment(),
-            Pane::Approvers | Pane::Description | Pane::Diff => {}
-        }
-    }
-
     /// The query that the list on screen is the result of.
     pub fn submitted_query(&self) -> &str {
         &self.submitted_query
@@ -1159,7 +1144,7 @@ impl App {
         }
     }
 
-    /// Ctrl-G: reviews the selected PRs, from any pane. With none selected it does nothing.
+    /// Enter: reviews the selected PRs, from any pane. With none selected it does nothing.
     fn review_selected(&mut self) {
         self.open_confirm(self.selected_numbers());
     }

@@ -46,13 +46,13 @@ const PANES: [Pane; 5] = [
 ];
 
 #[test]
-fn ctrl_o_and_ctrl_g_do_nothing_when_none_are_selected() {
+fn ctrl_o_and_enter_do_nothing_when_none_are_selected() {
     for pane in PANES {
         let mut app = app_with_rows(3);
         app.focus = pane;
         press(&mut app, "j");
         ctrl(&mut app, 'o');
-        ctrl_g(&mut app);
+        review(&mut app);
         assert!(app.opens_to_run().is_empty(), "{pane:?}");
         assert!(matches!(app.mode, Mode::List), "{pane:?}");
     }
@@ -70,12 +70,12 @@ fn ctrl_o_opens_the_selection_from_every_pane() {
 }
 
 #[test]
-fn ctrl_g_reviews_the_selection_from_every_pane() {
+fn enter_reviews_the_selection_from_every_pane() {
     for pane in PANES {
         let mut app = app_with_rows(3);
         select_rows(&mut app, &[0, 2]);
         app.focus = pane;
-        ctrl_g(&mut app);
+        review(&mut app);
         let Mode::Confirm(confirm) = &app.mode else {
             panic!("no review dialog from {pane:?}");
         };

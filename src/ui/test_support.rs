@@ -5,8 +5,8 @@ pub(super) use crate::app::Msg;
 pub(super) use crate::app::{MIN_COLUMNS, MIN_ROWS};
 pub(super) use crate::gh::Pr;
 pub(super) use crate::testing::{
-    PrBuilder, app_with, app_with_details, app_with_query, assert_list_mode, comment, ctrl, ctrl_g,
-    key, pr_details, press, select_rows, with_comment_rows,
+    PrBuilder, app_with, app_with_details, app_with_query, assert_list_mode, comment, ctrl, key,
+    pr_details, press, review, select_rows, with_comment_rows,
 };
 pub(super) use crossterm::event::KeyCode;
 pub(super) use ratatui::Terminal;

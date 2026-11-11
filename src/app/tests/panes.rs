@@ -235,13 +235,11 @@ fn up_and_down_move_the_checks_highlight_and_keep_it_on_screen() {
 }
 
 #[test]
-fn enter_and_space_expand_the_highlighted_comment_instead_of_reviewing() {
+fn space_expands_the_highlighted_comment_instead_of_selecting() {
     let mut app = app_with_rows(2);
     with_comment_rows(&mut app, &[1, 1]);
     focus(&mut app, Pane::Comments);
-    press(&mut app, "j");
-    key(&mut app, KeyCode::Enter);
-    assert_list_mode(&app);
+    press(&mut app, "j ");
     assert!(app.scroll.comments_open.contains(&1));
     press(&mut app, " ");
     assert!(app.scroll.comments_open.is_empty());

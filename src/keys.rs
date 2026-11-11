@@ -136,12 +136,7 @@ pub const KEYS: &[KeyHelp] = &[
         "Open the selected PRs in the browser, asking first for more than five",
         None,
     ),
-    key("Ctrl-G", "Review the selected PRs", None),
-    key(
-        "Ctrl-Enter",
-        "Like Ctrl-G, in a terminal with the kitty keyboard protocol (kitty, WezTerm, Ghostty, iTerm2); elsewhere it is Enter",
-        None,
-    ),
+    key("Enter", "Review the selected PRs", None),
     key(
         "Ctrl-A",
         "Select every visible PR with passing checks",
@@ -181,12 +176,6 @@ pub const KEYS: &[KeyHelp] = &[
     ),
     pane_key(
         Pane::Table,
-        "Enter",
-        "Review the highlighted PR",
-        Some("Review"),
-    ),
-    pane_key(
-        Pane::Table,
         "o",
         "Open the highlighted PR in the browser",
         Some(OPEN),
@@ -199,7 +188,7 @@ pub const KEYS: &[KeyHelp] = &[
     ),
     pane_key(
         Pane::Checks,
-        "Enter, o",
+        "o",
         "Open the highlighted check's page",
         Some(OPEN),
     ),
@@ -217,7 +206,7 @@ pub const KEYS: &[KeyHelp] = &[
     ),
     pane_key(
         Pane::Comments,
-        "Enter, Space",
+        "Space",
         "Expand or collapse the highlighted comment",
         Some("Expand"),
     ),
@@ -291,7 +280,7 @@ fn readme_table() -> String {
     table
 }
 
-/// A hint of the status bar, such as `Enter: Review`.
+/// A hint of the status bar, such as `o: Open`.
 pub struct Hint {
     pub text: String,
     /// Whether the bar keeps it when it is too narrow for all of them.
@@ -317,7 +306,7 @@ pub fn bar_hints(focus: Pane) -> Vec<Hint> {
         .collect()
 }
 
-/// The hints joined, such as `Enter: Review | ?: Help`.
+/// The hints joined, such as `o: Open | ?: Help`.
 #[cfg(test)]
 pub fn bar(focus: Pane) -> String {
     let hints: Vec<String> = bar_hints(focus).into_iter().map(|hint| hint.text).collect();
@@ -332,9 +321,9 @@ mod tests {
     fn the_bar_has_the_focused_panes_keys_first() {
         let tail = "?: Help | /: Search | q: Quit";
         for (pane, own) in [
-            (Pane::Table, "Enter: Review | o: Open | y: Copy"),
-            (Pane::Checks, "Enter, o: Open | y: Copy"),
-            (Pane::Comments, "Enter, Space: Expand | o: Open | y: Copy"),
+            (Pane::Table, "o: Open | y: Copy"),
+            (Pane::Checks, "o: Open | y: Copy"),
+            (Pane::Comments, "Space: Expand | o: Open | y: Copy"),
         ] {
             assert_eq!(bar(pane), format!("{own} | {tail}"));
         }

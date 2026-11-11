@@ -121,17 +121,9 @@ pub fn ctrl(app: &mut App, c: char) {
     )));
 }
 
-/// Presses Ctrl-Enter, which reviews the selected PRs like Ctrl-G.
-pub fn ctrl_enter(app: &mut App) {
-    app.update(Msg::Key(KeyEvent::new(
-        KeyCode::Enter,
-        KeyModifiers::CONTROL,
-    )));
-}
-
-/// Presses Ctrl-G, which reviews the selected PRs.
-pub fn ctrl_g(app: &mut App) {
-    ctrl(app, 'g');
+/// Presses Enter, which reviews the selected PRs.
+pub fn review(app: &mut App) {
+    key(app, KeyCode::Enter);
 }
 
 /// A completed, successful check run, as `statusCheckRollup` lists it.
