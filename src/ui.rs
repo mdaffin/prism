@@ -181,6 +181,43 @@ fn dividers_of(stack: StackId, stacked: bool, items: &[Item]) -> Vec<Divider> {
         .collect()
 }
 
+/// Which of the panes that can be hidden are shown.
+struct Shown {
+    checks: bool,
+    comments: bool,
+    description: bool,
+    approvers: bool,
+    diff: bool,
+}
+
+impl Shown {
+    fn new(hidden: &[Pane]) -> Shown {
+        let shown = |pane| !hidden.contains(&pane);
+        Shown {
+            checks: shown(Pane::Checks),
+            comments: shown(Pane::Comments),
+            description: shown(Pane::Description),
+            approvers: shown(Pane::Approvers),
+            diff: shown(Pane::Diff),
+        }
+    }
+
+    /// Whether any pane of the PR's details is shown.
+    fn details(&self) -> bool {
+        self.description || self.right()
+    }
+
+    /// Whether the approvers or the diff, which share a column, are shown.
+    fn right(&self) -> bool {
+        self.approvers || self.diff
+    }
+
+    /// Whether the checks or the comments are shown.
+    fn lower(&self) -> bool {
+        self.checks || self.comments
+    }
+}
+
 /// With room, the list is above the checks and comments on the left and the PR's details are on
 /// the right. In a narrow terminal that would leave the table too little width, so the list takes
 /// the full width on top. Under it, what is read most gets the space: the description beside the
@@ -191,14 +228,7 @@ fn dividers_of(stack: StackId, stacked: bool, items: &[Item]) -> Vec<Divider> {
 /// been resized (`sizes`) shares its room by the weights it has, and every border between two
 /// panes is returned in `dividers`.
 fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane], sizes: &Sizes) -> PaneLayout {
-    let shown = |pane| !hidden.contains(&pane);
-    let (checks_on, comments_on) = (shown(Pane::Checks), shown(Pane::Comments));
-    let (description_on, approvers_on, diff_on) = (
-        shown(Pane::Description),
-        shown(Pane::Approvers),
-        shown(Pane::Diff),
-    );
-    let details_on = description_on || approvers_on || diff_on;
+    let shown = Shown::new(hidden);
     let fill = Constraint::Fill(1);
     if body.width >= WIDE_LAYOUT_MIN_WIDTH {
         let sides = split(
@@ -206,7 +236,7 @@ fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane], sizes: &Sizes) 
             false,
             &[
                 (true, sized(sizes, StackId::Columns, 0, fill)),
-                (details_on, sized(sizes, StackId::Columns, 1, fill)),
+                (shown.details(), sized(sizes, StackId::Columns, 1, fill)),
             ],
         );
         let left = split(
@@ -214,9 +244,9 @@ fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane], sizes: &Sizes) 
             true,
             &[
                 (true, sized(sizes, StackId::Left, 0, Constraint::Fill(2))),
-                (checks_on, sized(sizes, StackId::Left, 1, fill)),
+                (shown.checks, sized(sizes, StackId::Left, 1, fill)),
                 (
-                    comments_on,
+                    shown.comments,
                     sized(sizes, StackId::Left, 2, Constraint::Max(MAX_COMMENTS_ROWS)),
                 ),
             ],
@@ -225,16 +255,16 @@ fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane], sizes: &Sizes) 
             sides[1],
             true,
             &[
-                (details_on, Constraint::Length(PULL_REQUEST_ROWS)),
-                (description_on, sized(sizes, StackId::Detail, 0, fill)),
+                (shown.details(), Constraint::Length(PULL_REQUEST_ROWS)),
+                (shown.description, sized(sizes, StackId::Detail, 0, fill)),
                 (
-                    approvers_on || diff_on,
+                    shown.approvers || shown.diff,
                     sized(sizes, StackId::Detail, 1, Constraint::Fill(2)),
                 ),
             ],
         );
         let (approvers, diff) =
-            approvers_over_diff(detail[2], approvers_rows, (approvers_on, diff_on));
+            approvers_over_diff(detail[2], approvers_rows, (shown.approvers, shown.diff));
         let mut dividers = dividers_of(
             StackId::Columns,
             false,
@@ -299,7 +329,6 @@ fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane], sizes: &Sizes) 
             dividers,
         }
     } else {
-        let lower_on = checks_on || comments_on;
         let lower_rows = (body.height / 5).clamp(MIN_LOWER_ROWS, MAX_COMMENTS_ROWS);
         let rows = split(
             body,
@@ -307,25 +336,24 @@ fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane], sizes: &Sizes) 
             &[
                 (true, sized(sizes, StackId::Rows, 0, Constraint::Fill(2))),
                 (
-                    details_on,
+                    shown.details(),
                     sized(sizes, StackId::Rows, 1, Constraint::Fill(3)),
                 ),
                 (
-                    lower_on,
+                    shown.lower(),
                     sized(sizes, StackId::Rows, 2, Constraint::Length(lower_rows)),
                 ),
             ],
         );
-        let right_on = approvers_on || diff_on;
         let columns = split(
             rows[1],
             false,
             &[
                 (
-                    description_on,
+                    shown.description,
                     sized(sizes, StackId::DetailColumns, 0, fill),
                 ),
-                (right_on, sized(sizes, StackId::DetailColumns, 1, fill)),
+                (shown.right(), sized(sizes, StackId::DetailColumns, 1, fill)),
             ],
         );
         // The Pull request box is over the description, or over the diff if that is hidden.
@@ -333,8 +361,8 @@ fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane], sizes: &Sizes) 
             columns[0],
             true,
             &[
-                (description_on, Constraint::Length(PULL_REQUEST_ROWS)),
-                (description_on, Constraint::Fill(1)),
+                (shown.description, Constraint::Length(PULL_REQUEST_ROWS)),
+                (shown.description, Constraint::Fill(1)),
             ],
         );
         let right = split(
@@ -342,20 +370,20 @@ fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane], sizes: &Sizes) 
             true,
             &[
                 (
-                    right_on && !description_on,
+                    shown.right() && !shown.description,
                     Constraint::Length(PULL_REQUEST_ROWS),
                 ),
-                (right_on, Constraint::Fill(1)),
+                (shown.right(), Constraint::Fill(1)),
             ],
         );
         let (approvers, diff) =
-            approvers_over_diff(right[1], approvers_rows, (approvers_on, diff_on));
+            approvers_over_diff(right[1], approvers_rows, (shown.approvers, shown.diff));
         let lower = split(
             rows[2],
             false,
             &[
-                (checks_on, sized(sizes, StackId::Lower, 0, fill)),
-                (comments_on, sized(sizes, StackId::Lower, 1, fill)),
+                (shown.checks, sized(sizes, StackId::Lower, 0, fill)),
+                (shown.comments, sized(sizes, StackId::Lower, 1, fill)),
             ],
         );
         let mut dividers = dividers_of(
@@ -416,7 +444,7 @@ fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane], sizes: &Sizes) 
             checks: lower[0],
             approvers,
             comments: lower[1],
-            pull_request: if description_on { left[0] } else { right[0] },
+            pull_request: if shown.description { left[0] } else { right[0] },
             description: left[1],
             diff,
             dividers,
