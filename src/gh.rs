@@ -610,11 +610,14 @@ pub struct StatusUpdate {
     pub failure: Option<String>,
 }
 
-/// Whether a PR merges cleanly. Only a conflict matters here.
+/// Whether a PR merges cleanly. Only a conflict matters here, but GitHub works this out lazily, so
+/// the first answer for a PR is often `Unknown`.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Mergeable {
     Conflicting,
+    /// GitHub hasn't worked it out yet; asking again shortly gives the answer.
+    Unknown,
     #[serde(other)]
     Other,
 }

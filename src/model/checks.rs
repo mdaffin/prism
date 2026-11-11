@@ -114,12 +114,13 @@ pub fn classify_checks(mergeable: Mergeable, rollup: &[Check]) -> Checks {
     let any = |state| results.iter().any(|r| r.state == state);
     let state = if mergeable == Mergeable::Conflicting {
         CheckState::Conflict
-    } else if results.is_empty() {
-        CheckState::None
     } else if any(CheckState::Failing) {
         CheckState::Failing
-    } else if any(CheckState::Pending) {
+    } else if mergeable == Mergeable::Unknown || any(CheckState::Pending) {
+        // Until GitHub has checked for a conflict, passing or no checks may not be the truth.
         CheckState::Pending
+    } else if results.is_empty() {
+        CheckState::None
     } else {
         CheckState::Passing
     };
@@ -326,6 +327,10 @@ mod tests {
             CheckState::Pending
         );
         assert_eq!(state(Mergeable::Other, &[&pass]), CheckState::Passing);
+        // Until GitHub knows whether there is a conflict, a PR is not yet passing.
+        assert_eq!(state(Mergeable::Unknown, &[&pass]), CheckState::Pending);
+        assert_eq!(state(Mergeable::Unknown, &[]), CheckState::Pending);
+        assert_eq!(state(Mergeable::Unknown, &[&fail]), CheckState::Failing);
     }
 
     #[test]

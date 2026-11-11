@@ -32,6 +32,8 @@ use cli::MergeMethod;
 
 /// How often the rows' status is refreshed in the background.
 const REFRESH_EVERY: Duration = Duration::from_secs(30);
+/// How often to refresh while GitHub is still working out whether a PR conflicts.
+const UNKNOWN_REFRESH_EVERY: Duration = Duration::from_secs(5);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -94,6 +96,11 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Settings) -> Result<()> {
     let mut refresh_ticker =
         tokio::time::interval_at(Instant::now() + REFRESH_EVERY, REFRESH_EVERY);
     refresh_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut unknown_ticker = tokio::time::interval_at(
+        Instant::now() + UNKNOWN_REFRESH_EVERY,
+        UNKNOWN_REFRESH_EVERY,
+    );
+    unknown_ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
     while !app.should_quit {
         start_work(&mut app, &gh, &tx, args.limit, args.merge_method);
 
@@ -110,6 +117,7 @@ async fn run(mut terminal: DefaultTerminal, args: cli::Settings) -> Result<()> {
             Some(msg) = rx.recv() => msg,
             _ = ticker.tick(), if app.animating() => Msg::Tick,
             _ = refresh_ticker.tick() => Msg::RefreshDue,
+            _ = unknown_ticker.tick(), if app.has_unknown_mergeable() => Msg::RefreshDue,
             else => break,
         };
         app.update(msg);

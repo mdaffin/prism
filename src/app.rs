@@ -11,7 +11,7 @@ use tui_input::Input;
 use crate::batch::{
     Batch, BatchItem, Choice, Confirm, ConfirmPr, ItemStatus, Summary, auto_merge, finished_status,
 };
-use crate::gh::{Pr, PrDetails, PrState, PrStatus, ReviewDecision, StatusUpdate};
+use crate::gh::{Mergeable, Pr, PrDetails, PrState, PrStatus, ReviewDecision, StatusUpdate};
 use crate::history::History;
 use crate::model::{self, CheckState, Checks, Column, Sort, one_line};
 
@@ -660,6 +660,14 @@ impl App {
     /// Whether any rows are being refreshed or are waiting to be.
     pub fn refreshing(&self) -> bool {
         !self.refreshing.is_empty() || !self.to_refresh.is_empty()
+    }
+
+    /// Whether an open PR's conflict state is still unknown to GitHub, so that asking again soon
+    /// will give the answer.
+    pub fn has_unknown_mergeable(&self) -> bool {
+        self.rows
+            .iter()
+            .any(|row| row.pr.state == PrState::Open && row.pr.mergeable == Mergeable::Unknown)
     }
 
     /// What a status refresh started now would be tied to: the list and the batch state it saw.
