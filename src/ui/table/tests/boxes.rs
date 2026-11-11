@@ -224,22 +224,22 @@ fn the_search_and_filter_boxes_colour_only_their_border_and_title_while_edited()
     let search = app.drawn.areas.search;
     let filter = app.drawn.areas.filter;
     // Not being edited: nothing is cyan.
-    assert_ne!(buffer[(search.x, search.y + 1)].fg, Color::Cyan);
-    assert_ne!(buffer[(filter.x, filter.y + 1)].fg, Color::Cyan);
+    assert_eq!(buffer[(search.x, search.y + 1)].fg, Color::Reset);
+    assert_eq!(buffer[(filter.x, filter.y + 1)].fg, Color::Reset);
 
     press(&mut app, "/");
     let buffer = draw_wide(&mut app);
     assert_eq!(buffer[(search.x, search.y + 1)].fg, Color::Cyan);
     assert_eq!(buffer[(search.x + 1, search.y)].fg, Color::Cyan);
-    assert_ne!(buffer[(search.x + 1, search.y + 1)].fg, Color::Cyan);
-    assert_ne!(buffer[(filter.x, filter.y + 1)].fg, Color::Cyan);
+    assert_eq!(buffer[(search.x + 1, search.y + 1)].fg, Color::Reset);
+    assert_eq!(buffer[(filter.x, filter.y + 1)].fg, Color::Reset);
 
     key(&mut app, KeyCode::Esc);
     press(&mut app, "f");
     let buffer = draw_wide(&mut app);
     assert_eq!(buffer[(filter.x, filter.y + 1)].fg, Color::Cyan);
-    assert_ne!(buffer[(filter.x + 1, filter.y + 1)].fg, Color::Cyan);
-    assert_ne!(buffer[(search.x, search.y + 1)].fg, Color::Cyan);
+    assert_eq!(buffer[(filter.x + 1, filter.y + 1)].fg, Color::Reset);
+    assert_eq!(buffer[(search.x, search.y + 1)].fg, Color::Reset);
 }
 
 #[test]
