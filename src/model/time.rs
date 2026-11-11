@@ -1,5 +1,15 @@
 //! Showing how long ago something happened.
 
+const YEAR: i64 = 365 * 24 * 3600;
+
+/// A year is shown from 12 months of 30 days, not 365 days, or 364 days would read as `12 months`.
+const YEAR_STARTS: i64 = 12 * 30 * 24 * 3600;
+
+/// The years in `seconds`, once it is 12 months, and at least 1 from then.
+fn whole_years(seconds: i64) -> Option<i64> {
+    (seconds >= YEAR_STARTS).then(|| (seconds / YEAR).max(1))
+}
+
 /// How long before `now` a timestamp such as `2026-01-02T03:04:05Z` was, like `3 hours ago`.
 /// A timestamp that can't be read is shown as it is.
 pub fn ago(timestamp: &str, now: jiff::Timestamp) -> String {
@@ -7,8 +17,10 @@ pub fn ago(timestamp: &str, now: jiff::Timestamp) -> String {
         return timestamp.to_string();
     };
     let seconds = now.as_second() - then.as_second();
+    if let Some(n) = whole_years(seconds) {
+        return format!("{n} year{} ago", if n == 1 { "" } else { "s" });
+    }
     let units = [
-        (365 * 24 * 3600, "year"),
         (30 * 24 * 3600, "month"),
         (7 * 24 * 3600, "week"),
         (24 * 3600, "day"),
@@ -31,8 +43,10 @@ pub fn short_age(timestamp: &str, now: jiff::Timestamp) -> String {
         return timestamp.to_string();
     };
     let seconds = now.as_second() - then.as_second();
+    if let Some(n) = whole_years(seconds) {
+        return format!("{n}y");
+    }
     let units = [
-        (365 * 24 * 3600, "y"),
         (30 * 24 * 3600, "mo"),
         (7 * 24 * 3600, "w"),
         (24 * 3600, "d"),
@@ -67,6 +81,18 @@ mod tests {
         // The future, such as a clock that is a little off, isn't an error.
         assert_eq!(at("2026-03-10T12:00:30Z"), "just now");
         assert_eq!(at("yesterday"), "yesterday");
+    }
+
+    #[test]
+    fn twelve_months_is_a_year() {
+        let now: jiff::Timestamp = "2026-03-10T12:00:00Z".parse().unwrap();
+        // 359 days is the last that is 11 whole months; 360 days is 12 of them.
+        assert_eq!(ago("2025-03-16T12:00:00Z", now), "11 months ago");
+        assert_eq!(ago("2025-03-15T12:00:00Z", now), "1 year ago");
+        assert_eq!(ago("2025-03-11T12:00:00Z", now), "1 year ago");
+        assert_eq!(short_age("2025-03-16T12:00:00Z", now), "11mo");
+        assert_eq!(short_age("2025-03-15T12:00:00Z", now), "1y");
+        assert_eq!(short_age("2025-03-11T12:00:00Z", now), "1y");
     }
 
     #[test]
