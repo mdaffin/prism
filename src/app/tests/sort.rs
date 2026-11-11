@@ -325,3 +325,18 @@ fn a_row_refresh_keeps_the_place_it_was_listed_at() {
     // Passing now, so it goes with the passing ones, in the order listed.
     assert_eq!(numbers(&app), [4, 5, 1, 3, 2, 6]);
 }
+
+#[test]
+fn the_updated_cell_is_how_long_ago_the_pr_changed() {
+    let app = app_with(vec![
+        PrBuilder::new(1).updated_at("2026-03-10T09:00:00Z").build(),
+        PrBuilder::new(2).updated_at("2024-03-10T12:00:00Z").build(),
+    ]);
+    let now: jiff::Timestamp = "2026-03-10T12:00:00Z".parse().unwrap();
+    let ages: Vec<String> = app
+        .rows
+        .iter()
+        .map(|row| row.cell(crate::model::Column::Updated, now))
+        .collect();
+    assert_eq!(ages, ["3h", "2y"]);
+}

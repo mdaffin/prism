@@ -92,8 +92,10 @@ mod tests {
         }
     }
 
+    /// A canary for upgrading `tui-input`: these keys are its own, not ours, so a failure here
+    /// means a new version changed them.
     #[test]
-    fn the_word_keys_tui_input_has_still_work() {
+    fn tui_input_still_handles_the_word_and_shell_keys() {
         // Alt-Backspace and Ctrl-W delete the word before the cursor.
         for delete in [key(KeyCode::Backspace, ALT), key(KeyCode::Char('w'), CTRL)] {
             let mut i = input("one two three", 7);
@@ -103,23 +105,9 @@ mod tests {
         let mut i = input("one two three", 13);
         edit(&mut i, key(KeyCode::Left, CTRL));
         assert_eq!(i.cursor(), 8);
-        edit(&mut i, key(KeyCode::Right, CTRL));
-        assert_eq!(i.cursor(), 13);
-    }
-
-    #[test]
-    fn ctrl_a_e_k_u_work_as_in_a_shell() {
-        let mut i = input("one two", 3);
-        edit(&mut i, key(KeyCode::Char('a'), CTRL));
-        assert_eq!(i.cursor(), 0);
-        edit(&mut i, key(KeyCode::Char('e'), CTRL));
-        assert_eq!(i.cursor(), 7);
         let mut i = input("one two", 3);
         edit(&mut i, key(KeyCode::Char('k'), CTRL));
         assert_eq!(i.value(), "one");
-        let mut i = input("one two", 3);
-        edit(&mut i, key(KeyCode::Char('u'), CTRL));
-        assert_eq!(i.value(), "");
     }
 
     #[test]

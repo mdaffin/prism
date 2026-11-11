@@ -150,8 +150,12 @@ fn a_pr_that_fails_to_open_is_shown_with_the_error() {
         app.errors.text().as_deref(),
         Some("Opening #2 failed: no browser")
     );
+    // A PR that did open leaves the error shown as it was.
     app.update(Msg::Opened(1, Ok(())));
-    assert_eq!(app.errors.text().unwrap().lines().count(), 1);
+    assert_eq!(
+        app.errors.text().as_deref(),
+        Some("Opening #2 failed: no browser")
+    );
 }
 
 #[test]

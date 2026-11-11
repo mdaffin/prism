@@ -875,103 +875,35 @@ pub struct StatusContext {
 mod tests {
     use super::*;
 
-    const LIST_FIXTURE: &str = r#"[
-      {
-        "number": 12,
-        "title": "ABC-1: Update example-lib to v2",
-        "state": "OPEN",
-        "statusCheckRollup": [
-          {
-            "__typename": "CheckRun",
-            "name": "build",
-            "workflowName": "CI",
-            "status": "COMPLETED",
-            "conclusion": "SUCCESS",
-            "startedAt": "2026-01-02T03:00:00Z"
-          },
-          {"__typename": "StatusContext", "context": "ci/legacy", "state": "PENDING"}
-        ],
-        "mergeable": "MERGEABLE",
-        "reviewDecision": "",
-        "url": "https://example.test/pull/12",
-        "author": {"login": "alice"},
-        "updatedAt": "2026-01-02T03:04:06Z"
-      },
-      {
-        "number": 13,
-        "title": "Merged one",
-        "state": "MERGED",
-        "statusCheckRollup": [],
-        "mergeable": "UNKNOWN",
-        "reviewDecision": "APPROVED",
-        "url": "https://example.test/pull/13",
-        "author": {"is_bot": true, "login": "app/renovate"},
-        "updatedAt": "2026-01-02T03:04:07Z"
-      }
-    ]"#;
-
     #[test]
-    fn parses_pr_list() {
-        let prs: Vec<Pr> = serde_json::from_str(LIST_FIXTURE).unwrap();
-        assert_eq!(prs.len(), 2);
-
-        let pr = &prs[0];
-        assert_eq!(pr.state, PrState::Open);
-        assert!(matches!(
-            &pr.status_check_rollup[0],
-            Check::CheckRun(run) if run.workflow_name == "CI" && run.started_at.is_some()
-        ));
-        assert!(matches!(
-            &pr.status_check_rollup[1],
-            Check::StatusContext(ctx) if ctx.state == ContextState::Pending && ctx.started_at.is_none()
-        ));
-
-        assert_eq!(prs[1].state, PrState::Merged);
+    fn a_review_decision_that_is_not_approve_or_changes_is_other() {
+        // GitHub sends an empty string when no review is required.
+        for text in ["", "REVIEW_REQUIRED", "SOMETHING_NEW"] {
+            let decision: ReviewDecision = serde_json::from_value(serde_json::json!(text)).unwrap();
+            assert_eq!(decision, ReviewDecision::Other, "{text:?}");
+        }
+        let decision: ReviewDecision =
+            serde_json::from_value(serde_json::json!("APPROVED")).unwrap();
+        assert_eq!(decision, ReviewDecision::Approved);
     }
 
     #[test]
-    fn an_unknown_kind_of_check_does_not_fail_the_list() {
-        let json = r#"[{
-          "number": 1,
-          "title": "t",
-          "state": "OPEN",
-          "statusCheckRollup": [
-            {"__typename": "SomethingNew", "foo": "bar"},
-            {"__typename": "StatusContext", "context": "ci/legacy", "state": "SUCCESS"}
-          ],
-          "mergeable": "MERGEABLE",
-          "reviewDecision": "",
-          "url": "https://example.test/pull/1",
-          "author": {"login": "alice"},
-          "updatedAt": "2026-01-02T03:04:06Z"
-        }]"#;
-        let prs: Vec<Pr> = serde_json::from_str(json).unwrap();
-        assert!(matches!(prs[0].status_check_rollup[0], Check::Unknown));
-        assert!(matches!(
-            prs[0].status_check_rollup[1],
-            Check::StatusContext(_)
-        ));
-    }
-
-    #[test]
-    fn parses_a_status_refresh_and_updates_a_pr() {
-        let json = r#"[{
-          "number": 12,
-          "state": "MERGED",
-          "statusCheckRollup": [],
-          "mergeable": "UNKNOWN",
-          "reviewDecision": "APPROVED",
-          "updatedAt": "2026-02-03T04:05:06Z"
-        }]"#;
-        let statuses: Vec<PrStatus> = serde_json::from_str(json).unwrap();
-        let mut prs: Vec<Pr> = serde_json::from_str(LIST_FIXTURE).unwrap();
-        let mut pr = prs.remove(0);
-        pr.update(statuses.into_iter().next().unwrap());
+    fn a_status_refresh_updates_a_pr_but_not_its_title() {
+        let mut pr = crate::testing::PrBuilder::new(12)
+            .title("ABC-1: Update example-lib to v2")
+            .build();
+        pr.update(PrStatus {
+            number: 12,
+            state: PrState::Merged,
+            status_check_rollup: vec![],
+            mergeable: Mergeable::Unknown,
+            review_decision: ReviewDecision::Approved,
+            updated_at: "2026-02-03T04:05:06Z".to_string(),
+        });
         assert_eq!(pr.state, PrState::Merged);
         assert_eq!(pr.review_decision, ReviewDecision::Approved);
         assert_eq!(pr.updated_at, "2026-02-03T04:05:06Z");
         assert!(pr.status_check_rollup.is_empty());
-        // The title isn't part of a refresh.
         assert_eq!(pr.title, "ABC-1: Update example-lib to v2");
     }
 

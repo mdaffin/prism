@@ -754,16 +754,6 @@ mod tests {
     }
 
     #[test]
-    fn the_updated_column_shows_how_long_ago_in_a_word_or_two() {
-        let mut pr = by("alice", 1, "Bump alpha");
-        pr.updated_at = "2020-01-02T03:04:05Z".to_string();
-        let mut app = app_with(vec![pr]);
-        let screen = lines(&draw(&mut app, 200, 30)).join("\n");
-        assert!(screen.contains("Updated"), "{screen}");
-        assert!(screen.contains('y'), "{screen}");
-    }
-
-    #[test]
     fn each_column_can_be_hidden_and_takes_its_header_and_click_area_with_it() {
         for column in Column::ALL {
             let mut app = app_with(vec![by("alice", 1, "Bump alpha"), by("bob", 2, "Bump b")]);

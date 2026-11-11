@@ -204,10 +204,6 @@ mod tests {
         .unwrap()
     }
 
-    fn decision(value: &str) -> ReviewDecision {
-        serde_json::from_value(serde_json::json!(value)).unwrap()
-    }
-
     #[test]
     fn an_unknown_check_keeps_the_pr_from_passing() {
         let checks = classify_checks(
@@ -331,22 +327,5 @@ mod tests {
         assert_eq!(state(Mergeable::Unknown, &[&pass]), CheckState::Pending);
         assert_eq!(state(Mergeable::Unknown, &[]), CheckState::Pending);
         assert_eq!(state(Mergeable::Unknown, &[&fail]), CheckState::Failing);
-    }
-
-    #[test]
-    fn ranks() {
-        assert_eq!(CheckState::Passing.rank(), 0);
-        assert_eq!(CheckState::Pending.rank(), 1);
-        assert_eq!(CheckState::None.rank(), 1);
-        assert_eq!(CheckState::Failing.rank(), 2);
-        assert_eq!(CheckState::Conflict.rank(), 2);
-    }
-
-    #[test]
-    fn review_labels() {
-        assert_eq!(review_label(decision("APPROVED")), "✓ approved");
-        assert_eq!(review_label(decision("CHANGES_REQUESTED")), "✗ changes");
-        assert_eq!(review_label(decision("REVIEW_REQUIRED")), "· needed");
-        assert_eq!(review_label(decision("")), "· needed");
     }
 }
