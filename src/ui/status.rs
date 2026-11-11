@@ -106,17 +106,33 @@ pub(super) fn fit_status_line(
     join(&parts, &Some(page), &hints)
 }
 
-/// `text` cut in the middle with `…` to fit `width` columns.
+/// `text` cut in the middle with `…` to fit `width` columns. A wide character that would
+/// overrun its side is left out, so the result can be a column short.
 pub(super) fn middle_cut(text: &str, width: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= width {
+    use unicode_width::UnicodeWidthChar;
+    if unicode_width::UnicodeWidthStr::width(text) <= width {
         return text.to_string();
     }
     let kept = width.saturating_sub(1);
-    let head = kept.div_ceil(2);
-    let tail = kept - head;
-    let head: String = chars[..head].iter().collect();
-    let tail: String = chars[chars.len() - tail..].iter().collect();
+    let head_room = kept.div_ceil(2);
+    let tail_room = kept - head_room;
+    // The characters that fit in `room` columns, taken from `chars` in order.
+    let fit = |chars: &mut dyn Iterator<Item = char>, room: usize| {
+        let mut used = 0;
+        let mut taken = Vec::new();
+        for c in chars {
+            used += c.width().unwrap_or(0);
+            if used > room {
+                break;
+            }
+            taken.push(c);
+        }
+        taken
+    };
+    let head: String = fit(&mut text.chars(), head_room).into_iter().collect();
+    let mut tail = fit(&mut text.chars().rev(), tail_room);
+    tail.reverse();
+    let tail: String = tail.into_iter().collect();
     format!("{head}…{tail}")
 }
 
@@ -282,5 +298,16 @@ mod tests {
         assert_eq!(middle_cut("abcdefghij", 4), "ab…j");
         assert_eq!(middle_cut("abc", 5), "abc");
         assert_eq!(middle_cut("abc", 3), "abc");
+    }
+
+    #[test]
+    fn cuts_wide_text_to_fit_the_columns() {
+        let width = |text: &str| unicode_width::UnicodeWidthStr::width(text);
+        for columns in 1..=13 {
+            let cut = middle_cut("日本語日本語", columns);
+            assert!(width(&cut) <= columns, "{cut:?} is wider than {columns}");
+        }
+        assert_eq!(middle_cut("日本語日本語", 12), "日本語日本語");
+        assert_eq!(middle_cut("日本語日本語", 9), "日本…本語");
     }
 }
