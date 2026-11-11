@@ -1238,7 +1238,251 @@ mod tests {
         ] {
             let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
             draw(&mut app, width, 40);
-            assert_eq!(app.drawn.areas.table.width < width, wide, "{width}");
+            let areas = &app.drawn.areas;
+            if wide {
+                assert!(areas.description.x >= areas.table.right(), "{width}");
+            } else {
+                assert_eq!(areas.table.width, width, "{width}");
+            }
+        }
+    }
+
+    /// The rectangles of the panes `layout` gives, with their names.
+    fn rects(layout: &PaneLayout) -> [(&'static str, Rect); 7] {
+        [
+            ("list", layout.list),
+            ("checks", layout.checks),
+            ("approvers", layout.approvers),
+            ("comments", layout.comments),
+            ("pull_request", layout.pull_request),
+            ("description", layout.description),
+            ("diff", layout.diff),
+        ]
+    }
+
+    /// Every set of hidden panes, the table aside (it is always shown).
+    fn every_hidden_set() -> Vec<Vec<Pane>> {
+        let panes = [
+            Pane::Checks,
+            Pane::Comments,
+            Pane::Description,
+            Pane::Approvers,
+            Pane::Diff,
+        ];
+        (0..1 << panes.len())
+            .map(|bits| {
+                (0..panes.len())
+                    .filter(|i| bits & (1 << i) != 0)
+                    .map(|i| panes[i])
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_shown_panes_stay_inside_the_body_and_never_overlap() {
+        for width in [
+            50,
+            100,
+            WIDE_LAYOUT_MIN_WIDTH - 1,
+            WIDE_LAYOUT_MIN_WIDTH,
+            300,
+        ] {
+            let body = Rect::new(0, 0, width, 40);
+            for hidden in every_hidden_set() {
+                let layout = layout(width, 40, &hidden, &Sizes::default());
+                let shown: Vec<_> = rects(&layout)
+                    .into_iter()
+                    .filter(|(_, rect)| !rect.is_empty())
+                    .collect();
+                for (name, rect) in &shown {
+                    assert!(
+                        body.union(*rect) == body,
+                        "{name} {rect:?} is outside the body at {width} hiding {hidden:?}"
+                    );
+                }
+                for (i, (a_name, a)) in shown.iter().enumerate() {
+                    for (b_name, b) in &shown[i + 1..] {
+                        assert!(
+                            !a.intersects(*b),
+                            "{a_name} {a:?} and {b_name} {b:?} overlap at {width} hiding {hidden:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_hidden_pane_has_an_empty_rectangle() {
+        for width in [100, 200] {
+            for hidden in every_hidden_set() {
+                let layout = layout(width, 40, &hidden, &Sizes::default());
+                for (pane, rect) in [
+                    (Pane::Checks, layout.checks),
+                    (Pane::Comments, layout.comments),
+                    (Pane::Description, layout.description),
+                    (Pane::Approvers, layout.approvers),
+                    (Pane::Diff, layout.diff),
+                ] {
+                    assert_eq!(
+                        hidden.contains(&pane),
+                        rect.is_empty(),
+                        "{pane:?} {hidden:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_tiny_body_does_not_panic() {
+        for width in [20, WIDE_LAYOUT_MIN_WIDTH] {
+            for height in 0..=8 {
+                for hidden in every_hidden_set() {
+                    layout(width, height, &hidden, &Sizes::default());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_approvers_take_the_diffs_room_when_the_diff_is_hidden() {
+        let layout = layout(200, 40, &[Pane::Diff], &Sizes::default());
+        assert!(layout.diff.is_empty());
+        assert!(
+            layout.approvers.height > MAX_APPROVERS_ROWS,
+            "{:?}",
+            layout.approvers
+        );
+        // With the diff shown they have only the rows they asked for.
+        let layout = self::layout(200, 40, &[], &Sizes::default());
+        assert_eq!(layout.approvers.height, 3);
+    }
+
+    #[test]
+    fn the_approvers_are_at_most_a_third_of_their_room() {
+        // Room for 5 rows above and below, so a third is 1, under the 3 asked for.
+        let layout = layout(200, 12, &[Pane::Checks, Pane::Comments], &Sizes::default());
+        let room = layout.approvers.height + layout.diff.height;
+        assert!(room < 9, "{room}");
+        assert_eq!(layout.approvers.height, room / 3);
+    }
+
+    #[test]
+    fn the_pull_request_box_is_over_the_diff_when_the_description_is_hidden() {
+        let layout = layout(100, 40, &[Pane::Description], &Sizes::default());
+        assert!(layout.description.is_empty());
+        let pull_request = layout.pull_request;
+        assert_eq!(pull_request.height, PULL_REQUEST_ROWS);
+        assert_eq!(pull_request.bottom(), layout.approvers.y);
+        assert_eq!(pull_request.x, layout.approvers.x);
+        assert_eq!(pull_request.width, layout.diff.width);
+    }
+
+    #[test]
+    fn the_pull_request_box_goes_with_the_details() {
+        let details = [Pane::Description, Pane::Approvers, Pane::Diff];
+        for width in [100, 200] {
+            let layout = layout(width, 40, &details, &Sizes::default());
+            assert!(layout.pull_request.is_empty(), "{width}");
+            // The list has the whole width.
+            assert_eq!(layout.list.width, width, "{width}");
+        }
+    }
+
+    /// The divider of `stack` between its items `a` and `b`.
+    fn divider_of(layout: &PaneLayout, stack: StackId, a: usize, b: usize) -> Divider {
+        layout
+            .dividers
+            .iter()
+            .find(|d| d.stack == stack && d.between == (a, b))
+            .unwrap_or_else(|| panic!("no divider {stack:?} {a} {b}"))
+            .clone()
+    }
+
+    #[test]
+    fn a_divider_between_stacked_panes_sits_on_their_borders() {
+        let layout = layout(200, 40, &[], &Sizes::default());
+        let (top, below) = (layout.list, layout.checks);
+        let divider = divider_of(&layout, StackId::Left, 0, 1);
+        assert!(divider.stacked);
+        assert_eq!(
+            divider.hit,
+            Rect::new(top.x, top.bottom() - 1, top.width, 2)
+        );
+        assert_eq!(divider.boundary, below.y);
+        assert_eq!(divider.start, top.y);
+        assert_eq!(divider.end, below.bottom());
+        assert_eq!(divider.before, [Pane::Table]);
+        assert_eq!(divider.after, [Pane::Checks]);
+    }
+
+    #[test]
+    fn a_divider_between_side_by_side_panes_sits_on_their_borders() {
+        let layout = layout(200, 40, &[], &Sizes::default());
+        let (left, right) = (layout.list, layout.description);
+        let divider = divider_of(&layout, StackId::Columns, 0, 1);
+        assert!(!divider.stacked);
+        assert_eq!(divider.hit.x, left.right() - 1);
+        assert_eq!(divider.hit.width, 2);
+        assert_eq!(divider.boundary, right.x);
+        assert_eq!(divider.start, 0);
+        assert_eq!(divider.end, 200);
+    }
+
+    #[test]
+    fn a_divider_skips_a_hidden_pane() {
+        let layout = layout(200, 40, &[Pane::Checks], &Sizes::default());
+        assert!(
+            layout
+                .dividers
+                .iter()
+                .all(|d| d.between != (0, 1) || d.stack != StackId::Left)
+        );
+        let divider = divider_of(&layout, StackId::Left, 0, 2);
+        assert_eq!(divider.boundary, layout.comments.y);
+        assert_eq!(
+            divider.items.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+            [0, 2]
+        );
+    }
+
+    #[test]
+    fn narrow_dividers_are_between_the_rows_and_columns() {
+        let layout = layout(100, 40, &[], &Sizes::default());
+        let rows = divider_of(&layout, StackId::Rows, 0, 1);
+        assert_eq!(rows.boundary, layout.pull_request.y);
+        let columns = divider_of(&layout, StackId::DetailColumns, 0, 1);
+        assert_eq!(columns.boundary, layout.approvers.x);
+        let lower = divider_of(&layout, StackId::Lower, 0, 1);
+        assert_eq!(lower.boundary, layout.comments.x);
+        assert_eq!(lower.before, [Pane::Checks]);
+        assert_eq!(lower.after, [Pane::Comments]);
+    }
+
+    #[test]
+    fn a_resized_stack_shares_its_room_by_its_weights() {
+        for (width, stack, size) in [
+            (200, StackId::Columns, (200, 40)),
+            (100, StackId::Rows, (100, 40)),
+        ] {
+            let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+            draw(&mut app, size.0, size.1);
+            let before = layout(width, 39, &[], &app.sizes);
+            let divider = divider_of(&before, stack, 0, 1);
+            let to = if divider.stacked {
+                divider.boundary + 4
+            } else {
+                divider.boundary + 20
+            };
+            drag_divider(&mut app, &divider, to, size);
+            assert!(!app.sizes.is_default(), "{stack:?}");
+            let after = layout(width, 39, &[], &app.sizes);
+            let moved = divider_of(&after, stack, 0, 1);
+            assert!(moved.boundary > divider.boundary, "{stack:?}");
+            assert_eq!(moved.start, divider.start);
+            assert_eq!(moved.end, divider.end);
         }
     }
 

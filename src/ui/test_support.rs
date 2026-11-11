@@ -253,7 +253,6 @@ pub(super) fn thumb(buffer: &Buffer, area: Rect, axis: Axis) -> Vec<u16> {
 
 /// The layout of a body of this size with these panes hidden and resized, with three rows for the
 /// approvers. It calls `pane_layout` directly, so a test sees the rects and dividers it returns.
-#[allow(dead_code)] // For the `pane_layout` tests of M4 of plan.md.
 pub(super) fn layout(width: u16, height: u16, hidden: &[Pane], sizes: &Sizes) -> PaneLayout {
     pane_layout(Rect::new(0, 0, width, height), 3, hidden, sizes)
 }
