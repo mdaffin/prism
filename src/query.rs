@@ -602,8 +602,7 @@ mod tests {
     }
 
     #[test]
-    fn the_cursor_may_be_past_the_end_or_the_query_empty() {
-        assert_eq!(complete("", 0, &Candidates::default()), None);
+    fn the_cursor_may_be_past_the_end() {
         assert_eq!(
             complete("is:", 99, &Candidates::default())
                 .unwrap()

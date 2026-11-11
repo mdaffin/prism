@@ -1220,6 +1220,10 @@ mod tests {
     fn a_missing_review_decision_is_what_an_empty_string_was() {
         assert_eq!(pr(12).review_decision, ReviewDecision::Other);
         assert_eq!(pr(13).review_decision, ReviewDecision::Other);
+    }
+
+    #[test]
+    fn a_listed_pr_keeps_its_review_decision_mergeable_and_state() {
         assert_eq!(pr(14).review_decision, ReviewDecision::Approved);
         assert_eq!(pr(14).mergeable, Mergeable::Conflicting);
         assert_eq!(pr(13).state, PrState::Merged);
@@ -1252,26 +1256,14 @@ mod tests {
     }
 
     #[test]
-    fn a_status_search_gives_the_fields_a_refresh_brings() {
-        let search: Search<GqlStatus> = page_of();
-        let statuses: Vec<PrStatus> = search.prs().into_iter().map(PrStatus::from).collect();
-        assert_eq!(statuses.len(), 3);
-        assert_eq!(statuses[0].number, 12);
-        assert_eq!(statuses[0].status_check_rollup.len(), 4);
-        assert_eq!(statuses[0].review_decision, ReviewDecision::Other);
-        assert_eq!(statuses[1].state, PrState::Merged);
-        assert_eq!(statuses[2].mergeable, Mergeable::Conflicting);
-        assert_eq!(statuses[2].updated_at, "2026-01-02T03:04:08Z");
-    }
-
-    #[test]
     fn a_status_and_a_listed_pr_have_the_same_checks() {
-        let status: Vec<PrStatus> = page_of::<GqlStatus>()
+        let statuses: Vec<PrStatus> = page_of::<GqlStatus>()
             .prs()
             .into_iter()
             .map(PrStatus::from)
             .collect();
-        for status in &status {
+        assert_eq!(statuses.len(), 3);
+        for status in &statuses {
             assert_eq!(
                 status.status_check_rollup,
                 pr(status.number).status_check_rollup,
@@ -1279,6 +1271,13 @@ mod tests {
                 status.number
             );
         }
+        // And the other fields a refresh brings.
+        assert_eq!(statuses[0].number, 12);
+        assert_eq!(statuses[0].status_check_rollup.len(), 4);
+        assert_eq!(statuses[0].review_decision, ReviewDecision::Other);
+        assert_eq!(statuses[1].state, PrState::Merged);
+        assert_eq!(statuses[2].mergeable, Mergeable::Conflicting);
+        assert_eq!(statuses[2].updated_at, "2026-01-02T03:04:08Z");
     }
 
     #[test]
@@ -1301,7 +1300,11 @@ mod tests {
         assert!(query.contains("pr12: pullRequest(number: 12) { ...StatusFields }"));
         assert!(query.contains("pr7: pullRequest(number: 7) { ...StatusFields }"));
         assert!(query.contains("repository(owner: $owner, name: $name)"));
-        // The user's search text is never part of a query, only of its variables.
+    }
+
+    #[test]
+    fn the_users_text_is_never_in_the_query() {
+        // It is only in the variables.
         assert!(!search_query(Fields::List).contains("repo:"));
     }
 

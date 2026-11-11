@@ -205,47 +205,33 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_check_keeps_the_pr_from_passing() {
-        let checks = classify_checks(
-            Mergeable::Other,
-            &[status("ci/legacy", "SUCCESS"), Check::Unknown],
-        );
-        assert_eq!(checks.state, CheckState::Pending);
-        // It is listed, so the checks pane shows why.
-        assert_eq!(checks.results.len(), 2);
-
-        // On its own it is pending too, not "no checks".
-        let checks = classify_checks(Mergeable::Other, &[Check::Unknown]);
-        assert_eq!(checks.state, CheckState::Pending);
-        // A failing check still outranks it.
-        let checks = classify_checks(Mergeable::Other, &[Check::Unknown, status("a", "FAILURE")]);
-        assert_eq!(checks.state, CheckState::Failing);
-    }
-
-    #[test]
-    fn check_run_state() {
-        assert_eq!(check_state(&in_progress("a")), CheckState::Pending);
-        assert_eq!(
-            check_state(&check_run("a", "QUEUED", "SUCCESS", None)),
-            CheckState::Pending
-        );
-        for conclusion in ["SUCCESS", "NEUTRAL", "SKIPPED"] {
-            let check = completed("a", conclusion);
-            assert_eq!(check_state(&check), CheckState::Passing, "{conclusion}");
+    fn single_check_state() {
+        use CheckState::{Failing, Passing, Pending};
+        let cases = [
+            // A check run that has not finished is pending, whatever it says it concluded.
+            (in_progress("a"), Pending, "in progress"),
+            (check_run("a", "QUEUED", "SUCCESS", None), Pending, "queued"),
+            (completed("a", "SUCCESS"), Passing, "SUCCESS"),
+            (completed("a", "NEUTRAL"), Passing, "NEUTRAL"),
+            (completed("a", "SKIPPED"), Passing, "SKIPPED"),
+            (completed("a", "FAILURE"), Failing, "FAILURE"),
+            (completed("a", "CANCELLED"), Failing, "CANCELLED"),
+            (completed("a", "TIMED_OUT"), Failing, "TIMED_OUT"),
+            (
+                completed("a", "ACTION_REQUIRED"),
+                Failing,
+                "ACTION_REQUIRED",
+            ),
+            (completed("a", ""), Failing, "no conclusion"),
+            (status("c", "SUCCESS"), Passing, "status SUCCESS"),
+            (status("c", "PENDING"), Pending, "status PENDING"),
+            (status("c", "EXPECTED"), Pending, "status EXPECTED"),
+            (status("c", "FAILURE"), Failing, "status FAILURE"),
+            (status("c", "ERROR"), Failing, "status ERROR"),
+        ];
+        for (check, expected, what) in cases {
+            assert_eq!(check_state(&check), expected, "{what}");
         }
-        for conclusion in ["FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", ""] {
-            let check = completed("a", conclusion);
-            assert_eq!(check_state(&check), CheckState::Failing, "{conclusion}");
-        }
-    }
-
-    #[test]
-    fn status_context_state() {
-        assert_eq!(check_state(&status("c", "SUCCESS")), CheckState::Passing);
-        assert_eq!(check_state(&status("c", "PENDING")), CheckState::Pending);
-        assert_eq!(check_state(&status("c", "EXPECTED")), CheckState::Pending);
-        assert_eq!(check_state(&status("c", "FAILURE")), CheckState::Failing);
-        assert_eq!(check_state(&status("c", "ERROR")), CheckState::Failing);
     }
 
     #[test]
@@ -304,6 +290,7 @@ mod tests {
         let pass = completed("a", "SUCCESS");
         let pend = in_progress("b");
         let fail = completed("c", "FAILURE");
+        let unknown = Check::Unknown;
         let state = |mergeable, checks: &[&Check]| {
             let checks: Vec<Check> = checks.iter().map(|c| (*c).clone()).collect();
             classify_checks(mergeable, &checks).state
@@ -327,5 +314,19 @@ mod tests {
         assert_eq!(state(Mergeable::Unknown, &[&pass]), CheckState::Pending);
         assert_eq!(state(Mergeable::Unknown, &[]), CheckState::Pending);
         assert_eq!(state(Mergeable::Unknown, &[&fail]), CheckState::Failing);
+        // An unknown check keeps the PR from passing, and is not `no checks` on its own either,
+        // but a failing check still outranks it.
+        assert_eq!(
+            state(Mergeable::Other, &[&pass, &unknown]),
+            CheckState::Pending
+        );
+        assert_eq!(state(Mergeable::Other, &[&unknown]), CheckState::Pending);
+        assert_eq!(
+            state(Mergeable::Other, &[&unknown, &fail]),
+            CheckState::Failing
+        );
+        // It is listed, so the checks pane shows why.
+        let checks = classify_checks(Mergeable::Other, &[pass.clone(), unknown.clone()]);
+        assert_eq!(checks.results.len(), 2);
     }
 }
