@@ -125,10 +125,13 @@ fn alias(number: u64) -> String {
 }
 
 /// A query for these PRs by number, all in one request. The numbers are written into the query,
-/// which is safe as they are numbers. The repository is in the variables `$owner` and `$name`.
+/// which is safe as they are numbers. A number given twice is asked for once, as GraphQL rejects a
+/// query that uses an alias twice. The repository is in the variables `$owner` and `$name`.
 pub fn lookup_query(numbers: &[u64], fields: Fields) -> String {
+    let mut seen = std::collections::HashSet::new();
     let lookups: String = numbers
         .iter()
+        .filter(|&&number| seen.insert(number))
         .map(|&number| {
             format!(
                 "    {}: pullRequest(number: {number}) {{ ...{} }}\n",
@@ -1300,6 +1303,14 @@ mod tests {
         assert!(query.contains("repository(owner: $owner, name: $name)"));
         // The user's search text is never part of a query, only of its variables.
         assert!(!search_query(Fields::List).contains("repo:"));
+    }
+
+    #[test]
+    fn a_lookup_asks_for_a_repeated_number_only_once() {
+        // GraphQL rejects a query that uses an alias twice.
+        let query = lookup_query(&[5, 7, 5], Fields::Status);
+        assert_eq!(query.matches("pr5: ").count(), 1);
+        assert_eq!(query.matches("pr7: ").count(), 1);
     }
 
     #[test]
