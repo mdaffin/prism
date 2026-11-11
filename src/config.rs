@@ -90,8 +90,19 @@ history_limit = 20
 
     #[test]
     fn an_empty_file_sets_nothing() {
-        let config = load("").unwrap();
-        assert!(config.author.is_none() && config.limit.is_none() && config.mouse.is_none());
+        // Naming every field, so that a new one has to be checked here too.
+        let Config {
+            author,
+            search,
+            column_regex,
+            limit,
+            merge_method,
+            mouse,
+            history_limit,
+        } = load("").unwrap();
+        assert!(author.is_none() && search.is_none() && column_regex.is_none());
+        assert!(limit.is_none() && merge_method.is_none());
+        assert!(mouse.is_none() && history_limit.is_none());
     }
 
     #[test]

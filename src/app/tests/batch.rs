@@ -81,11 +81,15 @@ fn approvals_run_at_most_four_at_once() {
 fn keys_are_ignored_while_approving() {
     let mut app = app_with_rows(2);
     start_approving(&mut app, 1);
+    let (highlight, selected) = (app.table.selected(), app.selected.clone());
     for code in [KeyCode::Esc, KeyCode::Char('j'), KeyCode::Enter] {
         key(&mut app, code);
     }
     assert!(matches!(app.mode, Mode::Running(_)));
     assert!(!app.should_quit);
+    assert_eq!(app.table.selected(), highlight);
+    assert_eq!(app.selected, selected);
+    assert!(app.typing == Typing::Nothing);
 }
 
 #[test]

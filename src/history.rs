@@ -294,5 +294,8 @@ mod tests {
         let mut history = History::load(Some(file.join("history")), 100);
         history.record("a");
         history.save();
+        // Nothing was written over the file, and nothing was made beside it.
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

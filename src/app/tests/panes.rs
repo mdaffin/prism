@@ -1,5 +1,15 @@
 use super::*;
 
+/// The highlighted check and how far the checks are scrolled.
+fn checks_view(app: &App) -> (usize, u16) {
+    (app.scroll.check, app.scroll.checks)
+}
+
+/// The highlighted comment and how far the comments are scrolled.
+fn comments_view(app: &App) -> (usize, u16) {
+    (app.scroll.comment, app.scroll.comments)
+}
+
 #[test]
 fn tab_cycles_focus_through_the_panes_and_back_tab_goes_the_other_way() {
     let mut app = app_with_rows(3);
@@ -36,9 +46,9 @@ fn the_arrows_in_the_checks_move_the_highlighted_check_and_a_page_scrolls() {
     focus(&mut app, Pane::Checks);
     with_check_rows(&mut app, 4, 0, 2);
     press(&mut app, "jjj");
-    assert_eq!((app.scroll.check, app.scroll.checks), (3, 2));
+    assert_eq!(checks_view(&app), (3, 2));
     key(&mut app, KeyCode::PageUp);
-    assert_eq!((app.scroll.check, app.scroll.checks), (3, 0));
+    assert_eq!(checks_view(&app), (3, 0));
 }
 
 #[test]
@@ -50,12 +60,12 @@ fn the_arrows_in_the_comments_go_comment_by_comment_and_a_page_scrolls() {
     press(&mut app, "jj");
     assert_eq!(app.scroll.comment, 2);
     key(&mut app, KeyCode::PageDown);
-    assert_eq!((app.scroll.comment, app.scroll.comments), (2, 5));
+    assert_eq!(comments_view(&app), (2, 5));
     key(&mut app, KeyCode::PageUp);
     key(&mut app, KeyCode::PageUp);
     assert_eq!(app.scroll.comments, 0);
     press(&mut app, "k");
-    assert_eq!((app.scroll.comment, app.scroll.comments), (1, 0));
+    assert_eq!(comments_view(&app), (1, 0));
 }
 
 #[test]
@@ -173,9 +183,9 @@ fn home_and_end_in_the_comments_jump_to_the_first_and_last_comment_with_the_view
     with_comment_rows(&mut app, &[1, 10, 1]);
     focus(&mut app, Pane::Comments);
     key(&mut app, KeyCode::End);
-    assert_eq!((app.scroll.comment, app.scroll.comments), (2, 11));
+    assert_eq!(comments_view(&app), (2, 11));
     key(&mut app, KeyCode::Home);
-    assert_eq!((app.scroll.comment, app.scroll.comments), (0, 0));
+    assert_eq!(comments_view(&app), (0, 0));
 }
 
 #[test]
@@ -183,7 +193,8 @@ fn home_and_end_in_the_description_scroll_to_the_top_and_to_the_bottom_once_the_
     let mut app = app_with_rows(3);
     focus(&mut app, Pane::Description);
     key(&mut app, KeyCode::End);
-    assert_eq!(app.scroll.description, u16::MAX);
+    // Far past the end, which the view clamps (the draw tests check it reaches the bottom).
+    assert!(app.scroll.description > 1000);
     key(&mut app, KeyCode::Home);
     assert_eq!(app.scroll.description, 0);
 }
@@ -193,7 +204,8 @@ fn end_in_the_diff_scrolls_to_the_bottom_once_the_view_clamps_it() {
     let mut app = app_with_rows(3);
     focus(&mut app, Pane::Diff);
     key(&mut app, KeyCode::End);
-    assert_eq!(app.scroll.diff, u16::MAX);
+    // Far past the end, which the view clamps (the draw tests check it reaches the bottom).
+    assert!(app.scroll.diff > 1000);
 }
 
 #[test]
@@ -202,9 +214,9 @@ fn home_and_end_in_the_checks_jump_to_the_first_and_last_check_and_the_view_foll
     with_check_rows(&mut app, 5, 0, 3);
     focus(&mut app, Pane::Checks);
     key(&mut app, KeyCode::End);
-    assert_eq!((app.scroll.check, app.scroll.checks), (4, 2));
+    assert_eq!(checks_view(&app), (4, 2));
     key(&mut app, KeyCode::Home);
-    assert_eq!((app.scroll.check, app.scroll.checks), (0, 0));
+    assert_eq!(checks_view(&app), (0, 0));
 }
 
 #[test]
@@ -264,7 +276,7 @@ fn scroll_goes_back_to_the_top_when_the_highlight_moves() {
         (app.scroll.checks, app.scroll.description, app.scroll.diff),
         (0, 0, 0)
     );
-    assert_eq!((app.scroll.comment, app.scroll.comments), (0, 0));
+    assert_eq!(comments_view(&app), (0, 0));
 
     // A highlight that can't move, at the last row, leaves the scroll alone.
     key(&mut app, KeyCode::Down);

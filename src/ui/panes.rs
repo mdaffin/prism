@@ -1044,13 +1044,19 @@ mod tests {
     #[test]
     fn a_failed_or_loading_diff_has_nothing_to_select() {
         let mut app = app_with_text("body", "");
-        draw_wide(&mut app);
-        let inner = app.drawn.areas.diff;
-        press_at(&mut app, Position::new(inner.x + 2, inner.y + 1));
-        drag_to(&mut app, Position::new(inner.x + 9, inner.y + 1));
-        release_at(&mut app, Position::new(inner.x + 9, inner.y + 1));
-        assert!(app.selection().is_none());
-        assert!(app.copy_to_run().is_none());
+        // The diff is still loading, then it fails.
+        for failed in [false, true] {
+            if failed {
+                app.diff_loaded(1, Err(color_eyre::eyre::eyre!("boom")));
+            }
+            draw_wide(&mut app);
+            let inner = app.drawn.areas.diff;
+            press_at(&mut app, Position::new(inner.x + 2, inner.y + 1));
+            drag_to(&mut app, Position::new(inner.x + 9, inner.y + 1));
+            release_at(&mut app, Position::new(inner.x + 9, inner.y + 1));
+            assert!(app.selection().is_none(), "failed: {failed}");
+            assert!(app.copy_to_run().is_none(), "failed: {failed}");
+        }
     }
 
     #[test]
@@ -1171,6 +1177,8 @@ mod tests {
         );
         draw(&mut app, 100, 24);
         let areas = &app.drawn.areas;
+        // Squeezed to the least it needs, though 30 lines would fill it.
+        assert_eq!(areas.approvers.height, MIN_APPROVERS_ROWS);
         assert!(areas.description.height >= areas.approvers.height);
     }
 
@@ -1224,14 +1232,18 @@ mod tests {
     #[test]
     fn the_approvers_pane_says_when_there_is_nothing_and_while_it_loads() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        let screen = lines(&draw_wide(&mut app));
-        assert!(shows(&screen, "Loading…"));
+        // Other panes say `Loading…` too, so look only in this one.
+        let buffer = draw_wide(&mut app);
+        assert_eq!(
+            pane_row(&buffer, app.drawn.areas.approvers, 0).trim_end(),
+            "Loading…"
+        );
         app.details_loaded(1, Ok(details_with_approvers(serde_json::json!({}))));
-        let screen = lines(&draw_wide(&mut app));
-        assert!(shows(&screen, "No reviews or review requests."));
-        app.details_loaded(1, Err(color_eyre::eyre::eyre!("boom")));
-        let screen = lines(&draw_wide(&mut app));
-        assert!(shows(&screen, "Failed to load details: boom"));
+        let buffer = draw_wide(&mut app);
+        assert_eq!(
+            pane_row(&buffer, app.drawn.areas.approvers, 0).trim_end(),
+            "No reviews or review requests."
+        );
     }
 
     #[test]
@@ -1244,7 +1256,7 @@ mod tests {
             )),
         );
         let buffer = draw_wide(&mut app);
-        assert!(has_scrollbar(&buffer, app.drawn.areas.approvers));
+        assert!(has_scrollbar(&app, ScrollTarget::Approvers));
         assert!(find(&buffer, "@user0 ").is_some() && find(&buffer, "@user29 ").is_none());
         focus(&mut app, Pane::Approvers);
         key(&mut app, KeyCode::End);
@@ -1399,15 +1411,14 @@ mod tests {
         key(&mut app, KeyCode::Tab);
         key(&mut app, KeyCode::Tab);
         press(&mut app, " ");
-        let buffer = draw_wide(&mut app);
-        let areas = &app.drawn.areas;
-        for (name, area) in [
-            ("checks", areas.checks),
-            ("comments", areas.comments),
-            ("description", areas.description),
-            ("diff", areas.diff),
+        draw_wide(&mut app);
+        for (name, target) in [
+            ("checks", ScrollTarget::Checks),
+            ("comments", ScrollTarget::Comments),
+            ("description", ScrollTarget::Description),
+            ("diff", ScrollTarget::Diff),
         ] {
-            assert!(has_scrollbar(&buffer, area), "{name}");
+            assert!(has_scrollbar(&app, target), "{name}");
         }
     }
 
@@ -1415,16 +1426,15 @@ mod tests {
     fn a_pane_whose_text_fits_has_no_scrollbar_on_either_axis() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         app.diff_loaded(1, Ok("+added".to_string()));
-        let buffer = draw_wide(&mut app);
-        let areas = &app.drawn.areas;
-        for (name, area) in [
-            ("table", areas.table),
-            ("checks", areas.checks),
-            ("comments", areas.comments),
-            ("description", areas.description),
-            ("diff", areas.diff),
+        draw_wide(&mut app);
+        for (name, target) in [
+            ("table", ScrollTarget::Table),
+            ("checks", ScrollTarget::Checks),
+            ("comments", ScrollTarget::Comments),
+            ("description", ScrollTarget::Description),
+            ("diff", ScrollTarget::Diff),
         ] {
-            assert!(!has_scrollbar(&buffer, area), "{name}");
+            assert!(!has_scrollbar(&app, target), "{name}");
         }
 
         // Nor does it sideways, in a narrow terminal.

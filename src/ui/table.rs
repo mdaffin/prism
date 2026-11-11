@@ -586,9 +586,11 @@ mod tests {
     #[test]
     fn sorting_by_the_update_time_leaves_no_sorted_by_note_in_the_title() {
         let mut app = app_with_two_to_sort();
+        let before = lines(&draw(&mut app, 200, 30))[0].clone();
         press(&mut app, "sssss");
+        assert_eq!(app.sort().0, Sort::Updated);
         let screen = lines(&draw(&mut app, 200, 30));
-        assert!(!screen[0].contains("sorted by"), "{}", screen[0]);
+        assert_eq!(screen[0], before);
     }
 
     /// The middle of the header cell that sorts by `sort`, as last drawn.
@@ -815,10 +817,6 @@ mod tests {
         let mut app = app_with(vec![by("alice", 1, "Bump alpha"), by("bob", 2, "Bump b")]);
         press(&mut app, "v");
         let screen = lines(&draw(&mut app, 200, 30)).join("\n");
-        assert!(
-            screen.contains("[x] Number") || screen.contains("[x] #"),
-            "{screen}"
-        );
         for column in Column::ALL {
             assert!(
                 screen.contains(&format!("[x] {}", column.name())),
@@ -1082,12 +1080,8 @@ mod tests {
         click_checkbox(&mut app, 1);
         assert_eq!(app.selected, HashSet::from([2]));
         assert_eq!(app.table.selected(), Some(1));
-        let buffer = draw(&mut app, 200, 30);
-        assert!(
-            lines(&buffer)
-                .iter()
-                .any(|l| l.contains("[x]") && l.contains("#2"))
-        );
+        let screen = lines(&draw(&mut app, 200, 30));
+        assert!(table_row_line(&app, &screen, "#2").contains("[x]"));
         click_checkbox(&mut app, 1);
         assert!(app.selected.is_empty());
 
@@ -1125,12 +1119,12 @@ mod tests {
     #[test]
     fn the_table_has_a_scrollbar_only_with_more_rows_than_fit() {
         let mut app = app_with((1..=80).map(|n| pr(n, "Bump", "OPEN", "")).collect());
-        let buffer = draw_wide(&mut app);
-        assert!(has_scrollbar(&buffer, app.drawn.areas.table));
+        draw_wide(&mut app);
+        assert!(has_scrollbar(&app, ScrollTarget::Table));
 
         press(&mut app, "f#80");
-        let buffer = draw_wide(&mut app);
-        assert!(!has_scrollbar(&buffer, app.drawn.areas.table));
+        draw_wide(&mut app);
+        assert!(!has_scrollbar(&app, ScrollTarget::Table));
     }
 
     #[test]

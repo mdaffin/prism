@@ -258,9 +258,13 @@ pub(super) fn layout(width: u16, height: u16, hidden: &[Pane], sizes: &Sizes) ->
     pane_layout(Rect::new(0, 0, width, height), 3, hidden, sizes)
 }
 
-/// Whether `area`'s right border has a scrollbar (its track or thumb) beside the first row.
-pub(super) fn has_scrollbar(buffer: &Buffer, area: Rect) -> bool {
-    matches!(buffer[(area.right() - 1, area.y + 1)].symbol(), "█" | "║")
+/// Whether a vertical scrollbar was drawn for `target`.
+pub(super) fn has_scrollbar(app: &App, target: ScrollTarget) -> bool {
+    app.drawn
+        .areas
+        .scrollbars
+        .iter()
+        .any(|hit| hit.vertical && hit.target == target)
 }
 
 /// The text of row `row` (counted from the first inside the border) of the pane at `area`.

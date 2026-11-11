@@ -785,8 +785,15 @@ mod tests {
     fn a_tall_help_popup_has_no_scrollbar() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         press(&mut app, "?");
-        draw(&mut app, 200, 120);
+        let buffer = draw(&mut app, 200, 120);
         assert_eq!(app.drawn.popup.content, app.drawn.popup.viewport);
+        // And none is drawn.
+        let area = buffer.area;
+        let thumbs = (0..area.height)
+            .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+            .filter(|&pos| buffer[pos].symbol() == "█")
+            .count();
+        assert_eq!(thumbs, 0);
         key(&mut app, KeyCode::End);
         draw(&mut app, 200, 120);
         assert_eq!(app.drawn.popup.offset, 0);

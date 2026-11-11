@@ -192,21 +192,15 @@ mod tests {
 
         tab(&mut app, 1);
         let bar = status_bar(&mut app, 160, 30);
-        assert!(
-            bar.contains(
-                "o: Open | y: Copy | ?: Help | /: Search | q: Quit | https://example.test/job"
-            ),
-            "{bar}"
+        assert_eq!(
+            bar,
+            "o: Open | y: Copy | ?: Help | /: Search | q: Quit | https://example.test/job"
         );
 
         // The passing check has no page, so there is no `o` hint either.
         press(&mut app, "j");
         let bar = status_bar(&mut app, 160, 30);
-        assert!(bar.ends_with("q: Quit | No page"), "{bar}");
-        assert!(
-            !bar.contains("o: Open") && !bar.contains("y: Copy"),
-            "{bar}"
-        );
+        assert_eq!(bar, "?: Help | /: Search | q: Quit | No page");
     }
 
     #[test]
@@ -223,19 +217,18 @@ mod tests {
         app.details_loaded(1, Ok(details));
         tab(&mut app, 2);
         let bar = status_bar(&mut app, 160, 30);
-        assert!(
-            bar.contains("Space: Expand | o: Open | y: Copy | ?: Help | /: Search | q: Quit | https://example.test/pull/1#issuecomment-1"),
-            "{bar}"
+        assert_eq!(
+            bar,
+            "Space: Expand | o: Open | y: Copy | ?: Help | /: Search | q: Quit | https://example.test/pull/1#issuecomment-1"
         );
         // `o` still opens the PR for a comment with no page of its own.
         with_comment_rows(&mut app, &[1, 1]);
         press(&mut app, "j");
         let bar = status_bar(&mut app, 160, 30);
-        assert!(
-            bar.contains("Space: Expand | ?: Help | /: Search | q: Quit | No page, o opens the PR"),
-            "{bar}"
+        assert_eq!(
+            bar,
+            "Space: Expand | ?: Help | /: Search | q: Quit | No page, o opens the PR"
         );
-        assert!(!bar.contains("o: Open"), "{bar}");
     }
 
     #[test]
@@ -250,21 +243,18 @@ mod tests {
         ]);
         tab(&mut app, 1);
         // Wide enough for all of it.
-        assert!(status_bar(&mut app, 200, 30).contains(long));
-        // Room for the hints, so only the URL is cut, in the middle.
-        let bar = status_bar(&mut app, 110, 30);
-        assert!(
-            bar.contains("https://github.com/") && bar.contains("…"),
-            "{bar}"
+        assert_eq!(
+            status_bar(&mut app, 200, 30),
+            format!("o: Open | y: Copy | ?: Help | /: Search | q: Quit | {long}")
         );
-        assert!(
-            bar.contains("o: Open | y: Copy | ?: Help | /: Search | q: Quit | https://"),
-            "{bar}"
+        // Room for the hints, so only the URL is cut, in the middle.
+        assert_eq!(
+            status_bar(&mut app, 110, 30),
+            "o: Open | y: Copy | ?: Help | /: Search | q: Quit | https://github.com/example/pr…runs/123456789/job/987654321"
         );
         // Narrower still: the other hints go, `o` stays.
         let bar = status_bar(&mut app, 50, 30);
-        assert!(bar.contains("…") && bar.contains("o: Open"), "{bar}");
-        assert!(!bar.contains("?: Help"), "{bar}");
+        assert_eq!(bar, "o: Open | y: Copy | https://github.…/job/987654321");
         assert!(bar.chars().count() <= 50, "{bar}");
     }
 
