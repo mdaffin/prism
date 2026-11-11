@@ -722,26 +722,42 @@ mod tests {
     }
 
     #[test]
-    fn there_is_no_author_header_to_click_when_the_search_names_one_author() {
-        let mut app = app_with_query("is:pr author:alice", vec![by("alice", 1, "Bump alpha")]);
-        draw(&mut app, 200, 30);
-        let sorts: Vec<Sort> = app
-            .drawn
-            .areas
-            .table_header
-            .iter()
-            .map(|(_, s)| *s)
-            .collect();
-        assert_eq!(
-            sorts,
-            [
-                Sort::Number,
-                Sort::Checks,
-                Sort::Review,
-                Sort::Updated,
-                Sort::Title
-            ]
-        );
+    fn the_author_column_is_shown_unless_the_query_names_one_author() {
+        for (query, author, shown) in [
+            ("is:pr", "alice", true),
+            ("is:pr alice", "alice", true),
+            ("is:pr author:alice", "alice", false),
+            ("is:pr author:app/renovate", "app/renovate", false),
+        ] {
+            let mut app = app_with_query(query, vec![by(author, 1, "Bump alpha")]);
+            let screen = lines(&draw(&mut app, 200, 30));
+            assert_eq!(shows(&screen, "Author"), shown, "{query}");
+            let row = table_row_line(&app, &screen, "#1");
+            assert_eq!(row.contains(author), shown, "{query}: {row}");
+            assert!(row.contains("Bump alpha"), "{query}: {row}");
+            // Without the column there is no header to click either.
+            let sorts: Vec<Sort> = app
+                .drawn
+                .areas
+                .table_header
+                .iter()
+                .map(|(_, s)| *s)
+                .collect();
+            assert_eq!(sorts.contains(&Sort::Author), shown, "{query}: {sorts:?}");
+            if !shown {
+                assert_eq!(
+                    sorts,
+                    [
+                        Sort::Number,
+                        Sort::Checks,
+                        Sort::Review,
+                        Sort::Updated,
+                        Sort::Title
+                    ],
+                    "{query}"
+                );
+            }
+        }
     }
 
     /// The header row of the table, as drawn at 200 columns.
@@ -984,6 +1000,17 @@ mod tests {
         let position = find(&buffer, "Bump example-lib").unwrap();
         assert!(screen[usize::from(position.y)].contains("#7"));
         assert_eq!(buffer[position].symbol(), "B");
+
+        // Each PR's author, and a bot as the query spells it.
+        assert!(shows(&screen, "Author"));
+        assert!(open.contains("alice"), "{open}");
+        let mut app = app_with(vec![
+            by("bob", 1, "Bump alpha"),
+            by("app/renovate", 2, "Bump b"),
+        ]);
+        let screen = lines(&draw(&mut app, 200, 30));
+        assert!(table_row_line(&app, &screen, "#1").contains("bob"));
+        assert!(table_row_line(&app, &screen, "#2").contains("app/renovate"));
     }
 
     #[test]
@@ -1006,64 +1033,6 @@ mod tests {
             let position = Position::new(column as u16, table_row as u16);
             assert_eq!(buffer[position].fg, colour, "{label}");
         }
-    }
-
-    #[test]
-    fn draws_the_author_of_each_pr() {
-        let mut app = app_with(vec![
-            by("alice", 1, "Bump alpha"),
-            by("bob", 2, "Bump beta"),
-        ]);
-        let screen = lines(&draw(&mut app, 200, 30));
-
-        assert!(shows(&screen, "Author"));
-        assert!(
-            screen
-                .iter()
-                .any(|l| l.contains("#1") && l.contains("alice"))
-        );
-        assert!(screen.iter().any(|l| l.contains("#2") && l.contains("bob")));
-    }
-
-    #[test]
-    fn draws_a_bot_the_way_the_query_spells_it() {
-        let mut app = app_with(vec![by("app/renovate", 1, "Bump alpha")]);
-        let screen = lines(&draw(&mut app, 200, 30));
-
-        assert!(
-            screen
-                .iter()
-                .any(|l| l.contains("#1") && l.contains("app/renovate"))
-        );
-    }
-
-    #[test]
-    fn hides_the_author_column_when_the_query_names_one_author() {
-        let mut app = app_with_query(
-            "is:pr author:app/renovate",
-            vec![by("app/renovate", 1, "Bump alpha")],
-        );
-        let screen = lines(&draw(&mut app, 200, 30));
-
-        assert!(!shows(&screen, "Author"));
-        assert!(
-            !screen
-                .iter()
-                .any(|l| l.contains("[ ]") && l.contains("app/renovate"))
-        );
-        assert!(
-            screen
-                .iter()
-                .any(|l| l.contains("#1") && l.contains("Bump alpha"))
-        );
-    }
-
-    #[test]
-    fn a_search_term_does_not_hide_the_author_column() {
-        let mut app = app_with_query("is:pr alice", vec![by("alice", 1, "Bump alpha")]);
-        let screen = lines(&draw(&mut app, 200, 30));
-
-        assert!(shows(&screen, "Author"));
     }
 
     #[test]
@@ -1131,21 +1100,26 @@ mod tests {
         press(&mut app, " ");
         click_checkbox(&mut app, 1);
         assert_eq!(app.selected, HashSet::from([1, 2]));
-    }
 
-    #[test]
-    fn a_click_on_the_header_or_below_the_rows_does_nothing() {
-        let mut app = app_with(vec![
-            pr(1, "Bump alpha", "OPEN", ""),
-            pr(2, "Bump beta", "OPEN", ""),
-        ]);
-        draw(&mut app, 200, 30);
-        let rows = app.drawn.areas.table_rows;
+        // A click on the header or below the rows does nothing.
         click_table_row(&mut app, 1, 5);
         assert_eq!(app.table.selected(), Some(1));
+        let rows = app.drawn.areas.table_rows;
         press_at(&mut app, Position::new(rows.x + 5, rows.y - 1));
         press_at(&mut app, Position::new(rows.x + 5, rows.y + 5));
         assert_eq!(app.table.selected(), Some(1));
+        assert_eq!(app.selected, HashSet::from([1, 2]));
+    }
+
+    #[test]
+    fn a_narrow_terminal_shows_the_author_and_title_in_the_list() {
+        let mut app = app_with(vec![by("app/renovate", 1, "Bump alpha")]);
+        let screen = lines(&draw(&mut app, 120, 40));
+        let row = screen
+            .iter()
+            .find(|l| l.contains("[ ]") && l.contains("#1"))
+            .unwrap();
+        assert!(row.contains("app/renovate") && row.contains("Bump alpha"));
     }
 
     #[test]
@@ -1185,12 +1159,8 @@ mod tests {
         }
         let buffer = draw_narrow(&mut app);
         assert!(pane_row(&buffer, table, 1).contains("alice"));
-    }
 
-    #[test]
-    fn the_lists_scroll_stays_when_the_highlight_moves() {
-        let mut app = app_with_a_long_title();
-        draw_narrow(&mut app);
+        // The scroll stays when the highlight moves.
         for _ in 0..3 {
             key(&mut app, KeyCode::Right);
         }
@@ -1199,10 +1169,8 @@ mod tests {
         press(&mut app, "j");
         draw_narrow(&mut app);
         assert_eq!(app.list_x, x);
-    }
 
-    #[test]
-    fn a_list_that_fits_does_not_scroll_sideways() {
+        // A list that fits does not scroll sideways.
         let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
         for _ in 0..5 {
             key(&mut app, KeyCode::Right);

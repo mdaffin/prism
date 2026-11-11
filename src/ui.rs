@@ -576,29 +576,32 @@ mod tests {
     use crate::ui::test_support::*;
 
     #[test]
-    fn a_click_focuses_the_pane_under_it() {
-        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        draw_wide(&mut app);
-        let panes = [
-            (Pane::Checks, app.drawn.areas.checks),
-            (Pane::Comments, app.drawn.areas.comments),
-            (Pane::Description, app.drawn.areas.description),
-            (Pane::Diff, app.drawn.areas.diff),
-            (Pane::Table, app.drawn.areas.table),
-        ];
-        for (pane, area) in panes {
-            // The border counts as part of the pane, so click on it and inside it.
-            press_at(&mut app, Position::new(area.x, area.y));
-            assert_eq!(app.focus, pane);
-            app.focus = Pane::Table;
-            press_at(&mut app, Position::new(area.x + 2, area.y + 1));
-            assert_eq!(app.focus, pane);
-            app.focus = Pane::Table;
+    fn a_click_focuses_the_pane_under_it_in_a_wide_and_a_narrow_terminal() {
+        for (width, height) in [WIDE, NARROW] {
+            let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+            draw(&mut app, width, height);
+            let areas = &app.drawn.areas;
+            let panes = [
+                (Pane::Checks, areas.checks),
+                (Pane::Approvers, areas.approvers),
+                (Pane::Comments, areas.comments),
+                (Pane::Description, areas.description),
+                (Pane::Diff, areas.diff),
+                (Pane::Table, areas.table),
+            ];
+            for (pane, area) in panes {
+                // The border counts as part of the pane, so click on it and inside it.
+                for (dx, dy) in [(0, 0), (4, 0), (2, 1)] {
+                    app.focus = Pane::Table;
+                    press_at(&mut app, Position::new(area.x + dx, area.y + dy));
+                    assert_eq!(app.focus, pane, "{pane:?} at {dx},{dy} in {width}x{height}");
+                }
+            }
+            // The search box and the title are in no pane.
+            app.focus = Pane::Diff;
+            press_at(&mut app, Position::new(0, 0));
+            assert_eq!(app.focus, Pane::Diff);
         }
-        // The search box and the title are in no pane.
-        app.focus = Pane::Diff;
-        press_at(&mut app, Position::new(0, 0));
-        assert_eq!(app.focus, Pane::Diff);
     }
 
     /// A point inside each pane.
@@ -901,13 +904,12 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_a_border_still_focuses_and_does_not_resize() {
+    fn a_click_on_a_border_does_not_resize() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         draw_wide(&mut app);
         let checks = app.drawn.areas.checks;
         press_at(&mut app, Position::new(checks.x + 4, checks.y));
         release_at(&mut app, Position::new(checks.x + 4, checks.y));
-        assert_eq!(app.focus, Pane::Checks);
         assert!(app.sizes.is_default());
     }
 
@@ -1187,10 +1189,11 @@ mod tests {
     }
 
     #[test]
-    fn a_narrow_terminal_gives_the_list_the_full_width_above_everything_else() {
+    fn a_narrow_terminal_puts_the_description_beside_the_diff_above_the_checks_and_comments() {
         let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
         draw(&mut app, 120, 40);
         let areas = &app.drawn.areas;
+        // The list has the full width, above everything else.
         assert_eq!((areas.table.x, areas.table.width), (0, 120));
         for (name, area) in [
             ("checks", areas.checks),
@@ -1200,13 +1203,6 @@ mod tests {
         ] {
             assert!(area.y >= areas.table.bottom(), "{name} is below the list");
         }
-    }
-
-    #[test]
-    fn a_narrow_terminal_puts_the_description_beside_the_diff_above_the_checks_and_comments() {
-        let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
-        draw(&mut app, 120, 40);
-        let areas = &app.drawn.areas;
         // The description is on the left and the diff on the right, in the same rows.
         assert_eq!(areas.description.x, 0);
         assert!(areas.diff.x >= areas.description.right());
@@ -1243,43 +1239,6 @@ mod tests {
             let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
             draw(&mut app, width, 40);
             assert_eq!(app.drawn.areas.table.width < width, wide, "{width}");
-        }
-    }
-
-    #[test]
-    fn a_narrow_terminal_shows_the_author_and_title_in_the_list() {
-        let mut app = app_with(vec![by("app/renovate", 1, "Bump alpha")]);
-        let screen = lines(&draw(&mut app, 120, 40));
-        let row = screen
-            .iter()
-            .find(|l| l.contains("[ ]") && l.contains("#1"))
-            .unwrap();
-        assert!(row.contains("app/renovate") && row.contains("Bump alpha"));
-    }
-
-    #[test]
-    fn every_pane_is_drawn_and_clickable_in_a_narrow_terminal() {
-        let mut app = app_with(vec![by("alice", 1, "Bump alpha")]);
-        draw_narrow(&mut app);
-        for pane in [
-            Pane::Checks,
-            Pane::Approvers,
-            Pane::Comments,
-            Pane::Description,
-            Pane::Diff,
-            Pane::Table,
-        ] {
-            let area = match pane {
-                Pane::Table => app.drawn.areas.table,
-                Pane::Checks => app.drawn.areas.checks,
-                Pane::Approvers => app.drawn.areas.approvers,
-                Pane::Comments => app.drawn.areas.comments,
-                Pane::Description => app.drawn.areas.description,
-                Pane::Diff => app.drawn.areas.diff,
-            };
-            assert!(area.width > 2 && area.height > 2, "{pane:?}");
-            press_at(&mut app, Position::new(area.x + 1, area.y + 1));
-            assert_eq!(app.focus, pane, "{pane:?}");
         }
     }
 

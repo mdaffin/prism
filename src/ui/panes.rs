@@ -1412,8 +1412,9 @@ mod tests {
     }
 
     #[test]
-    fn a_pane_whose_text_fits_has_no_scrollbar() {
+    fn a_pane_whose_text_fits_has_no_scrollbar_on_either_axis() {
         let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
+        app.diff_loaded(1, Ok("+added".to_string()));
         let buffer = draw_wide(&mut app);
         let areas = &app.drawn.areas;
         for (name, area) in [
@@ -1424,6 +1425,18 @@ mod tests {
             ("diff", areas.diff),
         ] {
             assert!(!has_scrollbar(&buffer, area), "{name}");
+        }
+
+        // Nor does it sideways, in a narrow terminal.
+        let buffer = draw_narrow(&mut app);
+        let areas = &app.drawn.areas;
+        for (name, area) in [
+            ("table", areas.table),
+            ("checks", areas.checks),
+            ("description", areas.description),
+            ("diff", areas.diff),
+        ] {
+            assert!(!has_horizontal_scrollbar(&buffer, area), "{name}");
         }
     }
 
@@ -1519,10 +1532,8 @@ mod tests {
         let buffer = draw_narrow(&mut app);
         assert!(!has_horizontal_scrollbar(&buffer, app.drawn.areas.diff));
         assert!(has_horizontal_scrollbar(&buffer, app.drawn.areas.table));
-    }
 
-    #[test]
-    fn a_long_check_name_gives_the_checks_a_horizontal_scrollbar() {
+        // A long check name cuts the checks off.
         let name = "n".repeat(150);
         let mut app = app_with(vec![pr_checked(
             1,
@@ -1531,22 +1542,6 @@ mod tests {
         )]);
         let buffer = draw_narrow(&mut app);
         assert!(has_horizontal_scrollbar(&buffer, app.drawn.areas.checks));
-    }
-
-    #[test]
-    fn no_pane_has_a_horizontal_scrollbar_when_its_text_fits() {
-        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-        app.diff_loaded(1, Ok("+added".to_string()));
-        let buffer = draw_narrow(&mut app);
-        let areas = &app.drawn.areas;
-        for (name, area) in [
-            ("table", areas.table),
-            ("checks", areas.checks),
-            ("description", areas.description),
-            ("diff", areas.diff),
-        ] {
-            assert!(!has_horizontal_scrollbar(&buffer, area), "{name}");
-        }
     }
 
     #[test]

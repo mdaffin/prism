@@ -336,13 +336,8 @@ fn a_click_on_the_filter_box_edits_the_filter_only_while_it_is_drawn() {
     click_filter(&mut app, 2);
     assert!(app.typing == Typing::Filter);
     assert_eq!(app.filter.cursor(), 2);
-}
 
-#[test]
-fn the_filter_box_has_no_area_once_it_is_emptied() {
-    let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
-    press(&mut app, "fbump");
-    draw_wide(&mut app);
+    // Once the filter is emptied it is not drawn, so it has no area.
     assert!(app.drawn.areas.filter != Rect::default());
     key(&mut app, KeyCode::Esc);
     draw_wide(&mut app);

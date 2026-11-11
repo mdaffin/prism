@@ -529,25 +529,24 @@ mod tests {
     }
 
     #[test]
-    fn the_wheel_is_ignored_in_a_dialog() {
+    fn a_dialog_swallows_the_mouse() {
         let mut app = app_with_long_panes();
         let diff = Position::new(app.drawn.areas.diff.x + 2, app.drawn.areas.diff.y + 1);
         press(&mut app, "?");
-        wheel(&mut app, diff, true);
-        assert_eq!(app.scroll.diff, 0);
-    }
-
-    #[test]
-    fn the_mouse_is_ignored_in_a_dialog() {
-        let mut app = app_with(vec![pr(1, "Bump alpha", "OPEN", "")]);
         draw_wide(&mut app);
-        let diff = Position::new(app.drawn.areas.diff.x + 2, app.drawn.areas.diff.y + 1);
-        press(&mut app, "?");
+        // A click behind it does not reach the panes.
         press_at(&mut app, diff);
         assert_eq!(app.focus, Pane::Table);
-        // Not even a box's area is live behind a dialog.
+        // Not even a box''s area is live behind a dialog.
         press_at(&mut app, Position::new(2, 2));
         assert!(app.typing == Typing::Nothing);
+        // The wheel does not scroll the pane behind it, nor does it do anything over a button.
+        wheel(&mut app, diff, true);
+        assert_eq!(app.scroll.diff, 0);
+        let position = button(&app, 0);
+        wheel(&mut app, position, true);
+        assert_eq!(app.scroll.diff, 0);
+        assert!(matches!(app.mode, Mode::Help(_)));
     }
 
     /// The centre of the dialog's `index`th button, as last drawn.
@@ -597,6 +596,11 @@ mod tests {
             .map(|area| text_at(&buffer, *area))
             .collect();
         assert_eq!(drawn, ["[ Approve ]", "[ Approve & merge ]", "[ Cancel ]"]);
+
+        // Once the dialog closes, none are recorded.
+        press(&mut app, "q");
+        draw_wide(&mut app);
+        assert!(app.drawn.buttons.is_empty());
     }
 
     #[test]
@@ -675,14 +679,6 @@ mod tests {
     }
 
     #[test]
-    fn the_wheel_over_a_button_does_nothing() {
-        let mut app = app_confirming();
-        let position = button(&app, 0);
-        wheel(&mut app, position, true);
-        assert!(matches!(app.mode, Mode::Confirm(_)));
-    }
-
-    #[test]
     fn a_click_does_nothing_while_a_batch_runs() {
         let mut app = app_confirming();
         click_button(&mut app, 0);
@@ -692,15 +688,6 @@ mod tests {
             press_at(&mut app, position);
             assert!(matches!(app.mode, Mode::Running(_)));
         }
-    }
-
-    #[test]
-    fn no_buttons_are_recorded_once_the_dialog_closes() {
-        let mut app = app_confirming();
-        assert!(!app.drawn.buttons.is_empty());
-        press(&mut app, "q");
-        draw_wide(&mut app);
-        assert!(app.drawn.buttons.is_empty());
     }
 
     /// An app with the help popup open and drawn on a screen too short for all of it.
