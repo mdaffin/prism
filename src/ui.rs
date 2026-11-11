@@ -142,7 +142,12 @@ struct Item<'a> {
 
 /// The borders between the items of a stack that are shown, `stacked` one over the other or side
 /// by side, for the mouse and the resize keys.
-fn dividers_of(stack: StackId, stacked: bool, items: &[Item]) -> Vec<Divider> {
+fn dividers_of(stack: StackId, stacked: bool, panes_and_rects: &[(&[Pane], Rect)]) -> Vec<Divider> {
+    let items: Vec<Item> = panes_and_rects
+        .iter()
+        .enumerate()
+        .map(|(index, &(panes, rect))| Item { index, panes, rect })
+        .collect();
     let shown: Vec<&Item> = items.iter().filter(|item| !item.rect.is_empty()).collect();
     let length = |item: &Item| {
         if stacked {
@@ -269,53 +274,25 @@ fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane], sizes: &Sizes) 
             StackId::Columns,
             false,
             &[
-                Item {
-                    index: 0,
-                    panes: &[Pane::Table, Pane::Checks, Pane::Comments],
-                    rect: sides[0],
-                },
-                Item {
-                    index: 1,
-                    panes: &[Pane::Description, Pane::Approvers, Pane::Diff],
-                    rect: sides[1],
-                },
+                (&[Pane::Table, Pane::Checks, Pane::Comments], sides[0]),
+                (&[Pane::Description, Pane::Approvers, Pane::Diff], sides[1]),
             ],
         );
         dividers.extend(dividers_of(
             StackId::Left,
             true,
             &[
-                Item {
-                    index: 0,
-                    panes: &[Pane::Table],
-                    rect: left[0],
-                },
-                Item {
-                    index: 1,
-                    panes: &[Pane::Checks],
-                    rect: left[1],
-                },
-                Item {
-                    index: 2,
-                    panes: &[Pane::Comments],
-                    rect: left[2],
-                },
+                (&[Pane::Table], left[0]),
+                (&[Pane::Checks], left[1]),
+                (&[Pane::Comments], left[2]),
             ],
         ));
         dividers.extend(dividers_of(
             StackId::Detail,
             true,
             &[
-                Item {
-                    index: 0,
-                    panes: &[Pane::Description],
-                    rect: detail[1],
-                },
-                Item {
-                    index: 1,
-                    panes: &[Pane::Approvers, Pane::Diff],
-                    rect: detail[2],
-                },
+                (&[Pane::Description], detail[1]),
+                (&[Pane::Approvers, Pane::Diff], detail[2]),
             ],
         ));
         PaneLayout {
@@ -390,54 +367,23 @@ fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane], sizes: &Sizes) 
             StackId::Rows,
             true,
             &[
-                Item {
-                    index: 0,
-                    panes: &[Pane::Table],
-                    rect: rows[0],
-                },
-                Item {
-                    index: 1,
-                    panes: &[Pane::Description, Pane::Approvers, Pane::Diff],
-                    rect: rows[1],
-                },
-                Item {
-                    index: 2,
-                    panes: &[Pane::Checks, Pane::Comments],
-                    rect: rows[2],
-                },
+                (&[Pane::Table], rows[0]),
+                (&[Pane::Description, Pane::Approvers, Pane::Diff], rows[1]),
+                (&[Pane::Checks, Pane::Comments], rows[2]),
             ],
         );
         dividers.extend(dividers_of(
             StackId::DetailColumns,
             false,
             &[
-                Item {
-                    index: 0,
-                    panes: &[Pane::Description],
-                    rect: columns[0],
-                },
-                Item {
-                    index: 1,
-                    panes: &[Pane::Approvers, Pane::Diff],
-                    rect: columns[1],
-                },
+                (&[Pane::Description], columns[0]),
+                (&[Pane::Approvers, Pane::Diff], columns[1]),
             ],
         ));
         dividers.extend(dividers_of(
             StackId::Lower,
             false,
-            &[
-                Item {
-                    index: 0,
-                    panes: &[Pane::Checks],
-                    rect: lower[0],
-                },
-                Item {
-                    index: 1,
-                    panes: &[Pane::Comments],
-                    rect: lower[1],
-                },
-            ],
+            &[(&[Pane::Checks], lower[0]), (&[Pane::Comments], lower[1])],
         ));
         PaneLayout {
             list: rows[0],
