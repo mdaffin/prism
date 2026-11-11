@@ -223,178 +223,190 @@ impl Shown {
     }
 }
 
-/// With room, the list is above the checks and comments on the left and the PR's details are on
-/// the right. In a narrow terminal that would leave the table too little width, so the list takes
-/// the full width on top. Under it, what is read most gets the space: the description beside the
-/// diff, with the checks and comments in a short row at the bottom. The approvers are in the
-/// details, above the diff, and take `approvers_rows` if they can. A pane in `hidden` is left out
-/// (its rectangle is empty) and the others share its room; with all of a side's panes hidden, the
-/// other side takes the width, and the Pull request box goes with the details. A stack that has
-/// been resized (`sizes`) shares its room by the weights it has, and every border between two
-/// panes is returned in `dividers`.
+/// The layout with room: the list is above the checks and comments on the left and the PR's
+/// details are on the right. The details are the Pull request box, the description, and the
+/// approvers above the diff, which take `approvers_rows` if they can. With all of a side's panes
+/// hidden, the other side takes the width.
+fn wide_layout(body: Rect, approvers_rows: u16, shown: &Shown, sizes: &Sizes) -> PaneLayout {
+    let fill = Constraint::Fill(1);
+    let sides = split(
+        body,
+        false,
+        &[
+            (true, sized(sizes, StackId::Columns, 0, fill)),
+            (shown.details(), sized(sizes, StackId::Columns, 1, fill)),
+        ],
+    );
+    let left = split(
+        sides[0],
+        true,
+        &[
+            (true, sized(sizes, StackId::Left, 0, Constraint::Fill(2))),
+            (shown.checks, sized(sizes, StackId::Left, 1, fill)),
+            (
+                shown.comments,
+                sized(sizes, StackId::Left, 2, Constraint::Max(MAX_COMMENTS_ROWS)),
+            ),
+        ],
+    );
+    let detail = split(
+        sides[1],
+        true,
+        &[
+            (shown.details(), Constraint::Length(PULL_REQUEST_ROWS)),
+            (shown.description, sized(sizes, StackId::Detail, 0, fill)),
+            (
+                shown.approvers || shown.diff,
+                sized(sizes, StackId::Detail, 1, Constraint::Fill(2)),
+            ),
+        ],
+    );
+    let (approvers, diff) =
+        approvers_over_diff(detail[2], approvers_rows, (shown.approvers, shown.diff));
+    let mut dividers = dividers_of(
+        StackId::Columns,
+        false,
+        &[
+            (&[Pane::Table, Pane::Checks, Pane::Comments], sides[0]),
+            (&[Pane::Description, Pane::Approvers, Pane::Diff], sides[1]),
+        ],
+    );
+    dividers.extend(dividers_of(
+        StackId::Left,
+        true,
+        &[
+            (&[Pane::Table], left[0]),
+            (&[Pane::Checks], left[1]),
+            (&[Pane::Comments], left[2]),
+        ],
+    ));
+    dividers.extend(dividers_of(
+        StackId::Detail,
+        true,
+        &[
+            (&[Pane::Description], detail[1]),
+            (&[Pane::Approvers, Pane::Diff], detail[2]),
+        ],
+    ));
+    PaneLayout {
+        list: left[0],
+        checks: left[1],
+        approvers,
+        comments: left[2],
+        pull_request: detail[0],
+        description: detail[1],
+        diff,
+        dividers,
+    }
+}
+
+/// The layout in a narrow terminal, where the list takes the full width on top. Under it, what is
+/// read most gets the space: the description beside the diff, with the checks and comments in a
+/// short row at the bottom. The Pull request box is over the description, or over the diff if
+/// that is hidden.
+fn narrow_layout(body: Rect, approvers_rows: u16, shown: &Shown, sizes: &Sizes) -> PaneLayout {
+    let fill = Constraint::Fill(1);
+    let lower_rows = (body.height / 5).clamp(MIN_LOWER_ROWS, MAX_COMMENTS_ROWS);
+    let rows = split(
+        body,
+        true,
+        &[
+            (true, sized(sizes, StackId::Rows, 0, Constraint::Fill(2))),
+            (
+                shown.details(),
+                sized(sizes, StackId::Rows, 1, Constraint::Fill(3)),
+            ),
+            (
+                shown.lower(),
+                sized(sizes, StackId::Rows, 2, Constraint::Length(lower_rows)),
+            ),
+        ],
+    );
+    let columns = split(
+        rows[1],
+        false,
+        &[
+            (
+                shown.description,
+                sized(sizes, StackId::DetailColumns, 0, fill),
+            ),
+            (shown.right(), sized(sizes, StackId::DetailColumns, 1, fill)),
+        ],
+    );
+    // The Pull request box is over the description, or over the diff if that is hidden.
+    let left = split(
+        columns[0],
+        true,
+        &[
+            (shown.description, Constraint::Length(PULL_REQUEST_ROWS)),
+            (shown.description, Constraint::Fill(1)),
+        ],
+    );
+    let right = split(
+        columns[1],
+        true,
+        &[
+            (
+                shown.right() && !shown.description,
+                Constraint::Length(PULL_REQUEST_ROWS),
+            ),
+            (shown.right(), Constraint::Fill(1)),
+        ],
+    );
+    let (approvers, diff) =
+        approvers_over_diff(right[1], approvers_rows, (shown.approvers, shown.diff));
+    let lower = split(
+        rows[2],
+        false,
+        &[
+            (shown.checks, sized(sizes, StackId::Lower, 0, fill)),
+            (shown.comments, sized(sizes, StackId::Lower, 1, fill)),
+        ],
+    );
+    let mut dividers = dividers_of(
+        StackId::Rows,
+        true,
+        &[
+            (&[Pane::Table], rows[0]),
+            (&[Pane::Description, Pane::Approvers, Pane::Diff], rows[1]),
+            (&[Pane::Checks, Pane::Comments], rows[2]),
+        ],
+    );
+    dividers.extend(dividers_of(
+        StackId::DetailColumns,
+        false,
+        &[
+            (&[Pane::Description], columns[0]),
+            (&[Pane::Approvers, Pane::Diff], columns[1]),
+        ],
+    ));
+    dividers.extend(dividers_of(
+        StackId::Lower,
+        false,
+        &[(&[Pane::Checks], lower[0]), (&[Pane::Comments], lower[1])],
+    ));
+    PaneLayout {
+        list: rows[0],
+        checks: lower[0],
+        approvers,
+        comments: lower[1],
+        pull_request: if shown.description { left[0] } else { right[0] },
+        description: left[1],
+        diff,
+        dividers,
+    }
+}
+
+/// Where each part of the screen goes: the wide layout from `WIDE_LAYOUT_MIN_WIDTH` columns, else
+/// the narrow one. A pane in `hidden` is left out (its rectangle is empty) and the others share
+/// its room. A stack that has been resized (`sizes`) shares its room by the weights it has, and
+/// every border between two panes is returned in `dividers`.
 fn pane_layout(body: Rect, approvers_rows: u16, hidden: &[Pane], sizes: &Sizes) -> PaneLayout {
     let shown = Shown::new(hidden);
-    let fill = Constraint::Fill(1);
     if body.width >= WIDE_LAYOUT_MIN_WIDTH {
-        let sides = split(
-            body,
-            false,
-            &[
-                (true, sized(sizes, StackId::Columns, 0, fill)),
-                (shown.details(), sized(sizes, StackId::Columns, 1, fill)),
-            ],
-        );
-        let left = split(
-            sides[0],
-            true,
-            &[
-                (true, sized(sizes, StackId::Left, 0, Constraint::Fill(2))),
-                (shown.checks, sized(sizes, StackId::Left, 1, fill)),
-                (
-                    shown.comments,
-                    sized(sizes, StackId::Left, 2, Constraint::Max(MAX_COMMENTS_ROWS)),
-                ),
-            ],
-        );
-        let detail = split(
-            sides[1],
-            true,
-            &[
-                (shown.details(), Constraint::Length(PULL_REQUEST_ROWS)),
-                (shown.description, sized(sizes, StackId::Detail, 0, fill)),
-                (
-                    shown.approvers || shown.diff,
-                    sized(sizes, StackId::Detail, 1, Constraint::Fill(2)),
-                ),
-            ],
-        );
-        let (approvers, diff) =
-            approvers_over_diff(detail[2], approvers_rows, (shown.approvers, shown.diff));
-        let mut dividers = dividers_of(
-            StackId::Columns,
-            false,
-            &[
-                (&[Pane::Table, Pane::Checks, Pane::Comments], sides[0]),
-                (&[Pane::Description, Pane::Approvers, Pane::Diff], sides[1]),
-            ],
-        );
-        dividers.extend(dividers_of(
-            StackId::Left,
-            true,
-            &[
-                (&[Pane::Table], left[0]),
-                (&[Pane::Checks], left[1]),
-                (&[Pane::Comments], left[2]),
-            ],
-        ));
-        dividers.extend(dividers_of(
-            StackId::Detail,
-            true,
-            &[
-                (&[Pane::Description], detail[1]),
-                (&[Pane::Approvers, Pane::Diff], detail[2]),
-            ],
-        ));
-        PaneLayout {
-            list: left[0],
-            checks: left[1],
-            approvers,
-            comments: left[2],
-            pull_request: detail[0],
-            description: detail[1],
-            diff,
-            dividers,
-        }
+        wide_layout(body, approvers_rows, &shown, sizes)
     } else {
-        let lower_rows = (body.height / 5).clamp(MIN_LOWER_ROWS, MAX_COMMENTS_ROWS);
-        let rows = split(
-            body,
-            true,
-            &[
-                (true, sized(sizes, StackId::Rows, 0, Constraint::Fill(2))),
-                (
-                    shown.details(),
-                    sized(sizes, StackId::Rows, 1, Constraint::Fill(3)),
-                ),
-                (
-                    shown.lower(),
-                    sized(sizes, StackId::Rows, 2, Constraint::Length(lower_rows)),
-                ),
-            ],
-        );
-        let columns = split(
-            rows[1],
-            false,
-            &[
-                (
-                    shown.description,
-                    sized(sizes, StackId::DetailColumns, 0, fill),
-                ),
-                (shown.right(), sized(sizes, StackId::DetailColumns, 1, fill)),
-            ],
-        );
-        // The Pull request box is over the description, or over the diff if that is hidden.
-        let left = split(
-            columns[0],
-            true,
-            &[
-                (shown.description, Constraint::Length(PULL_REQUEST_ROWS)),
-                (shown.description, Constraint::Fill(1)),
-            ],
-        );
-        let right = split(
-            columns[1],
-            true,
-            &[
-                (
-                    shown.right() && !shown.description,
-                    Constraint::Length(PULL_REQUEST_ROWS),
-                ),
-                (shown.right(), Constraint::Fill(1)),
-            ],
-        );
-        let (approvers, diff) =
-            approvers_over_diff(right[1], approvers_rows, (shown.approvers, shown.diff));
-        let lower = split(
-            rows[2],
-            false,
-            &[
-                (shown.checks, sized(sizes, StackId::Lower, 0, fill)),
-                (shown.comments, sized(sizes, StackId::Lower, 1, fill)),
-            ],
-        );
-        let mut dividers = dividers_of(
-            StackId::Rows,
-            true,
-            &[
-                (&[Pane::Table], rows[0]),
-                (&[Pane::Description, Pane::Approvers, Pane::Diff], rows[1]),
-                (&[Pane::Checks, Pane::Comments], rows[2]),
-            ],
-        );
-        dividers.extend(dividers_of(
-            StackId::DetailColumns,
-            false,
-            &[
-                (&[Pane::Description], columns[0]),
-                (&[Pane::Approvers, Pane::Diff], columns[1]),
-            ],
-        ));
-        dividers.extend(dividers_of(
-            StackId::Lower,
-            false,
-            &[(&[Pane::Checks], lower[0]), (&[Pane::Comments], lower[1])],
-        ));
-        PaneLayout {
-            list: rows[0],
-            checks: lower[0],
-            approvers,
-            comments: lower[1],
-            pull_request: if shown.description { left[0] } else { right[0] },
-            description: left[1],
-            diff,
-            dividers,
-        }
+        narrow_layout(body, approvers_rows, &shown, sizes)
     }
 }
 
