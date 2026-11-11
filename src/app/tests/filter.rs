@@ -39,21 +39,16 @@ fn the_filter_is_fuzzy_with_smart_case_and_every_term_must_match() {
 }
 
 #[test]
-fn the_filter_is_fuzzy_across_the_author() {
-    let mut prs = vec![pr(1, "OPEN"), pr(2, "OPEN")];
-    prs[1].author.login = "app/renovate".to_string();
-    let mut app = app_with(prs);
-    press(&mut app, "frnv");
-    assert_eq!(visible_numbers(&app), [2]);
-}
-
-#[test]
-fn the_filter_matches_an_author() {
+fn the_filter_matches_an_author_and_is_fuzzy_across_it() {
     let mut prs = vec![pr(1, "OPEN"), pr(2, "OPEN"), pr(3, "OPEN")];
     prs[1].author.login = "app/renovate".to_string();
     let mut app = app_with(prs);
-    press(&mut app, "frenovate");
-    assert_eq!(visible_numbers(&app), [2]);
+    for text in ["renovate", "rnv"] {
+        key(&mut app, KeyCode::Esc);
+        press(&mut app, "f");
+        press(&mut app, text);
+        assert_eq!(visible_numbers(&app), [2], "{text}");
+    }
 }
 
 #[test]

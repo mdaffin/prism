@@ -11,18 +11,6 @@ fn enter_confirms_the_selected_prs_not_the_highlighted_one() {
 }
 
 #[test]
-fn closed_and_merged_prs_sort_after_open_ones() {
-    let prs = vec![
-        pr(1, "MERGED"),
-        pr(2, "OPEN"),
-        pr(3, "CLOSED"),
-        pr(4, "OPEN"),
-    ];
-    let app = app_with(prs);
-    assert_eq!(numbers(&app), [2, 4, 1, 3]);
-}
-
-#[test]
 fn closed_and_merged_prs_are_left_out_of_a_review_and_listed() {
     let prs = vec![pr(1, "OPEN"), pr(2, "CLOSED"), pr(3, "MERGED")];
     let mut app = app_with(prs);

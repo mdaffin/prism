@@ -110,7 +110,18 @@ fn ctrl_o_opens_the_selected_prs_in_table_order() {
 
 #[test]
 fn ctrl_o_asks_before_opening_more_than_five() {
-    let count = MAX_OPEN_WITHOUT_ASKING as u64 + 1;
+    // Up to the limit, the PRs open without asking.
+    let limit = MAX_OPEN_WITHOUT_ASKING as u64;
+    let mut app = app_with_rows(limit);
+    for _ in 0..limit {
+        press(&mut app, " j");
+    }
+    ctrl(&mut app, 'o');
+    assert_list_mode(&app);
+    assert_eq!(app.opens_to_run(), (1..=limit).collect::<Vec<_>>());
+
+    // One more asks.
+    let count = limit + 1;
     let mut app = app_with_rows(count);
     for _ in 0..count {
         press(&mut app, " j");
@@ -128,18 +139,6 @@ fn ctrl_o_asks_before_opening_more_than_five() {
     key(&mut app, KeyCode::Enter);
     assert_list_mode(&app);
     assert_eq!(app.opens_to_run(), (1..=count).collect::<Vec<_>>());
-}
-
-#[test]
-fn five_selected_prs_open_without_asking() {
-    let count = MAX_OPEN_WITHOUT_ASKING as u64;
-    let mut app = app_with_rows(count);
-    for _ in 0..count {
-        press(&mut app, " j");
-    }
-    ctrl(&mut app, 'o');
-    assert_list_mode(&app);
-    assert_eq!(app.opens_to_run().len() as u64, count);
 }
 
 #[test]

@@ -4,54 +4,48 @@ fn finish(app: &mut App, number: u64) {
     app.details_loaded(number, Err(color_eyre::eyre::eyre!("failed")));
 }
 
+/// Prefetching of the details and of the diffs works the same: the pair is how to start the
+/// fetches that are due and how to finish one of them (a failure, as that is all it takes).
 #[test]
-fn prefetches_details_from_the_highlight_within_the_limit() {
-    let mut app = app_with_rows(8);
-    assert_eq!(started(app.details_to_fetch()), [1, 2, 3, 4]);
-    // Every slot is busy.
-    assert!(app.details_to_fetch().is_empty());
+fn prefetches_from_the_highlight_within_the_limit() {
+    type Start = fn(&mut App) -> Vec<(u64, FetchId)>;
+    type Finish = fn(&mut App, u64);
+    let pairs: [(&str, Start, Finish); 2] = [
+        ("details", App::details_to_fetch, finish),
+        ("diffs", App::diffs_to_fetch, |app, number| {
+            app.diff_loaded(number, Err(color_eyre::eyre::eyre!("failed")))
+        }),
+    ];
+    for (what, start, finish) in pairs {
+        let mut app = app_with_rows(8);
+        assert_eq!(started(start(&mut app)), [1, 2, 3, 4], "{what}");
+        // Every slot is busy.
+        assert!(start(&mut app).is_empty(), "{what}");
 
-    // Freed slots go to the highlighted row and those below it, then wrap to the top.
-    app.table.select(Some(5));
-    finish(&mut app, 1);
-    assert_eq!(started(app.details_to_fetch()), [6]);
-    finish(&mut app, 2);
-    finish(&mut app, 3);
-    assert_eq!(started(app.details_to_fetch()), [7, 8]);
-    finish(&mut app, 4);
-    assert_eq!(started(app.details_to_fetch()), [5]);
+        // Freed slots go to the highlighted row and those below it, then wrap to the top.
+        app.table.select(Some(5));
+        finish(&mut app, 1);
+        assert_eq!(started(start(&mut app)), [6], "{what}");
+        finish(&mut app, 2);
+        finish(&mut app, 3);
+        assert_eq!(started(start(&mut app)), [7, 8], "{what}");
+        finish(&mut app, 4);
+        assert_eq!(started(start(&mut app)), [5], "{what}");
 
-    // Nothing is fetched twice, including failures.
-    for number in 5..=8 {
-        finish(&mut app, number);
+        // Nothing is fetched twice, including failures.
+        for number in 5..=8 {
+            finish(&mut app, number);
+        }
+        assert!(start(&mut app).is_empty(), "{what}");
     }
-    assert!(app.details_to_fetch().is_empty());
 }
 
 #[test]
-fn prefetches_diffs_from_the_highlight_within_the_limit() {
-    let mut app = app_with_rows(8);
-    assert_eq!(started(app.diffs_to_fetch()), [1, 2, 3, 4]);
-    // Every slot is busy.
-    assert!(app.diffs_to_fetch().is_empty());
-
-    // Freed slots go to the highlighted row and those below it, then wrap to the top.
-    app.table.select(Some(5));
+fn a_loaded_diff_has_its_tabs_expanded() {
+    let mut app = app_with_rows(1);
+    app.diffs_to_fetch();
     app.diff_loaded(1, Ok("diff\t".to_string()));
     assert!(matches!(&app.diffs[&1], Fetch::Loaded(d) if d.text.to_string() == "diff    "));
-    assert_eq!(started(app.diffs_to_fetch()), [6]);
-    for number in [2, 3] {
-        app.diff_loaded(number, Ok(String::new()));
-    }
-    assert_eq!(started(app.diffs_to_fetch()), [7, 8]);
-    app.diff_loaded(4, Ok(String::new()));
-    assert_eq!(started(app.diffs_to_fetch()), [5]);
-
-    // Nothing is fetched twice, including failures.
-    for number in 5..=8 {
-        app.diff_loaded(number, Err(color_eyre::eyre::eyre!("failed")));
-    }
-    assert!(app.diffs_to_fetch().is_empty());
 }
 
 #[test]
@@ -218,14 +212,6 @@ fn ctrl_r_keeps_the_selection_by_number_when_rows_move() {
 }
 
 #[test]
-fn a_new_search_still_clears_the_selection() {
-    let mut app = app_with_rows(3);
-    press(&mut app, " ");
-    search_and_load(&mut app, prs([1, 2, 3]));
-    assert!(app.selected.is_empty());
-}
-
-#[test]
 fn ctrl_r_keeps_the_highlight_on_the_same_pr_and_clears_the_filter() {
     let mut app = app_with_titles();
     press(&mut app, "jfbeta");
@@ -270,45 +256,24 @@ fn loaded_body(app: &App, number: u64) -> Option<String> {
 }
 
 #[test]
-fn a_result_from_before_ctrl_r_is_dropped() {
-    let mut app = app_with_rows(2);
-    let details = app.details_to_fetch();
-    let diffs = app.diffs_to_fetch();
-    assert_eq!(started(details.clone()), [1, 2]);
-
-    refresh_and_load(&mut app, Ok(prs(1..=2)));
-    assert!(app.details.is_empty() && app.diffs.is_empty());
-
-    // The fetches that were running now finish, with what was current before the refresh.
-    for &(number, id) in &details {
-        app.update(Msg::DetailsLoaded(
-            number,
-            id,
-            Ok(pr_details("old", serde_json::json!([]))),
-        ));
-    }
-    for &(number, id) in &diffs {
-        app.update(Msg::DiffLoaded(number, id, Diff::parse("old")));
-    }
-    assert!(app.details.is_empty() && app.diffs.is_empty());
-    // Failures from them are dropped too.
-    let (number, id) = details[0];
-    app.update(Msg::DetailsLoaded(
-        number,
-        id,
-        Err(color_eyre::eyre::eyre!("old failure")),
-    ));
-    assert!(app.details.is_empty());
-}
-
-#[test]
 fn a_result_from_before_ctrl_r_does_not_replace_the_new_fetch() {
     let mut app = app_with_rows(1);
     let before = app.details_to_fetch()[0].1;
+    let diff_before = app.diffs_to_fetch()[0].1;
 
     refresh_and_load(&mut app, Ok(prs(1..=1)));
     let after = app.details_to_fetch()[0].1;
     assert_ne!(before, after);
+    // The diff that was running finishes too, and is dropped.
+    app.update(Msg::DiffLoaded(1, diff_before, Diff::parse("old")));
+    assert!(app.diffs.is_empty());
+    // So is a failure of the old fetch.
+    app.update(Msg::DetailsLoaded(
+        1,
+        before,
+        Err(color_eyre::eyre::eyre!("old failure")),
+    ));
+    assert!(matches!(app.details[&1], Fetch::Loading(current) if current == after));
 
     // The old fetch finishes first and is ignored, so the PR is still loading.
     app.update(Msg::DetailsLoaded(

@@ -137,6 +137,12 @@ fn p_pauses_and_resumes_the_timed_refresh() {
     // Pausing with nothing missed doesn't start one on resuming.
     press(&mut app, "pp");
     assert!(app.status_to_fetch().is_none());
+
+    // Ctrl-R still runs the query while paused.
+    app.update(Msg::FocusLost);
+    press(&mut app, "p");
+    ctrl(&mut app, 'r');
+    assert!(app.list_to_fetch().is_some());
 }
 
 #[test]
@@ -151,15 +157,6 @@ fn a_refresh_stays_paused_until_both_focus_and_the_key_allow_it() {
     assert!(app.status_to_fetch().is_none());
     press(&mut app, "p");
     assert!(app.status_to_fetch().is_some());
-}
-
-#[test]
-fn ctrl_r_still_runs_the_query_while_paused() {
-    let mut app = app_with_rows(2);
-    app.update(Msg::FocusLost);
-    press(&mut app, "p");
-    ctrl(&mut app, 'r');
-    assert!(app.list_to_fetch().is_some());
 }
 
 #[test]
