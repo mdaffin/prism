@@ -114,8 +114,11 @@ fn ctrl_c_while_running_leaves_the_batch_as_it_was() {
     assert!(matches!(app.mode, Mode::Running(_)));
 }
 
+/// The highlight, the selection, whether no box is edited, the sort and the hidden panes.
+type ListState = (Option<usize>, Vec<u64>, bool, (Sort, bool), Vec<Pane>);
+
 /// The state that the list's keys would change.
-fn list_state(app: &App) -> (Option<usize>, Vec<u64>, bool, (Sort, bool), Vec<Pane>) {
+fn list_state(app: &App) -> ListState {
     let mut selected: Vec<u64> = app.selected.iter().copied().collect();
     selected.sort();
     (
