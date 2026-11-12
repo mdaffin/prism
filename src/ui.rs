@@ -557,6 +557,9 @@ fn wrapped_rows(text: &str, width: u16) -> u16 {
 mod test_support;
 
 #[cfg(test)]
+mod tiny;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::ui::test_support::*;
