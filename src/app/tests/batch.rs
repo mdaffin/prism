@@ -301,3 +301,46 @@ fn approve_and_merge_with_no_approvals_skips_merging() {
     let summary = results(&app);
     assert_eq!(summary.merged, Some((0, 0)));
 }
+
+#[test]
+fn a_merge_result_from_a_cancelled_batch_changes_nothing() {
+    let mut app = start_approving_and_merging();
+    app.approvals_to_run();
+    for number in 1..=4 {
+        approve(&mut app, number, Ok(()));
+    }
+    assert_eq!(app.merge_to_run(), Some((1, false)));
+    let old = app.batch_epoch();
+    key(&mut app, KeyCode::Char('q'));
+    let before = format!("{:?}", results(&app));
+
+    app.update(Msg::Merged(old, 1, Ok(())));
+    assert_eq!(format!("{:?}", results(&app)), before);
+    assert_eq!(results(&app).merged, Some((0, 4)));
+    assert_eq!(app.merge_to_run(), None);
+}
+
+#[test]
+fn a_merge_result_from_an_earlier_batch_does_not_touch_the_next_one() {
+    let mut app = start_approving_and_merging();
+    app.approvals_to_run();
+    approve(&mut app, 1, Ok(()));
+    assert_eq!(app.merge_to_run(), Some((1, false)));
+    let old = app.batch_epoch();
+    key(&mut app, KeyCode::Char('q'));
+    key(&mut app, KeyCode::Enter);
+
+    // The same PRs are still selected: approve and merge them again.
+    review(&mut app);
+    key(&mut app, KeyCode::Right);
+    key(&mut app, KeyCode::Enter);
+    app.approvals_to_run();
+    approve(&mut app, 1, Ok(()));
+    assert_eq!(app.merge_to_run(), Some((1, false)));
+
+    app.update(Msg::Merged(old, 1, Ok(())));
+    let item = &running(&app).items[0];
+    assert_eq!(item.merging, Some(ItemStatus::Working));
+    merge(&mut app, 1, Ok(()));
+    assert_eq!(running(&app).items[0].merging, Some(ItemStatus::Done));
+}

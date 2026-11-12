@@ -359,4 +359,194 @@ mod tests {
         };
         assert_eq!(batch.summary().merged, None);
     }
+
+    fn batch(merge: bool, items: Vec<BatchItem>) -> Batch {
+        Batch { items, merge }
+    }
+
+    #[test]
+    fn cancelling_stops_what_has_not_started_and_marks_what_is_running_as_interrupted() {
+        let mut batch = batch(
+            true,
+            vec![
+                item(1, ItemStatus::Pending, None),
+                item(2, ItemStatus::Working, None),
+                item(3, ItemStatus::Done, Some(ItemStatus::Pending)),
+                item(4, ItemStatus::Done, Some(ItemStatus::Working)),
+                item(5, ItemStatus::Done, Some(ItemStatus::Done)),
+                item(6, ItemStatus::Failed("no".into()), None),
+                item(7, ItemStatus::AutoMerge, Some(ItemStatus::AutoMerge)),
+            ],
+        );
+        batch.cancel();
+        let steps = |i: usize| (&batch.items[i].approval, batch.items[i].merging.as_ref());
+        assert_eq!(steps(0), (&ItemStatus::Cancelled, None));
+        assert_eq!(steps(1), (&ItemStatus::Interrupted, None));
+        assert_eq!(steps(2), (&ItemStatus::Done, Some(&ItemStatus::Cancelled)));
+        assert_eq!(
+            steps(3),
+            (&ItemStatus::Done, Some(&ItemStatus::Interrupted))
+        );
+        // A step that has finished, however it went, is left as it was.
+        assert_eq!(steps(4), (&ItemStatus::Done, Some(&ItemStatus::Done)));
+        assert_eq!(steps(5), (&ItemStatus::Failed("no".into()), None));
+        assert_eq!(
+            steps(6),
+            (&ItemStatus::AutoMerge, Some(&ItemStatus::AutoMerge))
+        );
+
+        let summary = batch.summary();
+        assert_eq!(summary.cancelled, 2);
+        assert_eq!(summary.interrupted, [2, 4]);
+        assert!(batch.is_finished());
+    }
+
+    #[test]
+    fn a_pr_is_queued_for_merging_only_once_it_is_approved_in_a_batch_that_merges() {
+        let queue = |merge, approval, number| {
+            let mut batch = batch(merge, vec![item(1, approval, None)]);
+            batch.queue_merge(number);
+            batch.items.remove(0).merging
+        };
+        assert_eq!(queue(true, ItemStatus::Done, 1), Some(ItemStatus::Pending));
+        assert_eq!(
+            queue(true, ItemStatus::AutoMerge, 1),
+            Some(ItemStatus::Pending)
+        );
+        assert_eq!(queue(false, ItemStatus::Done, 1), None);
+        assert_eq!(queue(true, ItemStatus::Working, 1), None);
+        assert_eq!(queue(true, ItemStatus::Failed("no".into()), 1), None);
+        assert_eq!(queue(true, ItemStatus::Cancelled, 1), None);
+        // A number that isn't in the batch changes nothing.
+        assert_eq!(queue(true, ItemStatus::Done, 2), None);
+    }
+
+    #[test]
+    fn a_pr_is_finished_when_its_last_step_is() {
+        let batch = batch(
+            true,
+            vec![
+                // Approved, with its merge still to come: unfinished.
+                item(1, ItemStatus::Done, Some(ItemStatus::Pending)),
+                // Not approved, so it will never merge: finished.
+                item(2, ItemStatus::Failed("no".into()), None),
+                item(3, ItemStatus::Done, Some(ItemStatus::Done)),
+                item(4, ItemStatus::Working, None),
+            ],
+        );
+        assert_eq!(batch.progress(), (2, 4));
+        assert!(!batch.is_finished());
+        let done = self::batch(false, vec![item(1, ItemStatus::Done, None)]);
+        assert_eq!(done.progress(), (1, 1));
+        assert!(done.is_finished());
+    }
+
+    #[test]
+    fn only_a_pr_with_pending_checks_is_merged_with_auto_merge() {
+        for (state, auto) in [
+            (CheckState::Pending, true),
+            (CheckState::Passing, false),
+            (CheckState::Failing, false),
+            (CheckState::None, false),
+        ] {
+            assert_eq!(auto_merge(state), auto, "{state:?}");
+        }
+    }
+
+    #[test]
+    fn a_failed_steps_error_is_put_on_one_line() {
+        let failed = finished_status(
+            Err(color_eyre::eyre::eyre!("one\ntwo\n\n  three")),
+            ItemStatus::Done,
+        );
+        assert_eq!(failed, ItemStatus::Failed("one two three".into()));
+        assert_eq!(
+            finished_status(Ok(()), ItemStatus::AutoMerge),
+            ItemStatus::AutoMerge
+        );
+    }
+
+    #[test]
+    fn the_labels_of_a_cancelled_or_auto_merging_item() {
+        let label = |approval, merging| item(1, approval, merging).label();
+        assert_eq!(label(ItemStatus::Cancelled, None), "· cancelled");
+        assert_eq!(
+            label(ItemStatus::Done, Some(ItemStatus::Cancelled)),
+            "· cancelled"
+        );
+        assert_eq!(
+            label(ItemStatus::Done, Some(ItemStatus::Interrupted)),
+            "? interrupted - check GitHub"
+        );
+        assert_eq!(
+            label(ItemStatus::Done, Some(ItemStatus::AutoMerge)),
+            "⏲ auto-merge queued"
+        );
+    }
+
+    fn confirm_of(count: u64) -> Confirm {
+        Confirm {
+            prs: (1..=count)
+                .map(|number| ConfirmPr {
+                    number,
+                    checks: CheckState::Passing,
+                    title: String::new(),
+                })
+                .collect(),
+            left_out: Vec::new(),
+            choice: 0,
+        }
+    }
+
+    fn press(confirm: &mut Confirm, code: KeyCode) -> Option<Choice> {
+        on_confirm_key(confirm, KeyEvent::from(code))
+    }
+
+    #[test]
+    fn the_dialogs_highlight_stops_at_both_ends() {
+        let mut confirm = confirm_of(2);
+        for code in [KeyCode::Left, KeyCode::Char('h'), KeyCode::BackTab] {
+            assert_eq!(press(&mut confirm, code), None);
+            assert_eq!(confirm.choice, 0);
+        }
+        for code in [
+            KeyCode::Right,
+            KeyCode::Char('l'),
+            KeyCode::Tab,
+            KeyCode::Right,
+        ] {
+            assert_eq!(press(&mut confirm, code), None);
+        }
+        assert_eq!(confirm.choice, 2);
+        assert_eq!(press(&mut confirm, KeyCode::Char('h')), None);
+        assert_eq!(confirm.choice, 1);
+        // Another key does nothing.
+        assert_eq!(press(&mut confirm, KeyCode::Char('x')), None);
+        assert_eq!(confirm.choice, 1);
+    }
+
+    #[test]
+    fn the_dialog_returns_the_highlighted_choice_on_enter_and_cancel_on_q_or_esc() {
+        let mut confirm = confirm_of(1);
+        assert_eq!(press(&mut confirm, KeyCode::Enter), Some(Choice::Approve));
+        press(&mut confirm, KeyCode::Tab);
+        assert_eq!(
+            press(&mut confirm, KeyCode::Enter),
+            Some(Choice::ApproveAndMerge)
+        );
+        assert_eq!(
+            press(&mut confirm, KeyCode::Char('q')),
+            Some(Choice::Cancel)
+        );
+        assert_eq!(press(&mut confirm, KeyCode::Esc), Some(Choice::Cancel));
+    }
+
+    #[test]
+    fn a_dialog_with_nothing_to_act_on_can_only_cancel() {
+        let mut confirm = confirm_of(0);
+        assert_eq!(confirm.choices(), [Choice::Cancel]);
+        assert_eq!(press(&mut confirm, KeyCode::Tab), None);
+        assert_eq!(confirm.choice, 0);
+        assert_eq!(press(&mut confirm, KeyCode::Enter), Some(Choice::Cancel));
+    }
 }
