@@ -151,6 +151,7 @@ pub(super) fn results(app: &App) -> &Summary {
 }
 
 mod batch;
+mod degenerate;
 mod fetching;
 mod filter;
 mod open_copy;
